@@ -1,22 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { CircleStop, Database, Download, Eye, FileVideo, FolderOpen, Languages, Play, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { NoticeAlert, IconAction, SectionTitle, StatusBadge } from "@/components/app/shared";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { NoticeAlert } from "@/components/app/shared";
+import { TaskMetricGrid, TaskQueueTable, TaskToolbar } from "@/components/app/tasks";
 import { defaultSettings } from "@/config";
 import { useI18n } from "@/i18n";
-import { canRunOperation, errorText, fileName, formattedTime, hasTauriRuntime, operationLabel, progressValue, stageText, taskBusy } from "@/lib/app-utils";
+import { canRunOperation, errorText, hasTauriRuntime, operationLabel, taskBusy } from "@/lib/app-utils";
 import { applyJobEventToTasks, taskCreatePayload, upsertTask } from "@/lib/task-data";
 import type { JobEvent, QueueSettings, SettingsState, TaskRecord, TaskOperation } from "@/types";
 
@@ -247,204 +238,41 @@ export function TasksPage() {
     <>
       <NoticeAlert message={notice} />
 
-      <section className="metric-grid">
-        <Card size="sm" className="metric-card">
-          <CardHeader>
-            <CardDescription>{t("metric.all")}</CardDescription>
-            <CardTitle>{tasks.length}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card size="sm" className="metric-card">
-          <CardHeader>
-            <CardDescription>{t("metric.running")}</CardDescription>
-            <CardTitle>{busyCount}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card size="sm" className="metric-card">
-          <CardHeader>
-            <CardDescription>{t("metric.done")}</CardDescription>
-            <CardTitle>{doneCount}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card size="sm" className="metric-card">
-          <CardHeader>
-            <CardDescription>{t("metric.failed")}</CardDescription>
-            <CardTitle>{failedCount}</CardTitle>
-          </CardHeader>
-        </Card>
-      </section>
+      <TaskMetricGrid
+        busyCount={busyCount}
+        doneCount={doneCount}
+        failedCount={failedCount}
+        taskCount={tasks.length}
+        t={t}
+      />
 
-      <Card className="toolbar-card">
-        <CardContent className="toolbar-content">
-          <div className="toolbar-main">
-            <Button onClick={createVideoTask} title={t("task.videoNewTitle")}>
-              <Plus data-icon="inline-start" />
-              {t("task.videoNew")}
-            </Button>
-            <Button variant="secondary" onClick={createSrtTask} title={t("task.srtImportTitle")}>
-              <Upload data-icon="inline-start" />
-              {t("task.srtImport")}
-            </Button>
-            <Button variant="secondary" onClick={pickOutputDir} title={t("task.pickOutputDir")}>
-              <FolderOpen data-icon="inline-start" />
-              {t("task.inputDir")}
-            </Button>
-            <code className="path-chip">{outputDir || t("task.defaultOutput")}</code>
-          </div>
+      <TaskToolbar
+        outputDir={outputDir}
+        queueSettings={queueSettings}
+        t={t}
+        onCancelSelected={cancelSelected}
+        onCreateSrtTask={createSrtTask}
+        onCreateVideoTask={createVideoTask}
+        onPickOutputDir={pickOutputDir}
+        onRefreshTasks={refreshTasks}
+        onRunSelected={runSelected}
+        onSaveConcurrency={saveConcurrency}
+      />
 
-          <Separator className="toolbar-separator" />
-
-          <div className="toolbar-actions">
-            <div className="concurrency-field">
-              <Label htmlFor="max-concurrency">{t("task.concurrency")}</Label>
-              <Input
-                id="max-concurrency"
-                type="number"
-                min="1"
-                max="4"
-                value={queueSettings.max_concurrency}
-                onChange={(event) => void saveConcurrency(Number.parseInt(event.target.value, 10) || 1)}
-              />
-            </div>
-            <Button variant="secondary" onClick={() => runSelected("transcribe")}>
-              <Play data-icon="inline-start" />
-              {t("common.transcribe")}
-            </Button>
-            <Button variant="secondary" onClick={() => runSelected("translate")}>
-              <Languages data-icon="inline-start" />
-              {t("common.translate")}
-            </Button>
-            <Button variant="secondary" onClick={() => runSelected("export")}>
-              <Download data-icon="inline-start" />
-              {t("common.export")}
-            </Button>
-            <Button variant="destructive" onClick={cancelSelected}>
-              <CircleStop data-icon="inline-start" />
-              {t("common.cancel")}
-            </Button>
-            <IconAction label={t("common.refresh")} onClick={refreshTasks}>
-              <RefreshCw />
-            </IconAction>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <SectionTitle icon={<Database />} title={t("task.queue")} description={t("task.queueDescription")} />
-          <CardAction>
-            <Badge variant="secondary">{t("task.records", { count: tasks.length })}</Badge>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="table-card-content">
-          <Table className="task-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="select-cell">
-                  <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label={t("task.ariaSelectAll")} />
-                </TableHead>
-                <TableHead>{t("common.file")}</TableHead>
-                <TableHead>{t("common.status")}</TableHead>
-                <TableHead>{t("common.progress")}</TableHead>
-                <TableHead>{t("common.targetLanguage")}</TableHead>
-                <TableHead>{t("task.outputDir")}</TableHead>
-                <TableHead>{t("common.updatedAt")}</TableHead>
-                <TableHead>{t("task.tableAction")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {tasks.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8}>
-                    <div className="empty-state">{t("task.empty")}</div>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                tasks.map((task) => (
-                  <TableRow key={task.id} data-state={taskBusy(task) ? "selected" : undefined}>
-                    <TableCell className="select-cell">
-                      <Checkbox
-                        checked={selectedIds.has(task.id)}
-                        onCheckedChange={() => toggleTask(task.id)}
-                        aria-label={t("task.ariaSelect", { fileName: task.file_name })}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        variant="ghost"
-                        className="file-button"
-                        onClick={() => navigate(`/tasks/${task.id}`)}
-                      >
-                        <FileVideo data-icon="inline-start" />
-                        <span>{task.file_name}</span>
-                      </Button>
-                      <small>{task.source_type === "srt" ? "SRT" : fileName(task.video_path)}</small>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={task.status} />
-                      <small>{stageText(task.stage, t)}</small>
-                    </TableCell>
-                    <TableCell>
-                      <div className="table-progress-stack">
-                        <Progress className="hotdog-progress" value={progressValue(task.progress)} />
-                        <small>{task.message}</small>
-                      </div>
-                    </TableCell>
-                    <TableCell>{task.settings.target_language}</TableCell>
-                    <TableCell>
-                      <code className="table-code">
-                        {task.output_dir || task.settings.output_dir || t("task.sameAsSourceDir")}
-                      </code>
-                    </TableCell>
-                    <TableCell>{formattedTime(task.updated_at, locale)}</TableCell>
-                    <TableCell>
-                      <div className="row-actions">
-                        <IconAction
-                          label={t("common.transcribe")}
-                          onClick={() => runOperation(task.id, "transcribe")}
-                          disabled={!canRunOperation(task, "transcribe")}
-                        >
-                          <Play />
-                        </IconAction>
-                        <IconAction
-                          label={t("common.translate")}
-                          onClick={() => runOperation(task.id, "translate")}
-                          disabled={!canRunOperation(task, "translate")}
-                        >
-                          <Languages />
-                        </IconAction>
-                        <IconAction
-                          label={t("common.export")}
-                          onClick={() => runOperation(task.id, "export")}
-                          disabled={!canRunOperation(task, "export")}
-                        >
-                          <Download />
-                        </IconAction>
-                        <IconAction label={t("common.cancel")} onClick={() => cancelTask(task.id)} disabled={!taskBusy(task)}>
-                          <CircleStop />
-                        </IconAction>
-                        <IconAction label={t("common.details")} onClick={() => navigate(`/tasks/${task.id}`)}>
-                          <Eye />
-                        </IconAction>
-                        <IconAction
-                          label={t("common.delete")}
-                          onClick={() => deleteTask(task.id)}
-                          disabled={taskBusy(task)}
-                          className="danger-action"
-                        >
-                          <Trash2 />
-                        </IconAction>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <TaskQueueTable
+        allSelected={allSelected}
+        locale={locale}
+        selectedIds={selectedIds}
+        tasks={tasks}
+        t={t}
+        onCancelTask={cancelTask}
+        onDeleteTask={deleteTask}
+        onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+        onRunOperation={runOperation}
+        onToggleAll={toggleAll}
+        onToggleTask={toggleTask}
+      />
     </>
   );
 }
-
 
