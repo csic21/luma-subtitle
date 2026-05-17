@@ -1,0 +1,88 @@
+@media (max-width: 1180px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .toolbar-content {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toolbar-separator {
+    display: block;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
+  }
+
+  .workspace,
+  .settings-page-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    width: calc(100vw - 20px);
+    padding-top: 10px;
+  }
+
+  .toolbar-main,
+  .toolbar-actions,
+  .action-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .brand-link {
+    align-items: center;
+  }
+
+  .locale-select {
+    flex-basis: 8.5rem;
+  }
+
+  .brand-mark {
+    width: 44px;
+    height: 44px;
+  }
+
+  .brand-copy strong {
+    max-width: 170px;
+    font-size: 1.05rem;
+  }
+
+  .brand-copy span {
+    display: none;
+  }
+
+  .metric-grid,
+  .flow-strip,
+  .grid-two,
+  .page-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-step {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .flow-arrow {
+    display: none;
+  }
+
+  .path-chip {
+    max-width: 100%;
+  }
+
+  .concurrency-field {
+    grid-template-columns: 1fr;
+  }
+
+  .outputs,
+  .detail-list,
+  .env-row {
+    grid-template-columns: 1fr;
+  }
+}

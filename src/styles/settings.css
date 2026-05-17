@@ -1,0 +1,86 @@
+.settings-page-grid {
+  display: grid;
+  grid-template-columns: minmax(520px, 1.05fr) minmax(380px, 0.95fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.form-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.input-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.key-field {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.key-field svg {
+  justify-self: center;
+  color: var(--muted-foreground);
+}
+
+.credential-alert.ready {
+  border-color: color-mix(in srgb, #72e0bc 42%, var(--border));
+  background: rgba(29, 48, 47, 0.48);
+}
+
+.credential-alert.warn {
+  border-color: color-mix(in srgb, var(--hotdog-mustard) 42%, var(--border));
+  background: rgba(255, 196, 71, 0.08);
+}
+
+.env-table {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.env-row {
+  display: grid;
+  grid-template-columns: 94px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.download-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(3, 22, 22, 0.32);
+  padding: 10px;
+}
+
+.download-meta {
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -1,20 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
-    process::Stdio,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
 };
 use tauri::{AppHandle, Manager, State};
-use tokio::{io::AsyncReadExt, process::Command, time::sleep};
 use uuid::Uuid;
 
 use crate::{
     job_events::{emit_job, ExportedSubtitlePaths, JobOutputs, JobStatus, StoredSubtitleResult},
-    paths::{locate_binary, path_to_string, resolve_output_dir, safe_stem, sanitize_file_part},
+    paths::{path_to_string, resolve_output_dir, safe_stem, sanitize_file_part},
     settings::{self, normalize_language},
     state::{ensure_not_cancelled, AppState, JobError, JobResult, QueuedTaskOperation},
     subtitles::{parse_srt_file, parse_whisper_json, render_srt, write_srt_text},
@@ -24,6 +21,10 @@ use crate::{
         DEFAULT_TRANSLATION_SHARD_SIZE,
     },
 };
+
+mod process;
+
+use process::{extract_audio, transcribe_audio};
 
 #[allow(dead_code)]
 #[derive(Clone, Deserialize)]
@@ -1287,146 +1288,6 @@ fn job_error_to_string(error: JobError) -> String {
         JobError::Failed(message) => message,
     }
 }
-async fn extract_audio(
-    app: &AppHandle,
-    video_path: &Path,
-    audio_path: &Path,
-    cancel: Arc<AtomicBool>,
-) -> JobResult<()> {
-    let ffmpeg = locate_binary(app, "ffmpeg")
-        .ok_or_else(|| JobError::failed(missing_binary_message("ffmpeg")))?;
-    let mut command = Command::new(ffmpeg);
-    command
-        .arg("-y")
-        .arg("-i")
-        .arg(video_path)
-        .arg("-vn")
-        .arg("-ac")
-        .arg("1")
-        .arg("-ar")
-        .arg("16000")
-        .arg("-acodec")
-        .arg("pcm_s16le")
-        .arg(audio_path);
-    run_process(command, cancel, "FFmpeg 抽音频失败").await
-}
-async fn transcribe_audio(
-    app: &AppHandle,
-    model_path: &Path,
-    audio_path: &Path,
-    output_base: &Path,
-    language: &str,
-    cancel: Arc<AtomicBool>,
-) -> JobResult<()> {
-    if !model_path.exists() {
-        return Err(JobError::failed("Whisper 模型文件不存在"));
-    }
-    let whisper = locate_binary(app, "whisper-cli")
-        .ok_or_else(|| JobError::failed(missing_binary_message("whisper-cli")))?;
-    let threads = std::thread::available_parallelism()
-        .map(|count| count.get().saturating_sub(1).clamp(4, 12).to_string())
-        .unwrap_or_else(|_| "8".to_string());
-    let mut command = Command::new(whisper);
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    command.env("WHISPER_ARG_DEVICE", "0");
-    command
-        .arg("-m")
-        .arg(model_path)
-        .arg("-f")
-        .arg(audio_path)
-        .arg("-l")
-        .arg(normalize_language(language))
-        .arg("-t")
-        .arg(threads)
-        .arg("-oj")
-        .arg("-of")
-        .arg(output_base);
-    run_process(command, cancel, "whisper.cpp 转写失败").await
-}
-
-fn missing_binary_message(name: &str) -> String {
-    let binary_name = if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    };
-    let resource_dir = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "src-tauri/resources/bin/macos-arm64"
-    } else {
-        "src-tauri/resources/bin"
-    };
-    format!("未找到 {binary_name}，请放入 {resource_dir} 或加入 PATH")
-}
-
-async fn run_process(
-    mut command: Command,
-    cancel: Arc<AtomicBool>,
-    failure_context: &str,
-) -> JobResult<()> {
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::null());
-    command.stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| JobError::failed(format!("{failure_context}: {error}")))?;
-    let mut stderr = child.stderr.take();
-    let stderr_reader = tauri::async_runtime::spawn(async move {
-        let mut buffer = Vec::new();
-        if let Some(stderr) = stderr.as_mut() {
-            let _ = stderr.read_to_end(&mut buffer).await;
-        }
-        String::from_utf8_lossy(&buffer).to_string()
-    });
-    loop {
-        ensure_not_cancelled(&cancel)?;
-        match child
-            .try_wait()
-            .map_err(|error| JobError::failed(format!("{failure_context}: {error}")))?
-        {
-            Some(status) if status.success() => return Ok(()),
-            Some(status) => {
-                let stderr = stderr_reader.await.unwrap_or_default();
-                let detail = process_error_detail(&stderr);
-                return Err(JobError::failed(format!(
-                    "{failure_context}，退出码: {}{}",
-                    status
-                        .code()
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    detail
-                )));
-            }
-            None => sleep(Duration::from_millis(200)).await,
-        }
-        if cancel.load(Ordering::SeqCst) {
-            let _ = child.kill().await;
-            return Err(JobError::Cancelled);
-        }
-    }
-}
-
-fn process_error_detail(stderr: &str) -> String {
-    let lines = stderr
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>();
-    if lines.is_empty() {
-        return String::new();
-    }
-    let detail = lines
-        .iter()
-        .rev()
-        .take(8)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("\n{detail}")
-}
-
 fn translated_file_name(source_file_name: &str, target_language: &str) -> String {
     let stem = source_file_name
         .strip_suffix(".source.srt")

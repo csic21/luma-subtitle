@@ -1,0 +1,244 @@
+.page-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--hotdog-bun));
+  border-radius: 8px;
+  background: rgba(17, 18, 14, 0.9);
+  padding: 12px;
+}
+
+.page-heading h1 {
+  margin: 0;
+  color: var(--hotdog-cream);
+  font-size: 1.15rem;
+  font-weight: 720;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.page-heading p {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+}
+
+.flow-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flow-step {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 58px;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(17, 18, 14, 0.82);
+  padding: 9px 10px;
+}
+
+.flow-step strong,
+.flow-step span {
+  display: block;
+  min-width: 0;
+}
+
+.flow-step strong {
+  color: var(--foreground);
+  font-size: 0.84rem;
+}
+
+.flow-step div > span {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  font-weight: 760;
+}
+
+.flow-step.active {
+  border-color: color-mix(in srgb, var(--hotdog-mustard) 58%, var(--border));
+}
+
+.flow-step.active .flow-index {
+  background: var(--hotdog-mustard);
+  color: var(--primary-foreground);
+}
+
+.flow-step.done {
+  border-color: color-mix(in srgb, var(--hotdog-shadow) 62%, var(--border));
+}
+
+.flow-step.done .flow-index {
+  background: var(--hotdog-shadow);
+  color: #d7fff1;
+}
+
+.flow-arrow {
+  color: var(--muted-foreground);
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.82fr) minmax(560px, 1.18fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.left-column,
+.right-column,
+.stack-panel,
+.settings-form {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-list {
+  display: grid;
+  grid-template-columns: 98px minmax(0, 1fr);
+  gap: 9px 12px;
+  align-items: start;
+}
+
+.detail-list span,
+.env-row span {
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  font-weight: 680;
+}
+
+.action-row {
+  flex-wrap: wrap;
+}
+
+.action-row.end {
+  justify-content: flex-end;
+}
+
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--foreground);
+}
+
+.progress-head span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.progress-head strong {
+  color: var(--hotdog-mustard);
+}
+
+.progress-head.compact {
+  font-size: 0.8rem;
+}
+
+.hotdog-progress {
+  height: 8px;
+  background: rgba(255, 240, 194, 0.12);
+}
+
+.hotdog-progress.large {
+  height: 12px;
+}
+
+.hotdog-progress [data-slot="progress-indicator"] {
+  background: linear-gradient(90deg, var(--hotdog-red), var(--hotdog-bun-deep), var(--hotdog-mustard));
+}
+
+.progress-failed .hotdog-progress [data-slot="progress-indicator"],
+.download-failed .hotdog-progress [data-slot="progress-indicator"] {
+  background: var(--destructive);
+}
+
+.outputs {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.outputs button:last-child {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.subtitle-tabs {
+  margin-bottom: 10px;
+}
+
+.subtitle-file {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.subtitle-preview,
+.subtitle-empty {
+  height: clamp(300px, 40vh, 560px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(3, 22, 22, 0.34);
+}
+
+.subtitle-preview pre {
+  margin: 0;
+  padding: 12px;
+  color: var(--hotdog-cream);
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subtitle-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  font-size: 0.86rem;
+}
+
+.log-list {
+  height: clamp(150px, 22vh, 260px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(3, 22, 22, 0.3);
+}
+
+.log-list p,
+.muted {
+  margin: 0;
+  padding: 0 10px 7px;
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.log-list p:first-child,
+.muted {
+  padding-top: 10px;
+}
