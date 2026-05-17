@@ -1,8 +1,9 @@
 use reqwest::{header::RANGE, StatusCode};
 use serde::{Deserialize, Serialize};
 #[cfg(not(target_os = "macos"))]
-use std::{fs, io};
+use std::io;
 use std::{
+    fs,
     path::Path,
     time::{Duration, Instant},
 };
@@ -495,7 +496,17 @@ async fn install_whisper_cpp_from_official_source(app: &AppHandle) -> Result<Str
 #[cfg(target_os = "macos")]
 async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Result<String, String> {
     ensure_macos_arm64()?;
-    ensure_build_tools("whisper.cpp", &["clang", "cmake", "make", "tar"])?;
+    ensure_build_tools(
+        "whisper.cpp",
+        &[
+            "clang",
+            "cmake",
+            "make",
+            "tar",
+            "otool",
+            "install_name_tool",
+        ],
+    )?;
     emit_dependency_install(
         app,
         "whisper.cpp",
@@ -583,6 +594,7 @@ async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Resu
     tokio::fs::rename(&staging_dir, &target_dir)
         .await
         .map_err(|error| format!("保存 whisper.cpp 失败: {error}"))?;
+    fix_whisper_macos_rpaths(&target_dir, &staging_dir).await?;
     let _ = tokio::fs::remove_file(&archive_path).await;
     let path = path_to_string(target_dir.join(relative_path));
     emit_dependency_install(
@@ -1017,6 +1029,108 @@ fn trim_command_output(output: &str) -> String {
         .collect::<Vec<_>>();
     let start = lines.len().saturating_sub(24);
     lines[start..].join("\n")
+}
+
+#[cfg(target_os = "macos")]
+async fn fix_whisper_macos_rpaths(target_dir: &Path, staging_dir: &Path) -> Result<(), String> {
+    let staging_prefix = staging_dir.to_string_lossy().to_string();
+    let target_prefix = target_dir.to_string_lossy().to_string();
+    for path in collect_whisper_macos_binaries(target_dir)? {
+        let rpaths = read_macos_rpaths(&path).await?;
+        for old_rpath in rpaths {
+            if !old_rpath.starts_with(&staging_prefix) {
+                continue;
+            }
+            let new_rpath = old_rpath.replacen(&staging_prefix, &target_prefix, 1);
+            change_macos_rpath(&path, &old_rpath, &new_rpath).await?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn collect_whisper_macos_binaries(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut binaries = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir)
+            .map_err(|error| format!("读取 whisper.cpp 安装目录失败: {error}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if file_name == "whisper-cli" || file_name.ends_with(".dylib") {
+                binaries.push(path);
+            }
+        }
+    }
+    Ok(binaries)
+}
+
+#[cfg(target_os = "macos")]
+async fn read_macos_rpaths(path: &Path) -> Result<Vec<String>, String> {
+    let output = Command::new("otool")
+        .arg("-l")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| format!("读取 Mach-O rpath 失败: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "读取 Mach-O rpath 失败: {}{}",
+            output.status,
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", trim_command_output(&stderr))
+            }
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("path "))
+        .filter_map(|line| line.split(" (offset").next())
+        .map(str::to_string)
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+async fn change_macos_rpath(path: &Path, old_rpath: &str, new_rpath: &str) -> Result<(), String> {
+    let output = Command::new("install_name_tool")
+        .arg("-rpath")
+        .arg(old_rpath)
+        .arg(new_rpath)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|error| format!("修复 whisper.cpp 动态库路径失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "修复 whisper.cpp 动态库路径失败: {}{}",
+        output.status,
+        if stderr.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\n{}", trim_command_output(&stderr))
+        }
+    ))
 }
 
 #[cfg(target_os = "macos")]
