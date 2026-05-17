@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="96" viewBox="0 0 420 96" role="img" aria-labelledby="title desc">
+  <title id="title">Luma Subtitle Logo</title>
+  <desc id="desc">The Luma Subtitle wordmark with a retro subtitle card icon.</desc>
+  <defs>
+    <linearGradient id="mark-bg" x1="10" y1="10" x2="72" y2="72" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffc768" />
+      <stop offset="0.42" stop-color="#ffc768" />
+      <stop offset="0.42" stop-color="#e2392d" />
+      <stop offset="0.68" stop-color="#e2392d" />
+      <stop offset="0.68" stop-color="#0d3333" />
+      <stop offset="1" stop-color="#0d3333" />
+    </linearGradient>
+    <clipPath id="mark-clip">
+      <rect x="10" y="10" width="62" height="62" rx="10" ry="10" />
+    </clipPath>
+  </defs>
+
+  <g>
+    <rect x="17" y="17" width="62" height="62" rx="10" ry="10" fill="#031616" />
+    <rect x="10" y="10" width="62" height="62" rx="10" ry="10" fill="url(#mark-bg)" stroke="#031616" stroke-width="4" />
+    <g clip-path="url(#mark-clip)">
+      <rect x="10" y="60" width="62" height="12" fill="#9f201b" opacity="0.26" />
+    </g>
+    <g transform="translate(23 22) scale(1.65)" fill="none" stroke="#fff0c2" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="18" height="14" x="3" y="5" rx="2" ry="2" />
+      <path d="M7 15h4M15 15h2M7 11h2M13 11h4" />
+    </g>
+  </g>
+
+  <text x="92" y="38" fill="#fff0c2" font-family="Geist Variable, Segoe UI, Inter, Arial, sans-serif" font-size="25" font-weight="800">Luma Subtitle</text>
+  <text x="92" y="65" fill="#ffc768" font-family="Geist Variable, Segoe UI, Inter, Arial, sans-serif" font-size="15" font-weight="500">批量视频转写、翻译与 SRT 导出</text>
+</svg>
