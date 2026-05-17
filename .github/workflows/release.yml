@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    tags:
+      - "v*"
   release:
     types: [published]
   workflow_dispatch:
@@ -44,7 +47,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.event.release.tag_name }}
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -71,11 +74,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MACOSX_DEPLOYMENT_TARGET: "11.0"
         with:
-          releaseId: ${{ github.event.release.id }}
-          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
-          releaseName: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_name || inputs.tag_name) || github.event.release.name }}
+          releaseId: ${{ github.event_name == 'release' && github.event.release.id || '' }}
+          tagName: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+          releaseName: ${{ github.event_name == 'release' && github.event.release.name || github.event_name == 'workflow_dispatch' && (inputs.release_name || inputs.tag_name) || format('Luma Subtitle {0}', github.ref_name) }}
           releaseBody: See the assets below to download and install this version.
           releaseDraft: false
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || github.event.release.prerelease }}
+          prerelease: ${{ github.event_name == 'release' && github.event.release.prerelease || github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
           args: ${{ matrix.tauri-args }}
           releaseAssetNamePattern: Luma-Subtitle_[version]_[platform]_[arch][setup].[ext]
