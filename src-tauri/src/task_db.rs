@@ -1,63 +1,25 @@
-use rusqlite::{params, Connection, OptionalExtension, Row};
-use serde::{Deserialize, Serialize};
+use rusqlite::{params, OptionalExtension};
 use std::{
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
-use crate::{
-    job_events::{ExportedSubtitlePaths, JobEvent, JobStatus},
-    translation::DEFAULT_TRANSLATION_SHARD_SIZE,
-};
+use crate::job_events::{ExportedSubtitlePaths, JobEvent, JobStatus};
+
+mod models;
+mod schema;
+
+pub(crate) use models::{QueueSettings, TaskRecord, TaskSettingsSnapshot};
+use schema::{app_data_dir, connection, task_from_row};
+#[cfg(test)]
+use schema::migrate;
+#[cfg(test)]
+use crate::translation::DEFAULT_TRANSLATION_SHARD_SIZE;
 
 const DEFAULT_MAX_CONCURRENCY: usize = 2;
 const API_KEY_SETTING: &str = "translation_api_key";
-
-#[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct TaskSettingsSnapshot {
-    pub(crate) output_dir: Option<String>,
-    pub(crate) target_language: String,
-    pub(crate) whisper_model_path: String,
-    pub(crate) whisper_language: String,
-    pub(crate) base_url: String,
-    pub(crate) model: String,
-    pub(crate) temperature: f32,
-    #[serde(default = "default_translation_shard_size")]
-    pub(crate) translation_shard_size: usize,
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct TaskRecord {
-    pub(crate) id: String,
-    pub(crate) source_type: String,
-    pub(crate) video_path: Option<String>,
-    pub(crate) srt_path: Option<String>,
-    pub(crate) file_name: String,
-    pub(crate) status: String,
-    pub(crate) stage: String,
-    pub(crate) message: String,
-    pub(crate) progress: f32,
-    pub(crate) settings: TaskSettingsSnapshot,
-    pub(crate) source_srt_path: Option<String>,
-    pub(crate) translated_srt_path: Option<String>,
-    pub(crate) source_file_name: Option<String>,
-    pub(crate) translated_file_name: Option<String>,
-    pub(crate) output_dir: Option<String>,
-    pub(crate) segment_count: Option<usize>,
-    pub(crate) exported_source_srt: Option<String>,
-    pub(crate) exported_translated_srt: Option<String>,
-    pub(crate) exported_output_dir: Option<String>,
-    pub(crate) error: Option<String>,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct QueueSettings {
-    pub(crate) max_concurrency: usize,
-}
 
 pub(crate) fn init(app: &AppHandle) -> Result<(), String> {
     let _ = connection(app)?;
@@ -478,111 +440,6 @@ fn emit_task(app: &AppHandle, task_id: &str) {
     }
 }
 
-fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
-    let settings_json: String = row.get("settings_json")?;
-    let settings = serde_json::from_str(&settings_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            settings_json.len(),
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
-    })?;
-    let segment_count = row
-        .get::<_, Option<i64>>("segment_count")?
-        .map(|value| value.max(0) as usize);
-
-    Ok(TaskRecord {
-        id: row.get("id")?,
-        source_type: row.get("source_type")?,
-        video_path: row.get("video_path")?,
-        srt_path: row.get("srt_path")?,
-        file_name: row.get("file_name")?,
-        status: row.get("status")?,
-        stage: row.get("stage")?,
-        message: row.get("message")?,
-        progress: row.get("progress")?,
-        settings,
-        source_srt_path: row.get("source_srt_path")?,
-        translated_srt_path: row.get("translated_srt_path")?,
-        source_file_name: row.get("source_file_name")?,
-        translated_file_name: row.get("translated_file_name")?,
-        output_dir: row.get("output_dir")?,
-        segment_count,
-        exported_source_srt: row.get("exported_source_srt")?,
-        exported_translated_srt: row.get("exported_translated_srt")?,
-        exported_output_dir: row.get("exported_output_dir")?,
-        error: row.get("error")?,
-        created_at: row.get("created_at")?,
-        updated_at: row.get("updated_at")?,
-    })
-}
-
-fn connection(app: &AppHandle) -> Result<Connection, String> {
-    let path = app_data_dir(app)?.join("luma.sqlite3");
-    let conn = Connection::open(path).map_err(|error| error.to_string())?;
-    migrate(&conn)?;
-    Ok(conn)
-}
-
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .or_else(|_| app.path().app_config_dir())
-        .map_err(|error| error.to_string())?;
-    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    Ok(dir)
-}
-
-fn migrate(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS tasks (
-            id TEXT PRIMARY KEY,
-            source_type TEXT NOT NULL,
-            video_path TEXT,
-            srt_path TEXT,
-            file_name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            stage TEXT NOT NULL,
-            message TEXT NOT NULL,
-            progress REAL NOT NULL,
-            settings_json TEXT NOT NULL,
-            source_srt_path TEXT,
-            translated_srt_path TEXT,
-            source_file_name TEXT,
-            translated_file_name TEXT,
-            output_dir TEXT,
-            segment_count INTEGER,
-            exported_source_srt TEXT,
-            exported_translated_srt TEXT,
-            exported_output_dir TEXT,
-            error TEXT,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS task_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            line TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id, id);
-        CREATE TABLE IF NOT EXISTS queue_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS app_secrets (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        INSERT OR IGNORE INTO queue_settings(key, value) VALUES('max_concurrency', '2');
-        ",
-    )
-    .map_err(|error| error.to_string())
-}
-
 fn job_status_name(status: &JobStatus) -> &'static str {
     match status {
         JobStatus::Running => "running",
@@ -602,13 +459,10 @@ fn operation_message(operation: &str, suffix: &str) -> String {
     format!("{label}{suffix}")
 }
 
-fn default_translation_shard_size() -> usize {
-    DEFAULT_TRANSLATION_SHARD_SIZE
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     #[test]
     fn migrates_task_schema_with_default_queue_settings() {

@@ -1,23 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle, ArrowLeft, Check, CheckCircle2, ChevronRight, CircleStop, Download, ExternalLink, FileVideo, FolderOpen, Languages, Loader2, Play, RefreshCw, Save, Settings, Subtitles, Terminal } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { FieldBlock, IconAction, NoticeAlert, SectionTitle, StatusBadge } from "@/components/app/shared";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { NoticeAlert, StatusBadge } from "@/components/app/shared";
+import {
+  SubtitlePreviewCard,
+  TaskConfigCard,
+  TaskFlowStrip,
+  TaskLogsCard,
+  TaskProgressCard,
+  TaskSummaryCard,
+} from "@/components/app/task-detail";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { defaultSettings, languageOptions, whisperLanguageOptions } from "@/config";
+import { Card, CardContent } from "@/components/ui/card";
 import { useI18n } from "@/i18n";
-import { canRunOperation, errorText, formattedTime, hasTauriRuntime, isTranslateStage, operationLabel, progressLabel, progressValue, stageText, taskBusy } from "@/lib/app-utils";
+import { errorText, hasTauriRuntime, isTranslateStage, operationLabel, taskBusy } from "@/lib/app-utils";
 import { appendRealtimeLog, applyJobEventToTask, normalizeTaskSettings, taskSettingsUpdatePayload } from "@/lib/task-data";
-import { cn } from "@/lib/utils";
 import type { JobEvent, SubtitlePreview, TaskRecord, TaskSettingsSnapshot, TaskOperation } from "@/types";
 
 export function TaskDetailPage() {
@@ -249,313 +249,45 @@ export function TaskDetailPage() {
 
       <NoticeAlert message={notice} />
 
-      <section className="flow-strip" aria-label={t("common.progress")}>
-        {flowSteps.map((step, index) => (
-          <div className={cn("flow-step", step.state)} key={step.label}>
-            <span className="flow-index">{step.state === "done" ? <Check /> : index + 1}</span>
-            <div>
-              <strong>{step.label}</strong>
-              <span>{step.detail}</span>
-            </div>
-            {index < flowSteps.length - 1 && <ChevronRight className="flow-arrow" />}
-          </div>
-        ))}
-      </section>
+      <TaskFlowStrip flowSteps={flowSteps} progressLabel={t("common.progress")} />
 
       <section className="workspace">
         <div className="left-column">
-          <Card>
-            <CardHeader>
-              <SectionTitle icon={<FileVideo />} title={t("tabs.task")} />
-            </CardHeader>
-            <CardContent className="stack-panel">
-              <div className="detail-list">
-                <span>{t("flow.material")}</span>
-                <code>{task.video_path || task.srt_path || task.file_name}</code>
-                <span>{t("task.outputDir")}</span>
-                <code>{task.output_dir || task.settings.output_dir || t("task.sameAsSourceDir")}</code>
-                <span>{t("common.updatedAt")}</span>
-                <code>{formattedTime(task.updated_at, locale)}</code>
-                <span>{t("task.segmentCount")}</span>
-                <code>{task.segment_count ?? "—"}</code>
-              </div>
-              {task.error && (
-                <Alert variant="destructive">
-                  <AlertCircle />
-                  <AlertTitle>{t("task.taskError")}</AlertTitle>
-                  <AlertDescription>{task.error}</AlertDescription>
-                </Alert>
-              )}
-              <div className="action-row">
-                <Button
-                  variant="secondary"
-                  onClick={() => runOperation("transcribe")}
-                  disabled={!canRunOperation(task, "transcribe")}
-                >
-                  <Play data-icon="inline-start" />
-                  {t("common.transcribe")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => runOperation("translate")}
-                  disabled={!canRunOperation(task, "translate")}
-                >
-                  <Languages data-icon="inline-start" />
-                  {t("common.translate")}
-                </Button>
-                <Button onClick={() => runOperation("export")} disabled={!canRunOperation(task, "export")}>
-                  <Download data-icon="inline-start" />
-                  {t("common.export")}
-                </Button>
-                <Button variant="destructive" onClick={cancelTask} disabled={!taskBusy(task)}>
-                  <CircleStop data-icon="inline-start" />
-                  {t("common.cancel")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <SectionTitle icon={<Settings />} title={t("tabs.taskConfig")} />
-              <CardAction>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={applyCurrentSettingsToTask}
-                  disabled={taskBusy(task)}
-                  title={t("settings.applyGlobalTitle")}
-                >
-                  <RefreshCw data-icon="inline-start" />
-                  {t("settings.applyGlobal")}
-                </Button>
-              </CardAction>
-            </CardHeader>
-            <CardContent className="settings-form">
-              <FieldBlock label={t("common.whisperModel")}>
-                <div className="input-action">
-                  <Input
-                    value={taskConfig.whisper_model_path}
-                    onChange={(event) =>
-                      setSettingsDraft({ ...taskConfig, whisper_model_path: event.target.value })
-                    }
-                    disabled={taskBusy(task)}
-                    placeholder={t("settings.notSet")}
-                    title={taskConfig.whisper_model_path || t("settings.selectWhisper")}
-                  />
-                  <IconAction label={t("settings.selectWhisper")} onClick={pickTaskWhisperModel} disabled={taskBusy(task)}>
-                    <FolderOpen />
-                  </IconAction>
-                </div>
-              </FieldBlock>
-
-              <div className="grid-two">
-                <FieldBlock label={t("settings.sourceLanguage")}>
-                  <Select
-                    value={taskConfig.whisper_language || "auto"}
-                    onValueChange={(value) => setSettingsDraft({ ...taskConfig, whisper_language: value })}
-                    disabled={taskBusy(task)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {whisperLanguageOptions.map((language) => (
-                          <SelectItem key={language.value} value={language.value}>
-                            {t(language.labelKey)}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </FieldBlock>
-                <FieldBlock label={t("common.targetLanguage")}>
-                  <Select
-                    value={taskConfig.target_language}
-                    onValueChange={(value) => setSettingsDraft({ ...taskConfig, target_language: value })}
-                    disabled={taskBusy(task)}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {languageOptions.map((language) => (
-                          <SelectItem key={language.value} value={language.value}>
-                            {t(language.labelKey)}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </FieldBlock>
-              </div>
-
-              <div className="grid-two">
-                <FieldBlock label="Base URL">
-                  <Input
-                    value={taskConfig.base_url}
-                    onChange={(event) => setSettingsDraft({ ...taskConfig, base_url: event.target.value })}
-                    disabled={taskBusy(task)}
-                  />
-                </FieldBlock>
-                <FieldBlock label={t("settings.translationModel")}>
-                  <Input
-                    value={taskConfig.model}
-                    onChange={(event) => setSettingsDraft({ ...taskConfig, model: event.target.value })}
-                    disabled={taskBusy(task)}
-                  />
-                </FieldBlock>
-              </div>
-
-              <div className="grid-two">
-                <FieldBlock label="Temperature">
-                  <Input
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                    value={taskConfig.temperature}
-                    onChange={(event) =>
-                      setSettingsDraft({ ...taskConfig, temperature: Number.parseFloat(event.target.value) || 0 })
-                    }
-                    disabled={taskBusy(task)}
-                  />
-                </FieldBlock>
-                <FieldBlock label={t("settings.shardSize")}>
-                  <Input
-                    type="number"
-                    min="1"
-                    max="1000"
-                    step="1"
-                    value={taskConfig.translation_shard_size ?? defaultSettings.translation_shard_size}
-                    onChange={(event) =>
-                      setSettingsDraft({
-                        ...taskConfig,
-                        translation_shard_size:
-                          Number.parseInt(event.target.value, 10) || defaultSettings.translation_shard_size,
-                      })
-                    }
-                    disabled={taskBusy(task)}
-                  />
-                </FieldBlock>
-              </div>
-
-              <div className="action-row end">
-                <Button
-                  variant="secondary"
-                  onClick={() => setSettingsDraft(normalizeTaskSettings(task.settings))}
-                  disabled={taskBusy(task) || !taskSettingsDirty}
-                >
-                  {t("settings.undo")}
-                </Button>
-                <Button onClick={saveTaskSettings} disabled={taskBusy(task) || !taskSettingsDirty}>
-                  <Save data-icon="inline-start" />
-                  {t("settings.saveTask")}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+          <TaskSummaryCard
+            locale={locale}
+            task={task}
+            t={t}
+            onCancelTask={cancelTask}
+            onRunOperation={runOperation}
+          />
+          <TaskConfigCard
+            task={task}
+            taskConfig={taskConfig}
+            taskSettingsDirty={taskSettingsDirty}
+            t={t}
+            onApplyCurrentSettings={applyCurrentSettingsToTask}
+            onPickWhisperModel={pickTaskWhisperModel}
+            onSaveTaskSettings={saveTaskSettings}
+            setSettingsDraft={setSettingsDraft}
+          />
         </div>
 
         <div className="right-column">
-          <Card className={cn("progress-panel", `progress-${task.status}`)}>
-            <CardHeader>
-              <SectionTitle
-                icon={
-                  task.status === "completed" || task.status === "exported" ? (
-                    <CheckCircle2 />
-                  ) : taskBusy(task) ? (
-                    <Loader2 className="spin" />
-                  ) : (
-                    <Terminal />
-                  )
-                }
-                title={t("common.progress")}
-              />
-              <CardAction>
-                <StatusBadge status={task.status} label={stageText(task.stage, t)} />
-              </CardAction>
-            </CardHeader>
-            <CardContent className="stack-panel">
-              <div className="progress-head">
-                <span>{task.message}</span>
-                <strong>{progressLabel(task.progress)}</strong>
-              </div>
-              <Progress className="hotdog-progress large" value={progressValue(task.progress)} />
-              {(task.source_file_name || task.translated_file_name) && (
-                <div className="outputs">
-                  <Button onClick={() => runOperation("export")} disabled={!canRunOperation(task, "export")}>
-                    <Download data-icon="inline-start" />
-                    {t("common.exportSubtitles")}
-                  </Button>
-                  {task.source_file_name && <code>{task.source_file_name}</code>}
-                  {task.translated_file_name && <code>{task.translated_file_name}</code>}
-                  {task.exported_output_dir && (
-                    <Button variant="secondary" onClick={openOutputDir} title={t("common.openExportDir")}>
-                      <ExternalLink data-icon="inline-start" />
-                      {t("common.openExportDir")}
-                    </Button>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <SectionTitle icon={<Subtitles />} title={t("subtitle.preview")} />
-              <CardAction>
-                <Button variant="secondary" size="sm" onClick={() => refreshPreview()}>
-                  <RefreshCw data-icon="inline-start" />
-                  {t("common.refresh")}
-                </Button>
-              </CardAction>
-            </CardHeader>
-            <CardContent>
-              <Tabs
-                value={subtitleView}
-                onValueChange={(value) => setSubtitleView(value as "translated" | "source")}
-                className="subtitle-tabs"
-              >
-                <TabsList>
-                  <TabsTrigger value="source">{t("common.source")}</TabsTrigger>
-                  {hasTranslatedSubtitle && <TabsTrigger value="translated">{t("common.translated")}</TabsTrigger>}
-                </TabsList>
-              </Tabs>
-
-              {subtitlePreview ? (
-                <>
-                  <code className="subtitle-file">{activeSubtitleFileName}</code>
-                  <ScrollArea className="subtitle-preview">
-                    <pre>{activeSubtitleBody || t("subtitle.noContent")}</pre>
-                  </ScrollArea>
-                </>
-              ) : (
-                <div className="subtitle-empty">{t("subtitle.empty")}</div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <SectionTitle icon={<Terminal />} title={t("tabs.logs")} />
-            </CardHeader>
-            <CardContent>
-              <ScrollArea className="log-list">
-                {logs.length === 0 ? (
-                  <span className="muted">{t("task.logsEmpty")}</span>
-                ) : (
-                  logs.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)
-                )}
-              </ScrollArea>
-            </CardContent>
-          </Card>
+          <TaskProgressCard task={task} t={t} onOpenOutputDir={openOutputDir} onRunOperation={runOperation} />
+          <SubtitlePreviewCard
+            activeSubtitleBody={activeSubtitleBody}
+            activeSubtitleFileName={activeSubtitleFileName}
+            hasTranslatedSubtitle={hasTranslatedSubtitle}
+            subtitlePreview={subtitlePreview}
+            subtitleView={subtitleView}
+            t={t}
+            onRefreshPreview={() => refreshPreview()}
+            setSubtitleView={setSubtitleView}
+          />
+          <TaskLogsCard logs={logs} t={t} />
         </div>
       </section>
     </>
   );
 }
-
 

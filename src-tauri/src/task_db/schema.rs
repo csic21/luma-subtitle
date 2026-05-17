@@ -1,0 +1,110 @@
+use rusqlite::{Connection, Row};
+use std::{fs, path::PathBuf};
+use tauri::{AppHandle, Manager};
+
+use super::TaskRecord;
+
+pub(super) fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
+    let settings_json: String = row.get("settings_json")?;
+    let settings = serde_json::from_str(&settings_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            settings_json.len(),
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })?;
+    let segment_count = row
+        .get::<_, Option<i64>>("segment_count")?
+        .map(|value| value.max(0) as usize);
+
+    Ok(TaskRecord {
+        id: row.get("id")?,
+        source_type: row.get("source_type")?,
+        video_path: row.get("video_path")?,
+        srt_path: row.get("srt_path")?,
+        file_name: row.get("file_name")?,
+        status: row.get("status")?,
+        stage: row.get("stage")?,
+        message: row.get("message")?,
+        progress: row.get("progress")?,
+        settings,
+        source_srt_path: row.get("source_srt_path")?,
+        translated_srt_path: row.get("translated_srt_path")?,
+        source_file_name: row.get("source_file_name")?,
+        translated_file_name: row.get("translated_file_name")?,
+        output_dir: row.get("output_dir")?,
+        segment_count,
+        exported_source_srt: row.get("exported_source_srt")?,
+        exported_translated_srt: row.get("exported_translated_srt")?,
+        exported_output_dir: row.get("exported_output_dir")?,
+        error: row.get("error")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+pub(super) fn connection(app: &AppHandle) -> Result<Connection, String> {
+    let path = app_data_dir(app)?.join("luma.sqlite3");
+    let conn = Connection::open(path).map_err(|error| error.to_string())?;
+    migrate(&conn)?;
+    Ok(conn)
+}
+
+pub(super) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .or_else(|_| app.path().app_config_dir())
+        .map_err(|error| error.to_string())?;
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    Ok(dir)
+}
+
+pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            video_path TEXT,
+            srt_path TEXT,
+            file_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            message TEXT NOT NULL,
+            progress REAL NOT NULL,
+            settings_json TEXT NOT NULL,
+            source_srt_path TEXT,
+            translated_srt_path TEXT,
+            source_file_name TEXT,
+            translated_file_name TEXT,
+            output_dir TEXT,
+            segment_count INTEGER,
+            exported_source_srt TEXT,
+            exported_translated_srt TEXT,
+            exported_output_dir TEXT,
+            error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            line TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id, id);
+        CREATE TABLE IF NOT EXISTS queue_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS app_secrets (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO queue_settings(key, value) VALUES('max_concurrency', '2');
+        ",
+    )
+    .map_err(|error| error.to_string())
+}
