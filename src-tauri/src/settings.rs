@@ -3,12 +3,9 @@ use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    task_db::TaskSettingsSnapshot,
+    task_db::{self, TaskSettingsSnapshot},
     translation::{normalize_translation_shard_size, DEFAULT_TRANSLATION_SHARD_SIZE},
 };
-
-const APP_SERVICE: &str = "luma-subtitle";
-const API_KEY_ACCOUNT: &str = "translation-api-key";
 
 #[derive(Clone, Deserialize, Serialize)]
 struct PersistedSettings {
@@ -18,6 +15,8 @@ struct PersistedSettings {
     whisper_model_path: String,
     whisper_language: String,
     target_language: String,
+    #[serde(default)]
+    has_api_key: bool,
     #[serde(default = "default_translation_shard_size")]
     translation_shard_size: usize,
 }
@@ -30,6 +29,7 @@ impl Default for PersistedSettings {
             whisper_model_path: String::new(),
             whisper_language: "auto".to_string(),
             target_language: "简体中文".to_string(),
+            has_api_key: false,
             translation_shard_size: DEFAULT_TRANSLATION_SHARD_SIZE,
         }
     }
@@ -61,7 +61,7 @@ pub(crate) struct SettingsResponse {
 #[tauri::command]
 pub(crate) fn load_settings(app: AppHandle) -> Result<SettingsResponse, String> {
     let settings = read_settings(&app)?;
-    Ok(settings.into_response(has_api_key()))
+    Ok(settings.into_response(task_db::has_api_key(&app)?))
 }
 #[tauri::command]
 pub(crate) fn save_settings(
@@ -69,6 +69,7 @@ pub(crate) fn save_settings(
     payload: SettingsPayload,
 ) -> Result<SettingsResponse, String> {
     let _ = payload.has_api_key;
+    let has_api_key = task_db::has_api_key(&app)?;
     let settings = PersistedSettings {
         base_url: payload.base_url.trim().trim_end_matches('/').to_string(),
         model: payload.model.trim().to_string(),
@@ -76,6 +77,7 @@ pub(crate) fn save_settings(
         whisper_model_path: payload.whisper_model_path.trim().to_string(),
         whisper_language: normalize_language(&payload.whisper_language),
         target_language: payload.target_language.trim().to_string(),
+        has_api_key,
         translation_shard_size: normalize_translation_shard_size(
             payload
                 .translation_shard_size
@@ -85,16 +87,19 @@ pub(crate) fn save_settings(
     if let Some(api_key) = payload.api_key {
         let api_key = api_key.trim();
         if !api_key.is_empty() {
-            credential_entry()
-                .map_err(|error| error.to_string())?
-                .set_password(api_key)
+            task_db::save_api_key(&app, api_key)
                 .map_err(|error| format!("API Key 保存失败: {error}"))?;
         }
     }
+    let settings = PersistedSettings {
+        has_api_key: task_db::has_api_key(&app)?,
+        ..settings
+    };
     let path = settings_path(&app)?;
     let body = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
     fs::write(path, body).map_err(|error| error.to_string())?;
-    Ok(settings.into_response(has_api_key()))
+    let has_api_key = settings.has_api_key;
+    Ok(settings.into_response(has_api_key))
 }
 
 pub(crate) fn normalize_language(language: &str) -> String {
@@ -166,13 +171,4 @@ impl PersistedSettings {
             has_api_key,
         }
     }
-}
-pub(crate) fn credential_entry() -> keyring::Result<keyring::Entry> {
-    keyring::Entry::new(APP_SERVICE, API_KEY_ACCOUNT)
-}
-fn has_api_key() -> bool {
-    credential_entry()
-        .and_then(|entry| entry.get_password())
-        .map(|password| !password.trim().is_empty())
-        .unwrap_or(false)
 }

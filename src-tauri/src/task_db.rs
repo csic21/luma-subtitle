@@ -13,6 +13,7 @@ use crate::{
 };
 
 const DEFAULT_MAX_CONCURRENCY: usize = 2;
+const API_KEY_SETTING: &str = "translation_api_key";
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct TaskSettingsSnapshot {
@@ -371,6 +372,37 @@ pub(crate) fn save_queue_settings(
     Ok(QueueSettings { max_concurrency })
 }
 
+pub(crate) fn save_api_key(app: &AppHandle, api_key: &str) -> Result<(), String> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Ok(());
+    }
+    let conn = connection(app)?;
+    conn.execute(
+        "INSERT INTO app_secrets(key, value, updated_at) VALUES(?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![API_KEY_SETTING, api_key, now_ts()],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn load_api_key(app: &AppHandle) -> Result<Option<String>, String> {
+    let conn = connection(app)?;
+    conn.query_row(
+        "SELECT value FROM app_secrets WHERE key = ?1",
+        params![API_KEY_SETTING],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|value| value.filter(|api_key| !api_key.trim().is_empty()))
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn has_api_key(app: &AppHandle) -> Result<bool, String> {
+    Ok(load_api_key(app)?.is_some())
+}
+
 pub(crate) fn task_work_dir(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
     let dir = app_data_dir(app)?.join("tasks").join(task_id);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
@@ -540,6 +572,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS app_secrets (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
         INSERT OR IGNORE INTO queue_settings(key, value) VALUES('max_concurrency', '2');
         ",
     )
@@ -586,6 +623,20 @@ mod tests {
             )
             .expect("default queue setting should exist");
         assert_eq!(max_concurrency, "2");
+
+        conn.execute(
+            "INSERT INTO app_secrets(key, value, updated_at) VALUES('translation_api_key', 'sk-test', 1)",
+            [],
+        )
+        .expect("app secret should insert");
+        let api_key: String = conn
+            .query_row(
+                "SELECT value FROM app_secrets WHERE key = 'translation_api_key'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("app secret should be readable");
+        assert_eq!(api_key, "sk-test");
     }
 
     #[test]

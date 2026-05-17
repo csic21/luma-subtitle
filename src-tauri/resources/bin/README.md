@@ -2,6 +2,10 @@
 
 Place platform binaries here for development.
 
+The app can also install missing dependencies into its managed sidecar
+directory. On macOS Apple Silicon it only downloads official source archives
+and builds locally; it does not download third-party macOS binaries.
+
 Windows x64:
 
 - `ffmpeg.exe`

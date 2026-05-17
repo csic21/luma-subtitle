@@ -1,11 +1,16 @@
 use reqwest::{header::RANGE, StatusCode};
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_os = "macos"))]
+use std::{fs, io};
 use std::{
-    fs, io,
     path::Path,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "macos")]
+use std::{path::PathBuf, process::Stdio};
 use tauri::{AppHandle, Emitter, Manager, State};
+#[cfg(target_os = "macos")]
+use tokio::process::Command;
 use tokio::{io::AsyncWriteExt, time::sleep};
 
 use crate::{
@@ -16,12 +21,20 @@ use crate::{
     state::AppState,
 };
 
+#[cfg(not(target_os = "macos"))]
 const FFMPEG_DOWNLOAD_URL: &str =
     "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+#[cfg(target_os = "macos")]
+const FFMPEG_SOURCE_URL: &str = "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz";
+#[cfg(target_os = "macos")]
+const FFMPEG_SOURCE_ARCHIVE_NAME: &str = "ffmpeg-8.1.1.tar.xz";
+#[cfg(target_os = "macos")]
+const MACOS_ARM64_DEPLOYMENT_TARGET: &str = "11.0";
 const WHISPER_RELEASE_API_URL: &str =
     "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
 const HTTP_USER_AGENT: &str = "Luma Subtitle dependency installer";
 const DOWNLOAD_MAX_ATTEMPTS: usize = 4;
+#[cfg(not(target_os = "macos"))]
 const WHISPER_CPP_ASSET_CANDIDATES: &[&str] = &[
     "whisper-cublas-12.4.0-bin-x64.zip",
     "whisper-cublas-11.8.0-bin-x64.zip",
@@ -95,8 +108,14 @@ pub(crate) struct DownloadStatus {
 }
 #[derive(Deserialize)]
 struct GithubRelease {
+    #[cfg(target_os = "macos")]
+    tag_name: String,
+    #[cfg(target_os = "macos")]
+    tarball_url: String,
+    #[cfg(not(target_os = "macos"))]
     assets: Vec<GithubAsset>,
 }
+#[cfg(not(target_os = "macos"))]
 #[derive(Deserialize)]
 struct GithubAsset {
     name: String,
@@ -266,34 +285,37 @@ async fn install_ffmpeg(app: &AppHandle) -> Result<String, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        return Err(macos_official_binary_message("ffmpeg", "ffmpeg"));
+        install_ffmpeg_from_official_source(app).await
     }
-    let sidecars_dir = sidecars_dir(app)?;
-    let downloads_dir = sidecars_dir.join("downloads");
-    tokio::fs::create_dir_all(&downloads_dir)
-        .await
-        .map_err(|error| format!("创建下载目录失败: {error}"))?;
-    let archive_path = downloads_dir.join("ffmpeg-release-essentials.zip");
-    download_dependency_archive(app, "ffmpeg", FFMPEG_DOWNLOAD_URL, &archive_path).await?;
-    let path = extract_dependency_archive(
-        "ffmpeg",
-        "ffmpeg.exe",
-        app,
-        &archive_path,
-        &sidecars_dir.join("ffmpeg"),
-    )
-    .await?;
-    let _ = tokio::fs::remove_file(&archive_path).await;
-    emit_dependency_install(
-        app,
-        "ffmpeg",
-        "completed",
-        "FFmpeg 已安装",
-        1.0,
-        Some(path.clone()),
-        None,
-    );
-    Ok(path)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let sidecars_dir = sidecars_dir(app)?;
+        let downloads_dir = sidecars_dir.join("downloads");
+        tokio::fs::create_dir_all(&downloads_dir)
+            .await
+            .map_err(|error| format!("创建下载目录失败: {error}"))?;
+        let archive_path = downloads_dir.join("ffmpeg-release-essentials.zip");
+        download_dependency_archive(app, "ffmpeg", FFMPEG_DOWNLOAD_URL, &archive_path).await?;
+        let path = extract_dependency_archive(
+            "ffmpeg",
+            "ffmpeg.exe",
+            app,
+            &archive_path,
+            &sidecars_dir.join("ffmpeg"),
+        )
+        .await?;
+        let _ = tokio::fs::remove_file(&archive_path).await;
+        emit_dependency_install(
+            app,
+            "ffmpeg",
+            "completed",
+            "FFmpeg 已安装",
+            1.0,
+            Some(path.clone()),
+            None,
+        );
+        Ok(path)
+    }
 }
 async fn install_whisper_cpp(app: &AppHandle) -> Result<String, String> {
     if let Some(path) = locate_binary(app, "whisper-cli") {
@@ -311,45 +333,141 @@ async fn install_whisper_cpp(app: &AppHandle) -> Result<String, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        return Err(macos_official_binary_message("whisper.cpp", "whisper-cli"));
+        install_whisper_cpp_from_official_source(app).await
     }
-    emit_dependency_install(
-        app,
-        "whisper.cpp",
-        "running",
-        "正在查询 whisper.cpp 发布包",
-        0.0,
-        None,
-        None,
-    );
-    let asset = latest_whisper_cpp_asset().await?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        emit_dependency_install(
+            app,
+            "whisper.cpp",
+            "running",
+            "正在查询 whisper.cpp 发布包",
+            0.0,
+            None,
+            None,
+        );
+        let asset = latest_whisper_cpp_asset().await?;
+        let sidecars_dir = sidecars_dir(app)?;
+        let downloads_dir = sidecars_dir.join("downloads");
+        tokio::fs::create_dir_all(&downloads_dir)
+            .await
+            .map_err(|error| format!("创建下载目录失败: {error}"))?;
+        let archive_path = downloads_dir.join(&asset.name);
+        download_dependency_archive(
+            app,
+            "whisper.cpp",
+            &asset.browser_download_url,
+            &archive_path,
+        )
+        .await?;
+        let path = extract_dependency_archive(
+            "whisper.cpp",
+            "whisper-cli.exe",
+            app,
+            &archive_path,
+            &sidecars_dir.join("whisper.cpp"),
+        )
+        .await?;
+        let _ = tokio::fs::remove_file(&archive_path).await;
+        emit_dependency_install(
+            app,
+            "whisper.cpp",
+            "completed",
+            "whisper.cpp 已安装",
+            1.0,
+            Some(path.clone()),
+            None,
+        );
+        Ok(path)
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn install_ffmpeg_from_official_source(app: &AppHandle) -> Result<String, String> {
+    let result = install_ffmpeg_from_official_source_inner(app).await;
+    if let Err(message) = &result {
+        emit_dependency_install(
+            app,
+            "ffmpeg",
+            "failed",
+            "FFmpeg 安装失败",
+            0.0,
+            None,
+            Some(message.clone()),
+        );
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+async fn install_ffmpeg_from_official_source_inner(app: &AppHandle) -> Result<String, String> {
+    ensure_macos_arm64()?;
+    ensure_build_tools("FFmpeg", &["clang", "make", "tar", "sh"])?;
     let sidecars_dir = sidecars_dir(app)?;
     let downloads_dir = sidecars_dir.join("downloads");
     tokio::fs::create_dir_all(&downloads_dir)
         .await
         .map_err(|error| format!("创建下载目录失败: {error}"))?;
-    let archive_path = downloads_dir.join(&asset.name);
-    download_dependency_archive(
-        app,
-        "whisper.cpp",
-        &asset.browser_download_url,
-        &archive_path,
-    )
-    .await?;
-    let path = extract_dependency_archive(
-        "whisper.cpp",
-        "whisper-cli.exe",
-        app,
-        &archive_path,
-        &sidecars_dir.join("whisper.cpp"),
-    )
-    .await?;
+    let archive_path = downloads_dir.join(FFMPEG_SOURCE_ARCHIVE_NAME);
+    download_dependency_archive(app, "FFmpeg 源码", FFMPEG_SOURCE_URL, &archive_path).await?;
+
+    let target_dir = sidecars_dir.join("ffmpeg");
+    let staging_dir = target_dir.with_extension("installing");
+    let source_dir = staging_dir.join("source");
+    let install_dir = staging_dir.join("install");
+    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+    tokio::fs::create_dir_all(&source_dir)
+        .await
+        .map_err(|error| format!("创建 FFmpeg 构建目录失败: {error}"))?;
+    tokio::fs::create_dir_all(&install_dir)
+        .await
+        .map_err(|error| format!("创建 FFmpeg 安装目录失败: {error}"))?;
+    extract_tar_archive(app, "FFmpeg 源码", &archive_path, &source_dir, 0.86).await?;
+    let configure_path = find_file_recursive(&source_dir, "configure")
+        .ok_or_else(|| "FFmpeg 源码包里没有找到 configure".to_string())?;
+    let source_root = configure_path
+        .parent()
+        .ok_or_else(|| "定位 FFmpeg 源码目录失败".to_string())?
+        .to_path_buf();
+    let jobs = build_parallelism();
+    let prefix = install_dir.to_string_lossy().to_string();
+    let mut configure = Command::new("./configure");
+    configure
+        .current_dir(&source_root)
+        .arg(format!("--prefix={prefix}"))
+        .arg("--arch=arm64")
+        .arg("--cc=clang")
+        .arg("--disable-doc")
+        .arg("--disable-debug")
+        .arg("--disable-ffplay")
+        .arg("--enable-audiotoolbox")
+        .arg("--enable-avfoundation")
+        .arg("--enable-videotoolbox");
+    run_install_command(app, "ffmpeg", "正在配置官方 FFmpeg 源码", 0.9, configure).await?;
+
+    let mut make = Command::new("make");
+    make.current_dir(&source_root)
+        .arg("-j")
+        .arg(jobs.to_string());
+    run_install_command(app, "ffmpeg", "正在编译 FFmpeg，可能需要几分钟", 0.95, make).await?;
+
+    let mut make_install = Command::new("make");
+    make_install.current_dir(&source_root).arg("install");
+    run_install_command(app, "ffmpeg", "正在安装 FFmpeg", 0.98, make_install).await?;
+
+    let installed_path = install_dir.join("bin").join("ffmpeg");
+    ensure_executable(&installed_path).await?;
+    let _ = tokio::fs::remove_dir_all(&target_dir).await;
+    tokio::fs::rename(&staging_dir, &target_dir)
+        .await
+        .map_err(|error| format!("保存 FFmpeg 失败: {error}"))?;
     let _ = tokio::fs::remove_file(&archive_path).await;
+    let path = path_to_string(target_dir.join("install").join("bin").join("ffmpeg"));
     emit_dependency_install(
         app,
-        "whisper.cpp",
+        "ffmpeg",
         "completed",
-        "whisper.cpp 已安装",
+        "FFmpeg 已从官方源码编译安装",
         1.0,
         Some(path.clone()),
         None,
@@ -358,15 +476,181 @@ async fn install_whisper_cpp(app: &AppHandle) -> Result<String, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_official_binary_message(item: &str, binary_name: &str) -> String {
-    if std::env::consts::ARCH != "aarch64" {
-        return "macOS 版本仅支持 Apple Silicon (arm64)，不支持 Intel Mac".to_string();
+async fn install_whisper_cpp_from_official_source(app: &AppHandle) -> Result<String, String> {
+    let result = install_whisper_cpp_from_official_source_inner(app).await;
+    if let Err(message) = &result {
+        emit_dependency_install(
+            app,
+            "whisper.cpp",
+            "failed",
+            "whisper.cpp 安装失败",
+            0.0,
+            None,
+            Some(message.clone()),
+        );
     }
-    format!(
-        "未找到 {item}。为避免在用户机器上调用 Homebrew 或下载非官方 macOS 二进制，请先安装 {binary_name}，或把成品文件放入 src-tauri/resources/bin/macos-arm64 后重试。当前上游官方没有可直接下载的 Apple Silicon {binary_name} CLI 成品包。"
-    )
+    result
 }
 
+#[cfg(target_os = "macos")]
+async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Result<String, String> {
+    ensure_macos_arm64()?;
+    ensure_build_tools("whisper.cpp", &["clang", "cmake", "make", "tar"])?;
+    emit_dependency_install(
+        app,
+        "whisper.cpp",
+        "running",
+        "正在查询 whisper.cpp 官方发布源码",
+        0.0,
+        None,
+        None,
+    );
+    let source = latest_whisper_cpp_source().await?;
+    let sidecars_dir = sidecars_dir(app)?;
+    let downloads_dir = sidecars_dir.join("downloads");
+    tokio::fs::create_dir_all(&downloads_dir)
+        .await
+        .map_err(|error| format!("创建下载目录失败: {error}"))?;
+    let archive_path = downloads_dir.join(format!("whisper.cpp-{}.tar.gz", source.tag_name));
+    download_dependency_archive(app, "whisper.cpp 源码", &source.tarball_url, &archive_path)
+        .await?;
+
+    let target_dir = sidecars_dir.join("whisper.cpp");
+    let staging_dir = target_dir.with_extension("installing");
+    let source_dir = staging_dir.join("source");
+    let build_dir = staging_dir.join("build");
+    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
+    tokio::fs::create_dir_all(&source_dir)
+        .await
+        .map_err(|error| format!("创建 whisper.cpp 构建目录失败: {error}"))?;
+    extract_tar_archive(app, "whisper.cpp 源码", &archive_path, &source_dir, 0.86).await?;
+    let source_root = first_child_dir(&source_dir)
+        .await?
+        .ok_or_else(|| "whisper.cpp 源码包为空".to_string())?;
+    let jobs = build_parallelism();
+
+    let mut configure = Command::new("cmake");
+    configure
+        .arg("-S")
+        .arg(&source_root)
+        .arg("-B")
+        .arg(&build_dir)
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg(format!(
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET={MACOS_ARM64_DEPLOYMENT_TARGET}"
+        ))
+        .arg("-DGGML_METAL=ON")
+        .arg("-DWHISPER_BUILD_TESTS=OFF")
+        .arg("-DWHISPER_BUILD_EXAMPLES=ON")
+        .env("MACOSX_DEPLOYMENT_TARGET", MACOS_ARM64_DEPLOYMENT_TARGET);
+    run_install_command(
+        app,
+        "whisper.cpp",
+        "正在配置 whisper.cpp Metal 构建",
+        0.9,
+        configure,
+    )
+    .await?;
+
+    let mut build = Command::new("cmake");
+    build
+        .arg("--build")
+        .arg(&build_dir)
+        .arg("--config")
+        .arg("Release")
+        .arg("--target")
+        .arg("whisper-cli")
+        .arg("--parallel")
+        .arg(jobs.to_string())
+        .env("MACOSX_DEPLOYMENT_TARGET", MACOS_ARM64_DEPLOYMENT_TARGET);
+    run_install_command(
+        app,
+        "whisper.cpp",
+        "正在编译 Metal 版 whisper-cli",
+        0.97,
+        build,
+    )
+    .await?;
+
+    let built_path = find_file_recursive(&build_dir, "whisper-cli")
+        .ok_or_else(|| "whisper.cpp 构建产物里没有找到 whisper-cli".to_string())?;
+    ensure_executable(&built_path).await?;
+    let relative_path = built_path
+        .strip_prefix(&staging_dir)
+        .map_err(|error| format!("定位 whisper-cli 失败: {error}"))?
+        .to_path_buf();
+    let _ = tokio::fs::remove_dir_all(&target_dir).await;
+    tokio::fs::rename(&staging_dir, &target_dir)
+        .await
+        .map_err(|error| format!("保存 whisper.cpp 失败: {error}"))?;
+    let _ = tokio::fs::remove_file(&archive_path).await;
+    let path = path_to_string(target_dir.join(relative_path));
+    emit_dependency_install(
+        app,
+        "whisper.cpp",
+        "completed",
+        "whisper-cli 已从官方源码编译安装（Metal）",
+        1.0,
+        Some(path.clone()),
+        None,
+    );
+    Ok(path)
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_arm64() -> Result<(), String> {
+    if std::env::consts::ARCH != "aarch64" {
+        return Err("macOS 版本仅支持 Apple Silicon (arm64)，不支持 Intel Mac".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_build_tools(item: &str, tools: &[&str]) -> Result<(), String> {
+    let missing = tools
+        .iter()
+        .filter(|tool| which::which(tool).is_err())
+        .copied()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "编译 {item} 需要本机已有构建工具: {}。请先安装 Xcode Command Line Tools 后重试。",
+        missing.join(", ")
+    ))
+}
+
+#[cfg(target_os = "macos")]
+struct WhisperCppSource {
+    tag_name: String,
+    tarball_url: String,
+}
+
+#[cfg(target_os = "macos")]
+async fn latest_whisper_cpp_source() -> Result<WhisperCppSource, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent(HTTP_USER_AGENT)
+        .build()
+        .map_err(|error| format!("创建 GitHub 客户端失败: {error}"))?;
+    let release = client
+        .get(WHISPER_RELEASE_API_URL)
+        .send()
+        .await
+        .map_err(|error| format!("查询 whisper.cpp 发布源码失败: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("查询 whisper.cpp 发布源码失败: {error}"))?
+        .json::<GithubRelease>()
+        .await
+        .map_err(|error| format!("解析 whisper.cpp 发布源码失败: {error}"))?;
+    Ok(WhisperCppSource {
+        tag_name: release.tag_name,
+        tarball_url: release.tarball_url,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
 async fn latest_whisper_cpp_asset() -> Result<GithubAsset, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -625,6 +909,7 @@ fn download_message(label: &str, update: DownloadUpdate) -> String {
     };
     format!("{prefix} {label} {downloaded} / {total}")
 }
+#[cfg(not(target_os = "macos"))]
 async fn extract_dependency_archive(
     item: &str,
     exe_name: &str,
@@ -669,6 +954,99 @@ async fn extract_dependency_archive(
     Ok(path_to_string(installed_path))
 }
 
+#[cfg(target_os = "macos")]
+async fn extract_tar_archive(
+    app: &AppHandle,
+    item: &str,
+    archive_path: &Path,
+    output_dir: &Path,
+    progress: f32,
+) -> Result<(), String> {
+    let mut command = Command::new("tar");
+    command
+        .arg("-xf")
+        .arg(archive_path)
+        .arg("-C")
+        .arg(output_dir);
+    run_install_command(app, item, format!("正在解包 {item}"), progress, command).await
+}
+
+#[cfg(target_os = "macos")]
+async fn run_install_command(
+    app: &AppHandle,
+    item: &str,
+    message: impl Into<String>,
+    progress: f32,
+    mut command: Command,
+) -> Result<(), String> {
+    let message = message.into();
+    emit_dependency_install(app, item, "running", message, progress, None, None);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    let output = command
+        .output()
+        .await
+        .map_err(|error| format!("执行 {item} 安装命令失败: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if !stderr.trim().is_empty() {
+        trim_command_output(&stderr)
+    } else {
+        trim_command_output(&stdout)
+    };
+    Err(format!(
+        "{item} 安装命令退出失败: {}{}",
+        output.status,
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!("\n{detail}")
+        }
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn trim_command_output(output: &str) -> String {
+    let lines = output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(24);
+    lines[start..].join("\n")
+}
+
+#[cfg(target_os = "macos")]
+fn build_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get().clamp(2, 8))
+        .unwrap_or(4)
+}
+
+#[cfg(target_os = "macos")]
+async fn first_child_dir(path: &Path) -> Result<Option<PathBuf>, String> {
+    let mut entries = tokio::fs::read_dir(path)
+        .await
+        .map_err(|error| format!("读取源码目录失败: {error}"))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|error| format!("读取源码目录失败: {error}"))?
+    {
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|error| format!("读取源码目录失败: {error}"))?;
+        if file_type.is_dir() {
+            return Ok(Some(entry.path()));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(unix)]
 async fn ensure_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -688,6 +1066,7 @@ async fn ensure_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn extract_zip_archive(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
     let file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;

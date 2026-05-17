@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::{
     job_events::{emit_job, ExportedSubtitlePaths, JobOutputs, JobStatus, StoredSubtitleResult},
     paths::{locate_binary, path_to_string, resolve_output_dir, safe_stem, sanitize_file_part},
-    settings::{self, credential_entry, normalize_language},
+    settings::{self, normalize_language},
     state::{ensure_not_cancelled, AppState, JobError, JobResult, QueuedTaskOperation},
     subtitles::{parse_srt_file, parse_whisper_json, render_srt, write_srt_text},
     task_db::{self, QueueSettings, TaskRecord, TaskSettingsSnapshot},
@@ -601,10 +601,8 @@ fn resolve_translation_inputs(
         .map(str::to_string)
         .map(Ok)
         .unwrap_or_else(|| {
-            credential_entry()
-                .map_err(|error| error.to_string())?
-                .get_password()
-                .map_err(|_| "请先保存 OpenAI 兼容接口的 API Key".to_string())
+            task_db::load_api_key(app)?
+                .ok_or_else(|| "请先保存 OpenAI 兼容接口的 API Key".to_string())
         })?;
     let stored = app
         .state::<AppState>()
@@ -1011,10 +1009,9 @@ async fn run_translate_task(
         api_key: None,
     };
     validate_translate_request(&request).map_err(JobError::failed)?;
-    let api_key = credential_entry()
-        .map_err(|error| JobError::failed(error.to_string()))?
-        .get_password()
-        .map_err(|_| JobError::failed("请先保存 OpenAI 兼容接口的 API Key"))?;
+    let api_key = task_db::load_api_key(&app)
+        .map_err(JobError::failed)?
+        .ok_or_else(|| JobError::failed("请先保存 OpenAI 兼容接口的 API Key"))?;
     let stored = StoredSubtitleResult {
         source_srt,
         translated_srt: None,
