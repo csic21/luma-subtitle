@@ -48,13 +48,13 @@ fn main() {
             jobs::cancel_task,
             jobs::load_queue_settings,
             jobs::save_queue_settings,
-            jobs::start_job,
-            jobs::import_source_srt,
-            jobs::cancel_job,
+            jobs::adhoc::start_job,
+            jobs::adhoc::import_source_srt,
+            jobs::adhoc::cancel_job,
             job_events::job_status,
-            jobs::subtitle_preview,
-            jobs::translate_subtitles,
-            jobs::export_subtitles,
+            jobs::adhoc::subtitle_preview,
+            jobs::adhoc::translate_subtitles,
+            jobs::adhoc::export_subtitles,
             commands::open_path
         ])
         .run(tauri::generate_context!())

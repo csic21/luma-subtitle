@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import i18n from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
@@ -109,11 +109,21 @@ export function useI18n() {
     };
   }, []);
 
-  return {
-    locale,
-    setLocale: (nextLocale: Locale) => {
-      void i18n.changeLanguage(nextLocale);
-    },
-    t: (key: string, values?: TranslationValues) => translate(key, values, locale),
-  };
+  const setLocale = useCallback((nextLocale: Locale) => {
+    void i18n.changeLanguage(nextLocale);
+  }, []);
+
+  const t = useCallback(
+    (key: string, values?: TranslationValues) => translate(key, values, locale),
+    [locale],
+  );
+
+  return useMemo(
+    () => ({
+      locale,
+      setLocale,
+      t,
+    }),
+    [locale, setLocale, t],
+  );
 }

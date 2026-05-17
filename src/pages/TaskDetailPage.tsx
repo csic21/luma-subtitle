@@ -5,9 +5,9 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { NoticeAlert, StatusBadge } from "@/components/app/shared";
+import { TaskConfigCard } from "@/components/app/task-detail-config";
 import {
   SubtitlePreviewCard,
-  TaskConfigCard,
   TaskFlowStrip,
   TaskLogsCard,
   TaskProgressCard,
@@ -290,4 +290,3 @@ export function TaskDetailPage() {
     </>
   );
 }
-
