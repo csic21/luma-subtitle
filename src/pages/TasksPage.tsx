@@ -8,8 +8,8 @@ import { TaskMetricGrid, TaskQueueTable, TaskToolbar } from "@/components/app/ta
 import { defaultSettings } from "@/config";
 import { useI18n } from "@/i18n";
 import { canRunOperation, errorText, hasTauriRuntime, operationLabel, taskBusy } from "@/lib/app-utils";
-import { applyJobEventToTasks, taskCreatePayload, upsertTask } from "@/lib/task-data";
-import type { JobEvent, QueueSettings, SettingsState, TaskRecord, TaskOperation } from "@/types";
+import { taskCreatePayload, upsertTask } from "@/lib/task-data";
+import type { QueueSettings, SettingsState, TaskRecord, TaskOperation } from "@/types";
 
 export function TasksPage() {
   const navigate = useNavigate();
@@ -35,7 +35,6 @@ export function TasksPage() {
 
     let disposed = false;
     let unlistenTask: (() => void) | undefined;
-    let unlistenJob: (() => void) | undefined;
     let unlistenDeleted: (() => void) | undefined;
     const refreshOnResume = () => {
       if (!disposed) void refreshTasks();
@@ -54,15 +53,6 @@ export function TasksPage() {
         return;
       }
       unlistenTask = fn;
-    });
-    listen<JobEvent>("job-event", (event) => {
-      setTasks((current) => applyJobEventToTasks(current, event.payload));
-    }).then((fn) => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unlistenJob = fn;
     });
     listen<string>("task-deleted", (event) => {
       setTasks((current) => current.filter((task) => task.id !== event.payload));
@@ -83,7 +73,6 @@ export function TasksPage() {
       window.removeEventListener("focus", refreshOnResume);
       document.removeEventListener("visibilitychange", refreshOnVisible);
       unlistenTask?.();
-      unlistenJob?.();
       unlistenDeleted?.();
     };
   }, [t]);
