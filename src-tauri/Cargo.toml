@@ -1,6 +1,6 @@
 [package]
 name = "luma-subtitle"
-version = "1.0.1"
+version = "1.0.2"
 description = "Local video transcription, translation, and SRT export."
 authors = ["Luma Subtitle"]
 edition = "2021"
