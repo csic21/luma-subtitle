@@ -22,7 +22,7 @@ pub(crate) fn hide_std_command_window(command: &mut std::process::Command) {
 pub(crate) fn hide_tokio_command_window(command: &mut tokio::process::Command) {
     #[cfg(target_os = "windows")]
     {
-        use tokio::os::windows::process::CommandExt;
+        use std::os::windows::process::CommandExt;
         command.creation_flags(WINDOWS_CREATE_NO_WINDOW_FLAG);
     }
     #[cfg(not(target_os = "windows"))]

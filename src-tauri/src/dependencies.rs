@@ -28,7 +28,7 @@ use events::{
 };
 pub(crate) use events::{DependencyInstallEvent, DownloadStatus, ModelDownloadEvent};
 #[cfg(not(target_os = "macos"))]
-use install::{ensure_executable, extract_dependency_archive};
+use install::extract_dependency_archive;
 #[cfg(target_os = "macos")]
 use source_build::{install_ffmpeg_from_official_source, install_whisper_cpp_from_official_source};
 
