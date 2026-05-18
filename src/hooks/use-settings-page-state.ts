@@ -1,8 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { defaultSettings, whisperModelPresets } from "@/config";
 import { errorText, fileName, hasTauriRuntime } from "@/lib/app-utils";
+import {
+  checkAppUpdate,
+  currentAppVersion,
+  downloadAndInstallAppUpdate,
+  relaunchApp,
+  type AvailableAppUpdate,
+} from "@/lib/updater";
 import {
   checkEnvironment,
   downloadStatus,
@@ -13,7 +20,7 @@ import {
   saveSettings as saveSettingsCommand,
   selectWhisperModel,
 } from "@/lib/tauri-api";
-import type { DependencyInstallEvent, DownloadStatus, EnvironmentState, ModelDownloadEvent, SettingsState, TFunction } from "@/types";
+import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState, TFunction } from "@/types";
 
 export function useSettingsPageState(t: TFunction) {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -23,6 +30,12 @@ export function useSettingsPageState(t: TFunction) {
   const [whisperPresetId, setWhisperPresetId] = useState(whisperModelPresets[1].id);
   const [modelDownload, setModelDownload] = useState<ModelDownloadEvent | null>(null);
   const [dependencyInstall, setDependencyInstall] = useState<DependencyInstallEvent | null>(null);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
+    status: hasTauriRuntime() ? "idle" : "unsupported",
+    currentVersion: "",
+    progress: 0,
+  });
+  const availableUpdateRef = useRef<AvailableAppUpdate | null>(null);
 
   const selectedWhisperPreset = useMemo(
     () => whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0],
@@ -33,6 +46,7 @@ export function useSettingsPageState(t: TFunction) {
   const hasApiCredential = settings.has_api_key || apiKey.trim().length > 0;
   const environmentReady = Boolean(env?.ffmpeg_path && env?.whisper_path);
   const tauriReady = hasTauriRuntime();
+  const appUpdating = appUpdate.status === "checking" || appUpdate.status === "downloading";
 
   const envRows = useMemo(() => {
     if (!env) return [];
@@ -64,6 +78,15 @@ export function useSettingsPageState(t: TFunction) {
     }
   }, []);
 
+  const refreshAppVersion = useCallback(async () => {
+    try {
+      const version = await currentAppVersion();
+      setAppUpdate((current) => ({ ...current, currentVersion: version }));
+    } catch {
+      // Version is informational; updater checks still report their own errors.
+    }
+  }, []);
+
   const refreshDownloadStatus = useCallback(async () => {
     try {
       const status = await downloadStatus();
@@ -83,6 +106,7 @@ export function useSettingsPageState(t: TFunction) {
     void refreshSettings();
     void refreshEnvironment();
     void refreshDownloadStatus();
+    void refreshAppVersion();
 
     let disposed = false;
     let unlistenModelDownload: (() => void) | undefined;
@@ -115,7 +139,7 @@ export function useSettingsPageState(t: TFunction) {
       unlistenModelDownload?.();
       unlistenDependencyInstall?.();
     };
-  }, [refreshDownloadStatus, refreshEnvironment, refreshSettings, t, tauriReady]);
+  }, [refreshAppVersion, refreshDownloadStatus, refreshEnvironment, refreshSettings, t, tauriReady]);
 
   useEffect(() => {
     if (!modelDownloading && !dependencyInstalling) return;
@@ -235,6 +259,109 @@ export function useSettingsPageState(t: TFunction) {
     }
   }, [refreshEnvironment, t]);
 
+  const checkForUpdates = useCallback(async () => {
+    if (!tauriReady) {
+      setAppUpdate((current) => ({ ...current, status: "unsupported", error: null }));
+      setNotice(t("notice.requireTauriUpdater"));
+      return;
+    }
+
+    setNotice("");
+    availableUpdateRef.current = null;
+    setAppUpdate((current) => ({
+      ...current,
+      status: "checking",
+      availableVersion: null,
+      body: null,
+      date: null,
+      error: null,
+      progress: 0,
+      downloadedBytes: null,
+      totalBytes: null,
+    }));
+
+    try {
+      const update = await checkAppUpdate();
+      if (!update) {
+        const version = await currentAppVersion();
+        setAppUpdate((current) => ({
+          ...current,
+          status: "unavailable",
+          currentVersion: version,
+          availableVersion: null,
+          body: null,
+          date: null,
+          error: null,
+          progress: 0,
+        }));
+        return;
+      }
+
+      availableUpdateRef.current = update;
+      setAppUpdate({
+        status: "available",
+        currentVersion: update.currentVersion,
+        availableVersion: update.version,
+        body: update.body ?? null,
+        date: update.date ?? null,
+        progress: 0,
+        downloadedBytes: null,
+        totalBytes: null,
+        error: null,
+      });
+    } catch (error) {
+      const message = errorText(error);
+      setAppUpdate((current) => ({
+        ...current,
+        status: "failed",
+        error: message,
+        progress: 0,
+      }));
+      setNotice(t("update.checkFailed", { error: message }));
+    }
+  }, [t, tauriReady]);
+
+  const installUpdate = useCallback(async () => {
+    if (!availableUpdateRef.current) {
+      await checkForUpdates();
+      return;
+    }
+
+    const update = availableUpdateRef.current;
+    setNotice("");
+    setAppUpdate((current) => ({
+      ...current,
+      status: "downloading",
+      error: null,
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: null,
+    }));
+
+    try {
+      await downloadAndInstallAppUpdate(update, (progress) => {
+        setAppUpdate((current) => ({
+          ...current,
+          status: "downloading",
+          progress: progress.progress,
+          downloadedBytes: progress.downloadedBytes,
+          totalBytes: progress.totalBytes,
+        }));
+      });
+      setAppUpdate((current) => ({ ...current, status: "ready", progress: 1 }));
+      setNotice(t("update.installedRestarting"));
+      await relaunchApp();
+    } catch (error) {
+      const message = errorText(error);
+      setAppUpdate((current) => ({
+        ...current,
+        status: "failed",
+        error: message,
+      }));
+      setNotice(t("update.installFailed", { error: message }));
+    }
+  }, [checkForUpdates, t]);
+
   const openManagedDir = useCallback(async (path?: string | null) => {
     if (!path) return;
     await openPath(path);
@@ -242,6 +369,9 @@ export function useSettingsPageState(t: TFunction) {
 
   return {
     apiKey,
+    appUpdate,
+    appUpdating,
+    checkForUpdates,
     dependencyInstall,
     dependencyInstalling,
     downloadWhisperPreset,
@@ -249,6 +379,7 @@ export function useSettingsPageState(t: TFunction) {
     environmentReady,
     envRows,
     hasApiCredential,
+    installUpdate,
     installDependencies,
     modelDownload,
     modelDownloading,

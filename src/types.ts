@@ -73,6 +73,20 @@ export type DownloadStatus = {
   dependency?: DependencyInstallEvent | null;
 };
 
+export type AppUpdateStatus = "unsupported" | "idle" | "checking" | "available" | "downloading" | "ready" | "unavailable" | "failed";
+
+export type AppUpdateState = {
+  status: AppUpdateStatus;
+  currentVersion: string;
+  availableVersion?: string | null;
+  date?: string | null;
+  body?: string | null;
+  progress: number;
+  downloadedBytes?: number | null;
+  totalBytes?: number | null;
+  error?: string | null;
+};
+
 export type TaskSettingsSnapshot = {
   output_dir?: string | null;
   target_language: string;

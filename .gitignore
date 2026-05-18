@@ -23,3 +23,5 @@ layout-check*.png
 *.pfx
 id_rsa
 id_ed25519
+
+docs/**

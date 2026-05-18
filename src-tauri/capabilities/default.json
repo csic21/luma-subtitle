@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Default desktop capability for Luma Subtitle.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["core:app:allow-version", "process:default", "updater:default"]
 }

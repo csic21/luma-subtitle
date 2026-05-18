@@ -121,6 +121,24 @@ pnpm tauri:build
 
 For production macOS distribution, handle `.icns` icons, codesigning, and notarization on a macOS machine.
 
+## App Updates
+
+Luma Subtitle uses the official Tauri updater plugin. Release builds publish signed update artifacts and `latest.json` to GitHub Releases.
+
+Generate the updater signing key once:
+
+```zsh
+pnpm tauri signer generate -w ~/.tauri/luma-subtitle.key
+```
+
+Store the private key content in the GitHub secret `TAURI_SIGNING_PRIVATE_KEY`. If you protect the key with a password, store it in `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The public key is committed in `src-tauri/tauri.conf.json`.
+
+The app checks:
+
+```text
+https://github.com/csic21/luma-subtitle/releases/latest/download/latest.json
+```
+
 ## Output
 
 Each task can generate:

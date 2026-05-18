@@ -2,7 +2,7 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { NoticeAlert } from "@/components/app/shared";
-import { EnvironmentSettingsCard, ModelApiSettingsCard } from "@/components/app/settings";
+import { EnvironmentSettingsCard, ModelApiSettingsCard, UpdateSettingsCard } from "@/components/app/settings";
 import { Button } from "@/components/ui/button";
 import { useSettingsPageState } from "@/hooks/use-settings-page-state";
 import { useI18n } from "@/i18n";
@@ -12,6 +12,9 @@ export function SettingsPage() {
   const { t } = useI18n();
   const {
     apiKey,
+    appUpdate,
+    appUpdating,
+    checkForUpdates,
     dependencyInstall,
     dependencyInstalling,
     downloadWhisperPreset,
@@ -19,6 +22,7 @@ export function SettingsPage() {
     environmentReady,
     envRows,
     hasApiCredential,
+    installUpdate,
     installDependencies,
     modelDownload,
     modelDownloading,
@@ -78,6 +82,14 @@ export function SettingsPage() {
           onInstallDependencies={installDependencies}
           onOpenManagedDir={openManagedDir}
           onRefreshEnvironment={refreshEnvironment}
+        />
+
+        <UpdateSettingsCard
+          appUpdate={appUpdate}
+          appUpdating={appUpdating}
+          t={t}
+          onCheckForUpdates={checkForUpdates}
+          onInstallUpdate={installUpdate}
         />
       </section>
     </>

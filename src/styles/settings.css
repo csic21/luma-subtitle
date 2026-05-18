@@ -59,6 +59,36 @@
   align-items: start;
 }
 
+.update-version-grid {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 9px 10px;
+  align-items: start;
+}
+
+.update-version-grid span {
+  color: var(--muted-foreground);
+  font-size: 0.84rem;
+}
+
+.update-version-grid code,
+.env-row code {
+  overflow-wrap: anywhere;
+}
+
+.update-notes {
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(3, 22, 22, 0.28);
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  padding: 10px;
+}
+
 .download-card {
   display: flex;
   flex-direction: column;

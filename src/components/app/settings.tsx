@@ -17,12 +17,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { defaultSettings, languageOptions, whisperLanguageOptions, whisperModelPresets } from "@/config";
 import type { useI18n } from "@/i18n";
-import { fileName } from "@/lib/app-utils";
+import { bytesLabel, fileName, progressLabel, progressValue } from "@/lib/app-utils";
 import { cn } from "@/lib/utils";
-import type { DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState } from "@/types";
+import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState } from "@/types";
 
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -280,4 +281,114 @@ export function EnvironmentSettingsCard({
       </CardContent>
     </Card>
   );
+}
+
+export function UpdateSettingsCard({
+  appUpdate,
+  appUpdating,
+  t,
+  onCheckForUpdates,
+  onInstallUpdate,
+}: {
+  appUpdate: AppUpdateState;
+  appUpdating: boolean;
+  t: Translate;
+  onCheckForUpdates: () => void | Promise<void>;
+  onInstallUpdate: () => void | Promise<void>;
+}) {
+  const statusLabel = updateStatusLabel(appUpdate.status, t);
+  const canInstall = appUpdate.status === "available";
+  const progressMeta = updateProgressMeta(appUpdate);
+
+  return (
+    <Card>
+      <CardHeader>
+        <SectionTitle icon={<RefreshCw />} title={t("update.section")} description={t("update.description")} />
+        <CardAction>
+          <StatusBadge status={updateBadgeStatus(appUpdate.status)} label={statusLabel} />
+        </CardAction>
+      </CardHeader>
+      <CardContent className="stack-panel">
+        <div className="update-version-grid">
+          <span>{t("update.currentVersion")}</span>
+          <code>{appUpdate.currentVersion || t("settings.notSet")}</code>
+          {appUpdate.availableVersion && (
+            <>
+              <span>{t("update.availableVersion")}</span>
+              <code>{appUpdate.availableVersion}</code>
+            </>
+          )}
+        </div>
+
+        {appUpdate.body && <div className="update-notes">{appUpdate.body}</div>}
+
+        {appUpdate.status === "downloading" && (
+          <div className="download-card">
+            <div className="progress-head compact">
+              <span>{t("update.downloading")}</span>
+              <strong>{progressLabel(appUpdate.progress)}</strong>
+            </div>
+            <Progress className="hotdog-progress" value={progressValue(appUpdate.progress)} />
+            {progressMeta && <div className="download-meta">{progressMeta}</div>}
+          </div>
+        )}
+
+        {appUpdate.error && (
+          <Alert className="credential-alert warn">
+            <AlertCircle />
+            <AlertTitle>{t("update.failed")}</AlertTitle>
+            <AlertDescription>{appUpdate.error}</AlertDescription>
+          </Alert>
+        )}
+
+        <div className="action-row end">
+          <Button variant="secondary" onClick={onCheckForUpdates} disabled={appUpdating}>
+            {appUpdate.status === "checking" ? (
+              <Loader2 data-icon="inline-start" className="spin" />
+            ) : (
+              <RefreshCw data-icon="inline-start" />
+            )}
+            {t("update.check")}
+          </Button>
+          <Button variant="secondary" onClick={onInstallUpdate} disabled={!canInstall || appUpdating}>
+            {appUpdate.status === "downloading" ? (
+              <Loader2 data-icon="inline-start" className="spin" />
+            ) : (
+              <Download data-icon="inline-start" />
+            )}
+            {t("update.install")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function updateStatusLabel(status: AppUpdateState["status"], t: Translate) {
+  const labels: Record<AppUpdateState["status"], string> = {
+    unsupported: t("update.unsupported"),
+    idle: t("update.idle"),
+    checking: t("update.checking"),
+    available: t("update.available"),
+    downloading: t("update.downloading"),
+    ready: t("update.ready"),
+    unavailable: t("update.none"),
+    failed: t("update.failed"),
+  };
+  return labels[status];
+}
+
+function updateBadgeStatus(status: AppUpdateState["status"]) {
+  if (status === "available") return "warn";
+  if (status === "failed") return "failed";
+  if (status === "checking" || status === "downloading") return "running";
+  if (status === "ready" || status === "unavailable") return "ready";
+  return "pending";
+}
+
+function updateProgressMeta(appUpdate: AppUpdateState) {
+  const downloaded = bytesLabel(appUpdate.downloadedBytes);
+  const total = bytesLabel(appUpdate.totalBytes);
+  if (downloaded && total) return `${downloaded} / ${total}`;
+  return downloaded;
 }

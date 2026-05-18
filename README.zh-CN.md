@@ -121,6 +121,24 @@ pnpm tauri:build
 
 正式分发 macOS 包时，还需要在 macOS 机器上处理 `.icns` 图标、codesign 和 notarization。
 
+## 应用更新
+
+Luma Subtitle 使用官方 Tauri updater 插件。发布构建会把签名更新包和 `latest.json` 上传到 GitHub Releases。
+
+首次配置时生成 updater 签名密钥：
+
+```zsh
+pnpm tauri signer generate -w ~/.tauri/luma-subtitle.key
+```
+
+将私钥内容保存为 GitHub Secret `TAURI_SIGNING_PRIVATE_KEY`。如果生成密钥时设置了密码，将密码保存为 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。公钥已提交到 `src-tauri/tauri.conf.json`。
+
+应用检查的更新清单地址：
+
+```text
+https://github.com/csic21/luma-subtitle/releases/latest/download/latest.json
+```
+
 ## 输出
 
 每次任务可以生成：
