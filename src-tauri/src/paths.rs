@@ -41,11 +41,16 @@ pub(crate) fn locate_binary(app: &AppHandle, name: &str) -> Option<PathBuf> {
     } else {
         name.to_string()
     };
-    locate_managed_binary(app, &exe_name)
+    let bundled = locate_managed_binary(app, &exe_name)
         .or_else(|| locate_resource_binary(app, &exe_name))
-        .or_else(|| locate_platform_binary(&exe_name))
-        .or_else(|| which::which(&exe_name).ok())
-        .or_else(|| which::which(name).ok())
+        .or_else(|| locate_platform_binary(&exe_name));
+    if cfg!(windows) {
+        bundled
+    } else {
+        bundled
+            .or_else(|| which::which(&exe_name).ok())
+            .or_else(|| which::which(name).ok())
+    }
 }
 fn locate_managed_binary(app: &AppHandle, exe_name: &str) -> Option<PathBuf> {
     sidecars_dir(app)
@@ -152,11 +157,7 @@ pub(crate) fn sidecars_dir(app: &AppHandle) -> Result<PathBuf, String> {
     managed_dir(app, "sidecars")
 }
 pub(crate) fn find_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf> {
-    find_expected_managed_binary(root, exe_name).or_else(|| {
-        managed_package_dirs(root, exe_name)
-            .into_iter()
-            .find_map(|dir| find_file_recursive(&dir, exe_name))
-    })
+    find_expected_managed_binary(root, exe_name)
 }
 fn find_expected_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf> {
     let mut candidates = vec![root.join(exe_name), root.join("bin").join(exe_name)];
@@ -291,6 +292,22 @@ mod tests {
         fs::write(&deep, b"deep").unwrap();
 
         assert_eq!(find_managed_binary(&root, "ffmpeg.exe"), Some(expected));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn find_managed_binary_ignores_deep_unexpected_locations() {
+        let root = temp_test_dir("managed-binary-deep");
+        let deep_dir = root
+            .join("ffmpeg")
+            .join("archive")
+            .join("nested")
+            .join("bin");
+        fs::create_dir_all(&deep_dir).unwrap();
+        fs::write(deep_dir.join("ffmpeg.exe"), b"deep").unwrap();
+
+        assert_eq!(find_managed_binary(&root, "ffmpeg.exe"), None);
 
         let _ = fs::remove_dir_all(root);
     }

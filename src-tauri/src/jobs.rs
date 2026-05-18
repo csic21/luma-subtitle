@@ -30,8 +30,10 @@ pub(crate) use requests::{
 };
 
 #[tauri::command]
-pub(crate) fn list_tasks(app: AppHandle) -> Result<Vec<TaskRecord>, String> {
-    task_db::list_tasks(&app)
+pub(crate) async fn list_tasks(app: AppHandle) -> Result<Vec<TaskRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || task_db::list_tasks(&app))
+        .await
+        .map_err(|error| format!("读取任务列表失败: {error}"))?
 }
 
 #[tauri::command]
@@ -72,8 +74,10 @@ pub(crate) fn update_task_settings(
 }
 
 #[tauri::command]
-pub(crate) fn load_queue_settings(app: AppHandle) -> Result<QueueSettings, String> {
-    task_db::load_queue_settings(&app)
+pub(crate) async fn load_queue_settings(app: AppHandle) -> Result<QueueSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || task_db::load_queue_settings(&app))
+        .await
+        .map_err(|error| format!("读取队列设置失败: {error}"))?
 }
 
 #[tauri::command]

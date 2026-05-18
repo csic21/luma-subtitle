@@ -65,9 +65,13 @@ pub(crate) struct SettingsResponse {
 }
 
 #[tauri::command]
-pub(crate) fn load_settings(app: AppHandle) -> Result<SettingsResponse, String> {
-    let settings = read_settings(&app)?;
-    Ok(settings.into_response(task_db::has_api_key(&app)?))
+pub(crate) async fn load_settings(app: AppHandle) -> Result<SettingsResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = read_settings(&app)?;
+        Ok(settings.into_response(task_db::has_api_key(&app)?))
+    })
+    .await
+    .map_err(|error| format!("读取设置失败: {error}"))?
 }
 #[tauri::command]
 pub(crate) fn save_settings(

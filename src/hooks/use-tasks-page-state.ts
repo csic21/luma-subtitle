@@ -124,8 +124,10 @@ export function useTasksPageState(t: TFunction) {
 
     void refreshTasks();
     void refreshSettings();
-    void refreshEnvironment();
     void refreshQueueSettings();
+    const environmentTimer = window.setTimeout(() => {
+      void refreshEnvironment();
+    }, 350);
 
     let disposed = false;
     let unlistenTask: (() => void) | undefined;
@@ -162,6 +164,7 @@ export function useTasksPageState(t: TFunction) {
 
     return () => {
       disposed = true;
+      window.clearTimeout(environmentTimer);
       unlistenTask?.();
       unlistenDeleted?.();
     };
@@ -170,8 +173,7 @@ export function useTasksPageState(t: TFunction) {
   const refreshTasksOnResume = useCallback(() => {
     void refreshTasks();
     void refreshSettings();
-    void refreshEnvironment();
-  }, [refreshEnvironment, refreshSettings, refreshTasks]);
+  }, [refreshSettings, refreshTasks]);
 
   useAppResume(refreshTasksOnResume, tauriReady);
 

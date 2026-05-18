@@ -20,7 +20,13 @@ pub(crate) struct EnvironmentResponse {
 }
 
 #[tauri::command]
-pub(crate) fn check_environment(app: AppHandle) -> EnvironmentResponse {
+pub(crate) async fn check_environment(app: AppHandle) -> Result<EnvironmentResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || check_environment_inner(app))
+        .await
+        .map_err(|error| format!("检查环境任务失败: {error}"))
+}
+
+fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
     let (gpu_name, cuda_driver) = gpu_info();
     EnvironmentResponse {
         ffmpeg_path: locate_binary(&app, "ffmpeg").map(display_path_to_string),
