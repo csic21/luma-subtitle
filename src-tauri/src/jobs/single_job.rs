@@ -9,7 +9,7 @@ use crate::{
     job_events::{publish_job_event, JobEventDraft, JobOutputs, StoredSubtitleResult},
     paths::{path_to_string, resolve_output_dir, safe_stem},
     state::{ensure_not_cancelled, AppState, JobError, JobResult},
-    subtitles::{parse_whisper_json, render_srt},
+    subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition},
     task_db,
     translation::{
         normalize_translation_shard_size, translate_with_single_request, TranslationConfig,
@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     helpers::translated_file_name,
-    process::{extract_audio, transcribe_audio},
+    process::{extract_audio, transcribe_audio, TranscriptionMode},
     JobRequest, TranslateSubtitlesRequest,
 };
 
@@ -136,12 +136,46 @@ pub(super) async fn run_job(
         &audio_path,
         &transcript_base,
         &request.whisper_language,
+        TranscriptionMode::Standard,
         cancel.clone(),
     )
     .await?;
-    let segments = parse_whisper_json(&transcript_json)?;
+    let mut segments = parse_whisper_json(&transcript_json)?;
     if segments.is_empty() {
         return Err(JobError::failed("Whisper 没有返回可用字幕段"));
+    }
+    if let Err(first_error) = validate_whisper_repetition(&segments) {
+        let first_message = job_error_message(first_error);
+        publish_job_event(
+            &app,
+            JobEventDraft::running(
+                &job_id,
+                "transcribing-retry",
+                "检测到疑似重复幻觉，正在用 VAD 和保守参数重试转写",
+                0.74,
+            ),
+        );
+        transcribe_audio(
+            &app,
+            &model_path,
+            &audio_path,
+            &transcript_base,
+            &request.whisper_language,
+            TranscriptionMode::ConservativeRetry,
+            cancel.clone(),
+        )
+        .await?;
+        segments = parse_whisper_json(&transcript_json)?;
+        if segments.is_empty() {
+            return Err(JobError::failed("Whisper 重试后没有返回可用字幕段"));
+        }
+        validate_whisper_repetition(&segments).map_err(|retry_error| {
+            JobError::failed(format!(
+                "{}\n\n已自动用 VAD 和保守参数重试一次，但仍检测到重复。首次检测结果：{}",
+                job_error_message(retry_error),
+                first_message
+            ))
+        })?;
     }
     let source_srt = render_srt(&segments, None);
     let segment_count = segments.len();
@@ -171,4 +205,11 @@ pub(super) async fn run_job(
     );
 
     Ok(outputs)
+}
+
+fn job_error_message(error: JobError) -> String {
+    match error {
+        JobError::Cancelled => "任务已取消".to_string(),
+        JobError::Failed(message) => message,
+    }
 }

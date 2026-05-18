@@ -3,11 +3,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::job_events::{ExportedSubtitlePaths, JobEvent, JobStatus};
 
-use super::{
-    get_task, require_task,
-    schema::connection,
-    TaskRecord,
-};
+use super::{get_task, require_task, schema::connection, TaskRecord};
 
 pub(crate) fn set_queued(
     app: &AppHandle,

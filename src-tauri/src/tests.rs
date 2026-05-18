@@ -2,7 +2,7 @@ use crate::settings::normalize_language;
 use crate::state::JobError;
 use crate::subtitles::{
     collapse_repeated_vocalization, format_srt_time, parse_srt_text, parse_timestamp_ms,
-    parse_whisper_json, SubtitleSegment,
+    parse_whisper_json, validate_whisper_repetition, SubtitleSegment,
 };
 use crate::translation::{attach_model_output, parse_translation_content};
 use std::{fs, process};
@@ -65,6 +65,56 @@ fn parses_srt_time_with_position_suffix() {
     let parsed = parse_srt_text("1\n00:00:01,000 --> 00:00:02,000 position:50% line:80%\nHello")
         .expect("srt time suffix should parse");
     assert_eq!(parsed[0].end_ms, 2_000);
+}
+
+#[test]
+fn rejects_repeated_whisper_hallucination_run() {
+    let segments = (0..31)
+        .map(|index| SubtitleSegment {
+            id: index + 1,
+            start_ms: index as u64 * 1_000,
+            end_ms: index as u64 * 1_000 + 900,
+            text: "うまくできてたんじゃないですか".to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    let error = validate_whisper_repetition(&segments).expect_err("long repeated run should fail");
+
+    assert!(format!("{error:?}").contains("重复幻觉"));
+}
+
+#[test]
+fn allows_short_filler_repetition() {
+    let segments = (0..40)
+        .map(|index| SubtitleSegment {
+            id: index + 1,
+            start_ms: index as u64 * 1_000,
+            end_ms: index as u64 * 1_000 + 900,
+            text: "はい".to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    validate_whisper_repetition(&segments).expect("short filler repeats should be allowed");
+}
+
+#[test]
+fn rejects_global_whisper_repetition() {
+    let mut segments = (0..500)
+        .map(|index| SubtitleSegment {
+            id: index + 1,
+            start_ms: index as u64 * 1_000,
+            end_ms: index as u64 * 1_000 + 900,
+            text: format!("普通の字幕 {index}"),
+        })
+        .collect::<Vec<_>>();
+    for segment in segments.iter_mut().step_by(4).take(110) {
+        segment.text = "あなたのために私を愛しています。".to_string();
+    }
+
+    let error =
+        validate_whisper_repetition(&segments).expect_err("global repeated text should fail");
+
+    assert!(format!("{error:?}").contains("全片出现"));
 }
 
 #[test]

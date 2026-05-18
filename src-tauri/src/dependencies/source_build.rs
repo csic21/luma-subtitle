@@ -13,8 +13,8 @@ use super::{
         build_parallelism, ensure_executable, extract_tar_archive, first_child_dir,
         fix_whisper_macos_rpaths, run_install_command,
     },
-    FFMPEG_SOURCE_ARCHIVE_NAME, FFMPEG_SOURCE_URL, HTTP_USER_AGENT,
-    MACOS_ARM64_DEPLOYMENT_TARGET, WHISPER_RELEASE_API_URL,
+    FFMPEG_SOURCE_ARCHIVE_NAME, FFMPEG_SOURCE_URL, HTTP_USER_AGENT, MACOS_ARM64_DEPLOYMENT_TARGET,
+    WHISPER_RELEASE_API_URL,
 };
 
 pub(super) async fn install_ffmpeg_from_official_source(app: &AppHandle) -> Result<String, String> {
@@ -126,9 +126,7 @@ pub(super) async fn install_whisper_cpp_from_official_source(
     result
 }
 
-async fn install_whisper_cpp_from_official_source_inner(
-    app: &AppHandle,
-) -> Result<String, String> {
+async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Result<String, String> {
     ensure_macos_arm64()?;
     ensure_build_tools(
         "whisper.cpp",

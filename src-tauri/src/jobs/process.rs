@@ -12,10 +12,17 @@ use tauri::AppHandle;
 use tokio::{io::AsyncReadExt, process::Command, time::sleep};
 
 use crate::{
+    dependencies::ensure_whisper_vad_model,
     paths::locate_binary,
     settings::normalize_language,
     state::{ensure_not_cancelled, JobError, JobResult},
 };
+
+#[derive(Clone, Copy)]
+pub(super) enum TranscriptionMode {
+    Standard,
+    ConservativeRetry,
+}
 
 pub(super) async fn extract_audio(
     app: &AppHandle,
@@ -47,6 +54,7 @@ pub(super) async fn transcribe_audio(
     audio_path: &Path,
     output_base: &Path,
     language: &str,
+    mode: TranscriptionMode,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<()> {
     if !model_path.exists() {
@@ -69,9 +77,39 @@ pub(super) async fn transcribe_audio(
         .arg(normalize_language(language))
         .arg("-t")
         .arg(threads)
+        .arg("--max-context")
+        .arg("0")
         .arg("-oj")
         .arg("-of")
         .arg(output_base);
+
+    if matches!(mode, TranscriptionMode::ConservativeRetry) {
+        let vad_model = ensure_whisper_vad_model(app)
+            .await
+            .map_err(|error| JobError::failed(format!("准备 VAD 模型失败: {error}")))?;
+        command
+            .arg("--vad")
+            .arg("--vad-model")
+            .arg(vad_model)
+            .arg("--vad-threshold")
+            .arg("0.35")
+            .arg("--vad-min-speech-duration-ms")
+            .arg("150")
+            .arg("--vad-min-silence-duration-ms")
+            .arg("500")
+            .arg("--vad-max-speech-duration-s")
+            .arg("30")
+            .arg("--vad-speech-pad-ms")
+            .arg("200")
+            .arg("--suppress-nst")
+            .arg("--entropy-thold")
+            .arg("2.0")
+            .arg("--logprob-thold")
+            .arg("-0.5")
+            .arg("--no-speech-thold")
+            .arg("0.7");
+    }
+
     run_process(command, cancel, "whisper.cpp 转写失败").await
 }
 

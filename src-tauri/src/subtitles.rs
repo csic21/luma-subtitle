@@ -112,6 +112,107 @@ pub(crate) fn parse_whisper_json(path: &Path) -> JobResult<Vec<SubtitleSegment>>
         "Whisper JSON 缺少 transcription 或 segments 字段",
     ))
 }
+
+pub(crate) fn validate_whisper_repetition(segments: &[SubtitleSegment]) -> JobResult<()> {
+    let mut current_text = "";
+    let mut current_start = 0usize;
+    let mut current_len = 0usize;
+    let mut text_counts = HashMap::<&str, usize>::new();
+    let mut text_first_segment = HashMap::<&str, &SubtitleSegment>::new();
+
+    for (index, segment) in segments.iter().enumerate() {
+        let text = segment.text.as_str();
+        if is_suspicious_repeat_candidate(text) {
+            *text_counts.entry(text).or_insert(0) += 1;
+            text_first_segment.entry(text).or_insert(segment);
+        }
+
+        if text == current_text {
+            current_len += 1;
+        } else {
+            if is_suspicious_run(current_text, current_len) {
+                return Err(repetition_error(
+                    "连续重复",
+                    current_text,
+                    current_len,
+                    &segments[current_start],
+                    &segments[index.saturating_sub(1)],
+                ));
+            }
+            current_text = text;
+            current_start = index;
+            current_len = 1;
+        }
+    }
+
+    if is_suspicious_run(current_text, current_len) {
+        return Err(repetition_error(
+            "连续重复",
+            current_text,
+            current_len,
+            &segments[current_start],
+            segments.last().unwrap_or(&segments[current_start]),
+        ));
+    }
+
+    let global_repeat_threshold = GLOBAL_REPEAT_LIMIT.max(segments.len() / 5);
+    if let Some((text, count)) = text_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= global_repeat_threshold)
+        .max_by_key(|(_, count)| *count)
+    {
+        let first_segment = text_first_segment
+            .get(text)
+            .copied()
+            .unwrap_or_else(|| segments.first().expect("segments should not be empty"));
+        return Err(JobError::failed(format!(
+            "Whisper 转写疑似出现重复幻觉：同一句字幕全片出现 {count} 次（首次出现在第 {} 条，{}）。重复文本：{}",
+            first_segment.id,
+            format_srt_time(first_segment.start_ms),
+            preview_repeated_text(text)
+        )));
+    }
+
+    Ok(())
+}
+
+const MIN_SUSPICIOUS_CHARS: usize = 6;
+const CONSECUTIVE_REPEAT_LIMIT: usize = 30;
+const GLOBAL_REPEAT_LIMIT: usize = 100;
+
+fn is_suspicious_run(text: &str, count: usize) -> bool {
+    count >= CONSECUTIVE_REPEAT_LIMIT && is_suspicious_repeat_candidate(text)
+}
+
+fn is_suspicious_repeat_candidate(text: &str) -> bool {
+    text.chars().count() >= MIN_SUSPICIOUS_CHARS
+}
+
+fn repetition_error(
+    kind: &str,
+    text: &str,
+    count: usize,
+    first: &SubtitleSegment,
+    last: &SubtitleSegment,
+) -> JobError {
+    JobError::failed(format!(
+        "Whisper 转写疑似出现重复幻觉：字幕第 {}-{} 条{} {count} 次（{} - {}）。重复文本：{}",
+        first.id,
+        last.id,
+        kind,
+        format_srt_time(first.start_ms),
+        format_srt_time(last.end_ms),
+        preview_repeated_text(text)
+    ))
+}
+
+fn preview_repeated_text(text: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    if text.chars().count() <= MAX_CHARS {
+        return text.to_string();
+    }
+    format!("{}...", text.chars().take(MAX_CHARS).collect::<String>())
+}
 fn read_text_lossy(path: &Path) -> std::io::Result<String> {
     let bytes = fs::read(path)?;
     Ok(decode_text_lossy(&bytes))

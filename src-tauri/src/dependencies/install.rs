@@ -1,7 +1,7 @@
-#[cfg(not(target_os = "macos"))]
-use std::io;
 #[cfg(any(target_os = "macos", not(target_os = "macos")))]
 use std::fs;
+#[cfg(not(target_os = "macos"))]
+use std::io;
 use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::{path::PathBuf, process::Stdio};

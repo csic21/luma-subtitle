@@ -1,13 +1,16 @@
 use serde::Deserialize;
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tauri::{AppHandle, State};
 
+#[cfg(not(target_os = "macos"))]
+use crate::paths::sidecars_dir;
 use crate::{
     paths::{is_existing_file, locate_binary, path_to_string, whisper_models_dir},
     state::AppState,
 };
-#[cfg(not(target_os = "macos"))]
-use crate::paths::sidecars_dir;
 
 mod download;
 mod events;
@@ -15,14 +18,13 @@ mod install;
 #[cfg(target_os = "macos")]
 mod source_build;
 
-pub(crate) use events::{DependencyInstallEvent, DownloadStatus, ModelDownloadEvent};
+use download::download_dependency_archive;
+use download::{download_file_with_resume, download_message};
 use events::{
     emit_dependency_install, emit_model_download, emit_model_download_with_metrics, format_bytes,
     DownloadMetrics,
 };
-#[cfg(not(target_os = "macos"))]
-use download::download_dependency_archive;
-use download::{download_file_with_resume, download_message};
+pub(crate) use events::{DependencyInstallEvent, DownloadStatus, ModelDownloadEvent};
 #[cfg(not(target_os = "macos"))]
 use install::{ensure_executable, extract_dependency_archive};
 #[cfg(target_os = "macos")]
@@ -39,6 +41,9 @@ const FFMPEG_SOURCE_ARCHIVE_NAME: &str = "ffmpeg-8.1.1.tar.xz";
 const MACOS_ARM64_DEPLOYMENT_TARGET: &str = "11.0";
 const WHISPER_RELEASE_API_URL: &str =
     "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
+const WHISPER_VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
+const WHISPER_VAD_MODEL_URL: &str =
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
 const HTTP_USER_AGENT: &str = "Luma Subtitle dependency installer";
 const DOWNLOAD_MAX_ATTEMPTS: usize = 4;
 #[cfg(not(target_os = "macos"))]
@@ -105,7 +110,50 @@ pub(crate) async fn install_dependencies(app: AppHandle) -> Result<Vec<String>, 
     let mut installed = Vec::new();
     installed.push(install_ffmpeg(&app).await?);
     installed.push(install_whisper_cpp(&app).await?);
+    installed.push(path_to_string(ensure_whisper_vad_model(&app).await?));
     Ok(installed)
+}
+
+pub(crate) async fn ensure_whisper_vad_model(app: &AppHandle) -> Result<PathBuf, String> {
+    let models_dir = whisper_models_dir(app)?;
+    tokio::fs::create_dir_all(&models_dir)
+        .await
+        .map_err(|error| format!("创建 VAD 模型目录失败: {error}"))?;
+    let model_path = models_dir.join(WHISPER_VAD_MODEL_FILE_NAME);
+    if is_existing_file(&model_path) {
+        emit_dependency_install(
+            app,
+            "Silero VAD",
+            "completed",
+            "VAD 模型已可用",
+            1.0,
+            Some(path_to_string(model_path.clone())),
+            None,
+        );
+        return Ok(model_path);
+    }
+
+    let partial_path = models_dir.join(format!("{WHISPER_VAD_MODEL_FILE_NAME}.part"));
+    let _ = tokio::fs::remove_file(&partial_path).await;
+    download_dependency_archive(app, "Silero VAD", WHISPER_VAD_MODEL_URL, &partial_path).await?;
+    if model_path.exists() {
+        tokio::fs::remove_file(&model_path)
+            .await
+            .map_err(|error| format!("替换旧 VAD 模型失败: {error}"))?;
+    }
+    tokio::fs::rename(&partial_path, &model_path)
+        .await
+        .map_err(|error| format!("保存 VAD 模型失败: {error}"))?;
+    emit_dependency_install(
+        app,
+        "Silero VAD",
+        "completed",
+        "VAD 模型已安装",
+        1.0,
+        Some(path_to_string(model_path.clone())),
+        None,
+    );
+    Ok(model_path)
 }
 #[tauri::command]
 pub(crate) async fn download_whisper_model(

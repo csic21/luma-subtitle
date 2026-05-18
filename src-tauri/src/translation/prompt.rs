@@ -1,8 +1,6 @@
 use serde_json::json;
 
-use crate::subtitles::{
-    collapse_repeated_vocalization, format_srt_time, SubtitleSegment,
-};
+use crate::subtitles::{collapse_repeated_vocalization, format_srt_time, SubtitleSegment};
 
 use super::TranslationConfig;
 
