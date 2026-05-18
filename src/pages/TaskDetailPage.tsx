@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useI18n } from "@/i18n";
 import { errorText, hasTauriRuntime, isTranslateStage, operationLabel, taskBusy } from "@/lib/app-utils";
-import { appendRealtimeLog, applyJobEventToTask, normalizeTaskSettings, taskSettingsUpdatePayload } from "@/lib/task-data";
+import { appendRealtimeLog, normalizeTaskSettings, taskSettingsUpdatePayload } from "@/lib/task-data";
 import type { JobEvent, SubtitlePreview, TaskRecord, TaskSettingsSnapshot, TaskOperation } from "@/types";
 
 export function TaskDetailPage() {
@@ -37,7 +37,6 @@ export function TaskDetailPage() {
       setNotice(t("notice.requireTauriDetails"));
       return;
     }
-    void refreshTask();
     let disposed = false;
     let unlistenTask: (() => void) | undefined;
     let unlistenJob: (() => void) | undefined;
@@ -50,7 +49,7 @@ export function TaskDetailPage() {
     window.addEventListener("focus", refreshOnResume);
     document.addEventListener("visibilitychange", refreshOnVisible);
 
-    listen<TaskRecord>("task-updated", (event) => {
+    const taskListener = listen<TaskRecord>("task-updated", (event) => {
       if (event.payload.id !== taskId) return;
       setTask(event.payload);
       setSettingsDraft(normalizeTaskSettings(event.payload.settings));
@@ -63,19 +62,18 @@ export function TaskDetailPage() {
       }
       unlistenTask = fn;
     });
-    listen<JobEvent>("job-event", (event) => {
+    const jobListener = listen<JobEvent>("job-event", (event) => {
       if (event.payload.job_id !== taskId) return;
-      setTask((current) => (current ? applyJobEventToTask(current, event.payload) : current));
       setLogs((current) => appendRealtimeLog(current, event.payload));
-      if (event.payload.status !== "running" || event.payload.outputs) {
-        void refreshTask();
-      }
     }).then((fn) => {
       if (disposed) {
         fn();
         return;
       }
       unlistenJob = fn;
+    });
+    void Promise.all([taskListener, jobListener]).then(() => {
+      if (!disposed) void refreshTask();
     });
     return () => {
       disposed = true;
