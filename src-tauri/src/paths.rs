@@ -50,7 +50,7 @@ pub(crate) fn locate_binary(app: &AppHandle, name: &str) -> Option<PathBuf> {
 fn locate_managed_binary(app: &AppHandle, exe_name: &str) -> Option<PathBuf> {
     sidecars_dir(app)
         .ok()
-        .and_then(|dir| find_file_recursive(&dir, exe_name))
+        .and_then(|dir| find_managed_binary(&dir, exe_name))
 }
 fn locate_resource_binary(app: &AppHandle, exe_name: &str) -> Option<PathBuf> {
     let mut candidates = Vec::new();
@@ -151,6 +151,55 @@ fn locate_platform_binary(_exe_name: &str) -> Option<PathBuf> {
 pub(crate) fn sidecars_dir(app: &AppHandle) -> Result<PathBuf, String> {
     managed_dir(app, "sidecars")
 }
+pub(crate) fn find_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf> {
+    find_expected_managed_binary(root, exe_name).or_else(|| {
+        managed_package_dirs(root, exe_name)
+            .into_iter()
+            .find_map(|dir| find_file_recursive(&dir, exe_name))
+    })
+}
+fn find_expected_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf> {
+    let mut candidates = vec![root.join(exe_name), root.join("bin").join(exe_name)];
+    for package_dir in managed_package_dirs(root, exe_name) {
+        candidates.push(package_dir.join(exe_name));
+        candidates.push(package_dir.join("bin").join(exe_name));
+
+        let Ok(entries) = fs::read_dir(&package_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let child = entry.path();
+            candidates.push(child.join(exe_name));
+            candidates.push(child.join("bin").join(exe_name));
+        }
+    }
+    candidates.into_iter().find(|path| path.exists())
+}
+fn managed_package_dirs(root: &Path, exe_name: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let lower = exe_name.to_ascii_lowercase();
+    if lower == "ffmpeg" || lower == "ffmpeg.exe" {
+        dirs.push(root.join("ffmpeg"));
+    } else if lower == "whisper-cli" || lower == "whisper-cli.exe" {
+        dirs.push(root.join("whisper.cpp"));
+    }
+    if let Some(stem) = Path::new(exe_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+    {
+        let derived = root.join(stem);
+        if !dirs.iter().any(|dir| dir == &derived) {
+            dirs.push(derived);
+        }
+    }
+    dirs
+}
 pub(crate) fn find_file_recursive(root: &Path, file_name: &str) -> Option<PathBuf> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -196,4 +245,60 @@ pub(crate) fn is_existing_file(path: &Path) -> bool {
 
 pub(crate) fn path_to_string(path: PathBuf) -> String {
     path.to_string_lossy().to_string()
+}
+pub(crate) fn display_path_to_string(path: PathBuf) -> String {
+    display_path_string(&path_to_string(path))
+}
+fn display_path_string(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{display_path_string, find_managed_binary};
+    use std::{fs, path::PathBuf};
+
+    #[test]
+    fn display_path_string_strips_windows_verbatim_drive_prefix() {
+        assert_eq!(
+            display_path_string(r"\\?\D:\Apps\Luma Subtitle\resources"),
+            r"D:\Apps\Luma Subtitle\resources"
+        );
+    }
+
+    #[test]
+    fn display_path_string_strips_windows_verbatim_unc_prefix() {
+        assert_eq!(
+            display_path_string(r"\\?\UNC\nas\share\Luma Subtitle\resources"),
+            r"\\nas\share\Luma Subtitle\resources"
+        );
+    }
+
+    #[test]
+    fn find_managed_binary_prefers_expected_install_locations() {
+        let root = temp_test_dir("managed-binary-expected");
+        let expected_dir = root.join("ffmpeg").join("ffmpeg-release").join("bin");
+        let deep_dir = root.join("downloads").join("very").join("deep");
+        fs::create_dir_all(&expected_dir).unwrap();
+        fs::create_dir_all(&deep_dir).unwrap();
+
+        let expected = expected_dir.join("ffmpeg.exe");
+        let deep = deep_dir.join("ffmpeg.exe");
+        fs::write(&expected, b"expected").unwrap();
+        fs::write(&deep, b"deep").unwrap();
+
+        assert_eq!(find_managed_binary(&root, "ffmpeg.exe"), Some(expected));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("luma-subtitle-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

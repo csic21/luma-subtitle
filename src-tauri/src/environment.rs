@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     dependencies::downloaded_whisper_model_files,
-    paths::{locate_binary, managed_dir, path_to_string},
+    paths::{display_path_to_string, locate_binary, managed_dir},
 };
 
 #[derive(Serialize)]
@@ -23,25 +23,25 @@ pub(crate) struct EnvironmentResponse {
 pub(crate) fn check_environment(app: AppHandle) -> EnvironmentResponse {
     let (gpu_name, cuda_driver) = gpu_info();
     EnvironmentResponse {
-        ffmpeg_path: locate_binary(&app, "ffmpeg").map(path_to_string),
-        whisper_path: locate_binary(&app, "whisper-cli").map(path_to_string),
+        ffmpeg_path: locate_binary(&app, "ffmpeg").map(display_path_to_string),
+        whisper_path: locate_binary(&app, "whisper-cli").map(display_path_to_string),
         gpu_name,
         cuda_driver,
         resource_dir: app
             .path()
             .resource_dir()
-            .map(path_to_string)
+            .map(display_path_to_string)
             .unwrap_or_else(|_| "开发模式资源目录尚未生成".to_string()),
         config_dir: app
             .path()
             .app_config_dir()
-            .map(path_to_string)
+            .map(display_path_to_string)
             .unwrap_or_else(|_| "配置目录不可用".to_string()),
         sidecar_dir: managed_dir(&app, "sidecars")
-            .map(path_to_string)
+            .map(display_path_to_string)
             .unwrap_or_else(|_| "依赖目录不可用".to_string()),
         model_dir: managed_dir(&app, "models")
-            .map(path_to_string)
+            .map(display_path_to_string)
             .unwrap_or_else(|_| "模型目录不可用".to_string()),
         downloaded_model_files: downloaded_whisper_model_files(&app),
     }
