@@ -1,3 +1,4 @@
+import { memo } from "react";
 import {
   CircleStop,
   Database,
@@ -242,7 +243,7 @@ export function TaskQueueTable({
   );
 }
 
-function TaskQueueRow({
+const TaskQueueRow = memo(function TaskQueueRow({
   locale,
   selected,
   task,
@@ -335,4 +336,4 @@ function TaskQueueRow({
       </TableCell>
     </TableRow>
   );
-}
+});

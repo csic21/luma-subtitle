@@ -110,7 +110,7 @@ export function ModelApiSettingsCard({
           <FieldBlock label={t("settings.sourceLanguage")}>
             <Select
               value={settings.whisper_language}
-              onValueChange={(value) => setSettings({ ...settings, whisper_language: value })}
+              onValueChange={(value) => setSettings((current) => ({ ...current, whisper_language: value }))}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -129,7 +129,7 @@ export function ModelApiSettingsCard({
           <FieldBlock label={t("common.targetLanguage")}>
             <Select
               value={settings.target_language}
-              onValueChange={(value) => setSettings({ ...settings, target_language: value })}
+              onValueChange={(value) => setSettings((current) => ({ ...current, target_language: value }))}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -151,11 +151,14 @@ export function ModelApiSettingsCard({
           <FieldBlock label="Base URL">
             <Input
               value={settings.base_url}
-              onChange={(event) => setSettings({ ...settings, base_url: event.target.value })}
+              onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value }))}
             />
           </FieldBlock>
           <FieldBlock label={t("settings.translationModel")}>
-            <Input value={settings.model} onChange={(event) => setSettings({ ...settings, model: event.target.value })} />
+            <Input
+              value={settings.model}
+              onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
+            />
           </FieldBlock>
         </div>
 
@@ -178,7 +181,9 @@ export function ModelApiSettingsCard({
               max="1"
               step="0.1"
               value={settings.temperature}
-              onChange={(event) => setSettings({ ...settings, temperature: Number.parseFloat(event.target.value) || 0 })}
+              onChange={(event) =>
+                setSettings((current) => ({ ...current, temperature: Number.parseFloat(event.target.value) || 0 }))
+              }
             />
           </FieldBlock>
         </div>
@@ -191,11 +196,11 @@ export function ModelApiSettingsCard({
             step="1"
             value={settings.translation_shard_size}
             onChange={(event) =>
-              setSettings({
-                ...settings,
+              setSettings((current) => ({
+                ...current,
                 translation_shard_size:
                   Number.parseInt(event.target.value, 10) || defaultSettings.translation_shard_size,
-              })
+              }))
             }
           />
         </FieldBlock>

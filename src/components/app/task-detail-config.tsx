@@ -55,7 +55,11 @@ export function TaskConfigCard({
           <div className="input-action">
             <Input
               value={taskConfig.whisper_model_path}
-              onChange={(event) => setSettingsDraft({ ...taskConfig, whisper_model_path: event.target.value })}
+              onChange={(event) =>
+                setSettingsDraft((current) =>
+                  current ? { ...current, whisper_model_path: event.target.value } : current,
+                )
+              }
               disabled={taskBusy(task)}
               placeholder={t("settings.notSet")}
               title={taskConfig.whisper_model_path || t("settings.selectWhisper")}
@@ -70,7 +74,9 @@ export function TaskConfigCard({
           <FieldBlock label={t("settings.sourceLanguage")}>
             <Select
               value={taskConfig.whisper_language || "auto"}
-              onValueChange={(value) => setSettingsDraft({ ...taskConfig, whisper_language: value })}
+              onValueChange={(value) =>
+                setSettingsDraft((current) => (current ? { ...current, whisper_language: value } : current))
+              }
               disabled={taskBusy(task)}
             >
               <SelectTrigger className="w-full">
@@ -90,7 +96,9 @@ export function TaskConfigCard({
           <FieldBlock label={t("common.targetLanguage")}>
             <Select
               value={taskConfig.target_language}
-              onValueChange={(value) => setSettingsDraft({ ...taskConfig, target_language: value })}
+              onValueChange={(value) =>
+                setSettingsDraft((current) => (current ? { ...current, target_language: value } : current))
+              }
               disabled={taskBusy(task)}
             >
               <SelectTrigger className="w-full">
@@ -113,14 +121,18 @@ export function TaskConfigCard({
           <FieldBlock label="Base URL">
             <Input
               value={taskConfig.base_url}
-              onChange={(event) => setSettingsDraft({ ...taskConfig, base_url: event.target.value })}
+              onChange={(event) =>
+                setSettingsDraft((current) => (current ? { ...current, base_url: event.target.value } : current))
+              }
               disabled={taskBusy(task)}
             />
           </FieldBlock>
           <FieldBlock label={t("settings.translationModel")}>
             <Input
               value={taskConfig.model}
-              onChange={(event) => setSettingsDraft({ ...taskConfig, model: event.target.value })}
+              onChange={(event) =>
+                setSettingsDraft((current) => (current ? { ...current, model: event.target.value } : current))
+              }
               disabled={taskBusy(task)}
             />
           </FieldBlock>
@@ -135,7 +147,9 @@ export function TaskConfigCard({
               step="0.1"
               value={taskConfig.temperature}
               onChange={(event) =>
-                setSettingsDraft({ ...taskConfig, temperature: Number.parseFloat(event.target.value) || 0 })
+                setSettingsDraft((current) =>
+                  current ? { ...current, temperature: Number.parseFloat(event.target.value) || 0 } : current,
+                )
               }
               disabled={taskBusy(task)}
             />
@@ -148,11 +162,15 @@ export function TaskConfigCard({
               step="1"
               value={taskConfig.translation_shard_size ?? defaultSettings.translation_shard_size}
               onChange={(event) =>
-                setSettingsDraft({
-                  ...taskConfig,
-                  translation_shard_size:
-                    Number.parseInt(event.target.value, 10) || defaultSettings.translation_shard_size,
-                })
+                setSettingsDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        translation_shard_size:
+                          Number.parseInt(event.target.value, 10) || defaultSettings.translation_shard_size,
+                      }
+                    : current,
+                )
               }
               disabled={taskBusy(task)}
             />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { defaultSettings } from "@/config";
@@ -37,6 +37,25 @@ export function useTasksPageState(t: TFunction) {
   const [notice, setNotice] = useState("");
 
   const tauriReady = hasTauriRuntime();
+
+  const taskCounts = useMemo(() => {
+    let busyCount = 0;
+    let doneCount = 0;
+    let failedCount = 0;
+
+    for (const task of tasks) {
+      if (taskBusy(task)) busyCount += 1;
+      if (task.status === "completed" || task.status === "exported") doneCount += 1;
+      if (task.status === "failed") failedCount += 1;
+    }
+
+    return { busyCount, doneCount, failedCount };
+  }, [tasks]);
+
+  const allSelected = useMemo(
+    () => tasks.length > 0 && tasks.every((task) => selectedIds.has(task.id)),
+    [selectedIds, tasks],
+  );
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -193,9 +212,10 @@ export function useTasksPageState(t: TFunction) {
 
   const runSelected = useCallback(
     async (operation: TaskOperation) => {
-      const taskIds = tasks
-        .filter((task) => selectedIds.has(task.id) && canRunOperation(task, operation))
-        .map((task) => task.id);
+      const taskIds: string[] = [];
+      for (const task of tasks) {
+        if (selectedIds.has(task.id) && canRunOperation(task, operation)) taskIds.push(task.id);
+      }
       if (taskIds.length === 0) {
         setNotice(t("notice.noRunnableSelected"));
         return;
@@ -229,7 +249,10 @@ export function useTasksPageState(t: TFunction) {
   );
 
   const cancelSelected = useCallback(async () => {
-    const taskIds = tasks.filter((task) => selectedIds.has(task.id) && taskBusy(task)).map((task) => task.id);
+    const taskIds: string[] = [];
+    for (const task of tasks) {
+      if (selectedIds.has(task.id) && taskBusy(task)) taskIds.push(task.id);
+    }
     await Promise.all(taskIds.map((taskId) => cancelTask(taskId)));
   }, [cancelTask, selectedIds, tasks]);
 
@@ -264,15 +287,15 @@ export function useTasksPageState(t: TFunction) {
   }, [tasks]);
 
   return {
-    allSelected: tasks.length > 0 && tasks.every((task) => selectedIds.has(task.id)),
-    busyCount: tasks.filter(taskBusy).length,
+    allSelected,
+    busyCount: taskCounts.busyCount,
     cancelSelected,
     cancelTask,
     createSrtTask,
     createVideoTask,
     deleteTask,
-    doneCount: tasks.filter((task) => task.status === "completed" || task.status === "exported").length,
-    failedCount: tasks.filter((task) => task.status === "failed").length,
+    doneCount: taskCounts.doneCount,
+    failedCount: taskCounts.failedCount,
     notice,
     outputDir,
     pickOutputDir,

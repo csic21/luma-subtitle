@@ -13,7 +13,7 @@ import {
   subtitlePreview as loadSubtitlePreview,
   updateTaskSettings,
 } from "@/lib/tauri-api";
-import { appendRealtimeLog, normalizeTaskSettings, taskSettingsUpdatePayload } from "@/lib/task-data";
+import { appendRealtimeLog, normalizeTaskSettings, taskSettingsEqual, taskSettingsUpdatePayload } from "@/lib/task-data";
 import type { JobEvent, SubtitlePreview, TaskOperation, TaskRecord, TaskSettingsSnapshot, TFunction } from "@/types";
 
 import { useAppResume } from "./use-app-resume";
@@ -232,12 +232,14 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     subtitleView === "translated" && hasTranslatedSubtitle
       ? subtitlePreview?.translated_file_name
       : subtitlePreview?.source_file_name;
-  const taskSettingsDirty = Boolean(
-    task &&
-      settingsDraft &&
-      JSON.stringify(normalizeTaskSettings(task.settings)) !== JSON.stringify(normalizeTaskSettings(settingsDraft)),
+  const taskSettingsDirty = useMemo(() => {
+    if (!task || !settingsDraft) return false;
+    return !taskSettingsEqual(task.settings, settingsDraft);
+  }, [settingsDraft, task?.settings]);
+  const taskConfig = useMemo(
+    () => (task ? settingsDraft ?? normalizeTaskSettings(task.settings) : null),
+    [settingsDraft, task?.settings],
   );
-  const taskConfig = task ? settingsDraft ?? normalizeTaskSettings(task.settings) : null;
 
   return {
     activeSubtitleBody,

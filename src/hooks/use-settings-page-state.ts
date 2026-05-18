@@ -24,8 +24,10 @@ export function useSettingsPageState(t: TFunction) {
   const [modelDownload, setModelDownload] = useState<ModelDownloadEvent | null>(null);
   const [dependencyInstall, setDependencyInstall] = useState<DependencyInstallEvent | null>(null);
 
-  const selectedWhisperPreset =
-    whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0];
+  const selectedWhisperPreset = useMemo(
+    () => whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0],
+    [whisperPresetId],
+  );
   const modelDownloading = modelDownload?.status === "running";
   const dependencyInstalling = dependencyInstall?.status === "running";
   const hasApiCredential = settings.has_api_key || apiKey.trim().length > 0;

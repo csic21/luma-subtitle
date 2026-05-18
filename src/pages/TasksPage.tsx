@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { NoticeAlert } from "@/components/app/shared";
@@ -8,6 +9,7 @@ import { useI18n } from "@/i18n";
 export function TasksPage() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
+  const openTask = useCallback((taskId: string) => navigate(`/tasks/${taskId}`), [navigate]);
   const {
     allSelected,
     busyCount,
@@ -67,7 +69,7 @@ export function TasksPage() {
         t={t}
         onCancelTask={cancelTask}
         onDeleteTask={deleteTask}
-        onOpenTask={(taskId) => navigate(`/tasks/${taskId}`)}
+        onOpenTask={openTask}
         onRunOperation={runOperation}
         onToggleAll={toggleAll}
         onToggleTask={toggleTask}

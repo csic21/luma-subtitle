@@ -52,6 +52,22 @@ export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSetti
   };
 }
 
+export function taskSettingsEqual(left: TaskSettingsSnapshot, right: TaskSettingsSnapshot) {
+  const normalizedLeft = normalizeTaskSettings(left);
+  const normalizedRight = normalizeTaskSettings(right);
+
+  return (
+    normalizedLeft.output_dir === normalizedRight.output_dir &&
+    normalizedLeft.target_language === normalizedRight.target_language &&
+    normalizedLeft.whisper_model_path === normalizedRight.whisper_model_path &&
+    normalizedLeft.whisper_language === normalizedRight.whisper_language &&
+    normalizedLeft.base_url === normalizedRight.base_url &&
+    normalizedLeft.model === normalizedRight.model &&
+    normalizedLeft.temperature === normalizedRight.temperature &&
+    normalizedLeft.translation_shard_size === normalizedRight.translation_shard_size
+  );
+}
+
 export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {
   return {
     target_language: settings.target_language,
@@ -81,4 +97,3 @@ export function taskCreatePayload(
     translation_shard_size: settings.translation_shard_size,
   };
 }
-
