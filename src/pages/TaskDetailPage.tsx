@@ -41,6 +41,15 @@ export function TaskDetailPage() {
     let disposed = false;
     let unlistenTask: (() => void) | undefined;
     let unlistenJob: (() => void) | undefined;
+    const refreshOnResume = () => {
+      if (!disposed) void refreshTask({ preview: false });
+    };
+    const refreshOnVisible = () => {
+      if (document.visibilityState === "visible") refreshOnResume();
+    };
+    window.addEventListener("focus", refreshOnResume);
+    document.addEventListener("visibilitychange", refreshOnVisible);
+
     listen<TaskRecord>("task-updated", (event) => {
       if (event.payload.id !== taskId) return;
       setTask(event.payload);
@@ -70,18 +79,12 @@ export function TaskDetailPage() {
     });
     return () => {
       disposed = true;
+      window.removeEventListener("focus", refreshOnResume);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
       unlistenTask?.();
       unlistenJob?.();
     };
   }, [taskId, t]);
-
-  useEffect(() => {
-    if (!hasTauriRuntime() || !taskId || !task || !taskBusy(task)) return;
-    const timer = window.setInterval(() => {
-      void refreshTask({ preview: false });
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [taskId, task?.status]);
 
   async function refreshTask(options: { preview?: boolean } = {}) {
     try {

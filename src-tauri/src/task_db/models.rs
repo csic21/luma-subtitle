@@ -44,6 +44,7 @@ pub(crate) struct TaskRecord {
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct QueueSettings {
     pub(crate) max_concurrency: usize,
+    pub(crate) auto_start_next: bool,
 }
 
 fn default_translation_shard_size() -> usize {

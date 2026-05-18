@@ -70,10 +70,14 @@ pub(super) fn dispatch_queue(app: AppHandle) {
 
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
-            execute_task_operation(app_handle.clone(), next.0.clone(), next.1).await;
+            let completed =
+                execute_task_operation(app_handle.clone(), next.0.clone(), next.1).await;
             let state = app_handle.state::<AppState>();
             state.tasks.lock().remove(&next.0.task_id);
             state.running_operations.lock().remove(&next.0.task_id);
+            if completed {
+                enqueue_next_link(&app_handle, &next.0);
+            }
             dispatch_queue(app_handle);
         });
     }
@@ -126,5 +130,53 @@ fn normalize_operation(operation: &str) -> Result<String, String> {
     match operation.trim() {
         "transcribe" | "translate" | "export" => Ok(operation.trim().to_string()),
         _ => Err("未知任务操作".to_string()),
+    }
+}
+
+fn enqueue_next_link(app: &AppHandle, completed: &QueuedTaskOperation) {
+    let Ok(settings) = task_db::load_queue_settings(app) else {
+        return;
+    };
+    if !settings.auto_start_next {
+        return;
+    }
+    let Some(operation) = next_operation(&completed.operation) else {
+        return;
+    };
+    let Ok(task) = task_db::require_task(app, &completed.task_id) else {
+        return;
+    };
+    if validate_task_operation(&task, operation).is_err() {
+        return;
+    }
+
+    let state = app.state::<AppState>();
+    let is_running = state.running_operations.lock().contains(&completed.task_id);
+    let is_queued = state
+        .queued_operations
+        .lock()
+        .iter()
+        .any(|queued| queued.task_id == completed.task_id);
+    if is_running || is_queued {
+        return;
+    }
+
+    if task_db::set_queued(app, &completed.task_id, operation).is_err() {
+        return;
+    }
+    state
+        .queued_operations
+        .lock()
+        .push_back(QueuedTaskOperation {
+            task_id: completed.task_id.clone(),
+            operation: operation.to_string(),
+        });
+}
+
+fn next_operation(operation: &str) -> Option<&'static str> {
+    match operation {
+        "transcribe" => Some("translate"),
+        "translate" => Some("export"),
+        _ => None,
     }
 }

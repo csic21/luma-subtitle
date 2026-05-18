@@ -1,7 +1,7 @@
 use rusqlite::{params, OptionalExtension};
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter};
@@ -11,6 +11,9 @@ mod models;
 mod preferences;
 mod schema;
 
+#[cfg(test)]
+use crate::translation::DEFAULT_TRANSLATION_SHARD_SIZE;
+use events::{append_log, emit_task, mark_interrupted_tasks};
 pub(crate) use events::{
     record_job_event, set_exported, set_interrupted, set_queued, set_subtitle_result,
     set_translation_result,
@@ -19,12 +22,9 @@ pub(crate) use models::{QueueSettings, TaskRecord, TaskSettingsSnapshot};
 pub(crate) use preferences::{
     has_api_key, load_api_key, load_queue_settings, save_api_key, save_queue_settings,
 };
-use events::{append_log, emit_task, mark_interrupted_tasks};
-use schema::{app_data_dir, connection, task_from_row};
 #[cfg(test)]
 use schema::migrate;
-#[cfg(test)]
-use crate::translation::DEFAULT_TRANSLATION_SHARD_SIZE;
+use schema::{app_data_dir, connection, task_from_row};
 
 pub(crate) fn init(app: &AppHandle) -> Result<(), String> {
     let _ = connection(app)?;
@@ -103,6 +103,8 @@ pub(crate) fn insert_task(app: &AppHandle, record: &TaskRecord) -> Result<TaskRe
 }
 
 pub(crate) fn delete_task(app: &AppHandle, task_id: &str) -> Result<(), String> {
+    let task = require_task(app, task_id)?;
+    cleanup_task_artifacts(app, &task)?;
     let conn = connection(app)?;
     conn.execute("DELETE FROM task_logs WHERE task_id = ?1", params![task_id])
         .map_err(|error| error.to_string())?;
@@ -146,9 +148,85 @@ pub(crate) fn update_task_settings(
 }
 
 pub(crate) fn task_work_dir(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
-    let dir = app_data_dir(app)?.join("tasks").join(task_id);
+    let dir = task_work_dir_path(app, task_id)?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
+}
+
+fn task_work_dir_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("tasks").join(task_id))
+}
+
+fn cleanup_task_artifacts(app: &AppHandle, task: &TaskRecord) -> Result<(), String> {
+    let mut dirs = Vec::new();
+    push_unique_path(&mut dirs, task_work_dir_path(app, &task.id)?);
+    for dir in task_output_work_dirs(task) {
+        push_unique_path(&mut dirs, dir);
+    }
+
+    let mut errors = Vec::new();
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+        if !dir.is_dir() {
+            errors.push(format!("{} 不是目录", dir.display()));
+            continue;
+        }
+        if let Err(error) = fs::remove_dir_all(&dir) {
+            errors.push(format!("{}: {error}", dir.display()));
+            continue;
+        }
+        remove_empty_parent_work_dir(&dir);
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "任务记录未删除，清理任务文件失败: {}",
+            errors.join("; ")
+        ))
+    }
+}
+
+fn task_output_work_dirs(task: &TaskRecord) -> Vec<PathBuf> {
+    let mut output_dirs = Vec::new();
+    if let Some(dir) = task.output_dir.as_deref() {
+        push_unique_path(&mut output_dirs, PathBuf::from(dir));
+    }
+    if let Some(dir) = task.settings.output_dir.as_deref() {
+        push_unique_path(&mut output_dirs, PathBuf::from(dir));
+    }
+    if let Some(video_path) = task.video_path.as_deref() {
+        if let Some(parent) = Path::new(video_path).parent() {
+            push_unique_path(&mut output_dirs, parent.to_path_buf());
+        }
+    }
+
+    output_dirs
+        .into_iter()
+        .map(|dir| dir.join(".luma-subtitle-work").join(&task.id))
+        .collect()
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|current| current == &path) {
+        paths.push(path);
+    }
+}
+
+fn remove_empty_parent_work_dir(dir: &Path) {
+    let Some(parent) = dir.parent() else {
+        return;
+    };
+    if parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == ".luma-subtitle-work")
+    {
+        let _ = fs::remove_dir(parent);
+    }
 }
 
 pub(crate) fn now_ts() -> i64 {
@@ -176,6 +254,14 @@ mod tests {
             )
             .expect("default queue setting should exist");
         assert_eq!(max_concurrency, "2");
+        let auto_start_next: String = conn
+            .query_row(
+                "SELECT value FROM queue_settings WHERE key = 'auto_start_next'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("default auto-chain setting should exist");
+        assert_eq!(auto_start_next, "false");
 
         conn.execute(
             "INSERT INTO app_secrets(key, value, updated_at) VALUES('translation_api_key', 'sk-test', 1)",
@@ -258,6 +344,57 @@ mod tests {
         assert_eq!(
             record.settings.translation_shard_size,
             DEFAULT_TRANSLATION_SHARD_SIZE
+        );
+    }
+
+    #[test]
+    fn task_output_work_dirs_cover_known_intermediate_locations() {
+        let task = TaskRecord {
+            id: "task-1".to_string(),
+            source_type: "video".to_string(),
+            video_path: Some("videos/clip.mp4".to_string()),
+            srt_path: None,
+            file_name: "clip.mp4".to_string(),
+            status: "completed".to_string(),
+            stage: "completed".to_string(),
+            message: "SRT 已生成".to_string(),
+            progress: 1.0,
+            settings: TaskSettingsSnapshot {
+                output_dir: Some("exports".to_string()),
+                target_language: "简体中文".to_string(),
+                whisper_model_path: "models/ggml.bin".to_string(),
+                whisper_language: "auto".to_string(),
+                base_url: "https://example.test".to_string(),
+                model: "test-model".to_string(),
+                temperature: 0.2,
+                translation_shard_size: 120,
+            },
+            source_srt_path: Some("app-data/tasks/task-1/clip.source.srt".to_string()),
+            translated_srt_path: Some("app-data/tasks/task-1/clip.zh.srt".to_string()),
+            source_file_name: Some("clip.source.srt".to_string()),
+            translated_file_name: Some("clip.zh.srt".to_string()),
+            output_dir: Some("exports".to_string()),
+            segment_count: Some(10),
+            exported_source_srt: Some("exports/clip.source.srt".to_string()),
+            exported_translated_srt: Some("exports/clip.zh.srt".to_string()),
+            exported_output_dir: Some("exports".to_string()),
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+
+        let dirs = task_output_work_dirs(&task);
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("exports")
+                    .join(".luma-subtitle-work")
+                    .join("task-1"),
+                PathBuf::from("videos")
+                    .join(".luma-subtitle-work")
+                    .join("task-1"),
+            ]
         );
     }
 }

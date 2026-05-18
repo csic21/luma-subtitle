@@ -54,43 +54,108 @@ pub(crate) struct JobProgressSnapshot {
     logs: Vec<String>,
 }
 
-pub(crate) fn emit_job(
-    app: &AppHandle,
-    job_id: &str,
-    stage: &str,
+pub(crate) struct JobEventDraft {
+    job_id: String,
+    stage: String,
     status: JobStatus,
-    message: impl Into<String>,
+    message: String,
     progress: f32,
     outputs: Option<JobOutputs>,
     error: Option<String>,
-) {
-    let message = message.into();
+}
+
+impl JobEventDraft {
+    pub(crate) fn running(
+        job_id: impl Into<String>,
+        stage: impl Into<String>,
+        message: impl Into<String>,
+        progress: f32,
+    ) -> Self {
+        Self::new(job_id, stage, JobStatus::Running, message, progress)
+    }
+
+    pub(crate) fn completed(
+        job_id: impl Into<String>,
+        stage: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(job_id, stage, JobStatus::Completed, message, 1.0)
+    }
+
+    pub(crate) fn failed(
+        job_id: impl Into<String>,
+        stage: impl Into<String>,
+        message: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self::new(job_id, stage, JobStatus::Failed, message, 0.0).with_error(error)
+    }
+
+    pub(crate) fn cancelled(
+        job_id: impl Into<String>,
+        stage: impl Into<String>,
+        message: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
+        Self::new(job_id, stage, JobStatus::Cancelled, message, 0.0).with_error(error)
+    }
+
+    pub(crate) fn with_outputs(mut self, outputs: JobOutputs) -> Self {
+        self.outputs = Some(outputs);
+        self
+    }
+
+    pub(crate) fn with_error(mut self, error: impl Into<String>) -> Self {
+        self.error = Some(error.into());
+        self
+    }
+
+    fn new(
+        job_id: impl Into<String>,
+        stage: impl Into<String>,
+        status: JobStatus,
+        message: impl Into<String>,
+        progress: f32,
+    ) -> Self {
+        Self {
+            job_id: job_id.into(),
+            stage: stage.into(),
+            status,
+            message: message.into(),
+            progress,
+            outputs: None,
+            error: None,
+        }
+    }
+}
+
+pub(crate) fn publish_job_event(app: &AppHandle, draft: JobEventDraft) {
     let event = JobEvent {
-        job_id: job_id.to_string(),
-        stage: stage.to_string(),
-        status,
-        message: message.clone(),
-        progress,
-        outputs,
-        error,
+        job_id: draft.job_id,
+        stage: draft.stage,
+        status: draft.status,
+        message: draft.message,
+        progress: draft.progress,
+        outputs: draft.outputs,
+        error: draft.error,
     };
 
     let state = app.state::<AppState>();
     state
         .job_events
         .lock()
-        .insert(job_id.to_string(), event.clone());
+        .insert(event.job_id.clone(), event.clone());
     state
         .job_logs
         .lock()
-        .entry(job_id.to_string())
+        .entry(event.job_id.clone())
         .or_default()
-        .push(format!("{stage} · {message}"));
+        .push(format!("{} · {}", event.stage, event.message));
     if let Some(error) = event.error.as_ref() {
         state
             .job_logs
             .lock()
-            .entry(job_id.to_string())
+            .entry(event.job_id.clone())
             .or_default()
             .push(format!("error · {error}"));
     }

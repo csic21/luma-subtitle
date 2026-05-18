@@ -16,7 +16,10 @@ export function TasksPage() {
   const { locale, t } = useI18n();
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
-  const [queueSettings, setQueueSettings] = useState<QueueSettings>({ max_concurrency: 2 });
+  const [queueSettings, setQueueSettings] = useState<QueueSettings>({
+    max_concurrency: 2,
+    auto_start_next: false,
+  });
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [outputDir, setOutputDir] = useState("");
   const [notice, setNotice] = useState("");
@@ -34,6 +37,15 @@ export function TasksPage() {
     let unlistenTask: (() => void) | undefined;
     let unlistenJob: (() => void) | undefined;
     let unlistenDeleted: (() => void) | undefined;
+    const refreshOnResume = () => {
+      if (!disposed) void refreshTasks();
+    };
+    const refreshOnVisible = () => {
+      if (document.visibilityState === "visible") refreshOnResume();
+    };
+    window.addEventListener("focus", refreshOnResume);
+    document.addEventListener("visibilitychange", refreshOnVisible);
+
     listen<TaskRecord>("task-updated", (event) => {
       setTasks((current) => upsertTask(current, event.payload));
     }).then((fn) => {
@@ -68,19 +80,13 @@ export function TasksPage() {
     });
     return () => {
       disposed = true;
+      window.removeEventListener("focus", refreshOnResume);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
       unlistenTask?.();
       unlistenJob?.();
       unlistenDeleted?.();
     };
   }, [t]);
-
-  useEffect(() => {
-    if (!hasTauriRuntime() || !tasks.some(taskBusy)) return;
-    const timer = window.setInterval(() => {
-      void refreshTasks();
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [tasks]);
 
   async function refreshTasks() {
     try {
@@ -107,13 +113,24 @@ export function TasksPage() {
     }
   }
 
-  async function saveConcurrency(maxConcurrency: number) {
+  async function saveQueueSettings(nextSettings: QueueSettings) {
     try {
-      const saved = await invoke<QueueSettings>("save_queue_settings", { maxConcurrency });
+      const saved = await invoke<QueueSettings>("save_queue_settings", {
+        maxConcurrency: nextSettings.max_concurrency,
+        autoStartNext: nextSettings.auto_start_next,
+      });
       setQueueSettings(saved);
     } catch (error) {
       setNotice(errorText(error));
     }
+  }
+
+  async function saveConcurrency(maxConcurrency: number) {
+    await saveQueueSettings({ ...queueSettings, max_concurrency: maxConcurrency });
+  }
+
+  async function saveAutoStartNext(autoStartNext: boolean) {
+    await saveQueueSettings({ ...queueSettings, auto_start_next: autoStartNext });
   }
 
   async function pickOutputDir() {
@@ -256,6 +273,7 @@ export function TasksPage() {
         onPickOutputDir={pickOutputDir}
         onRefreshTasks={refreshTasks}
         onRunSelected={runSelected}
+        onSaveAutoStartNext={saveAutoStartNext}
         onSaveConcurrency={saveConcurrency}
       />
 
@@ -275,4 +293,3 @@ export function TasksPage() {
     </>
   );
 }
-

@@ -138,6 +138,8 @@ export const enUS = {
     "tabs.taskConfig": "Task settings",
     "task.ariaSelectAll": "Select all tasks",
     "task.ariaSelect": "Select {fileName}",
+    "task.autoStartNext": "Auto next step",
+    "task.autoStartNextTitle": "After transcription, translate automatically; after translation, export automatically",
     "task.concurrency": "Concurrency",
     "task.defaultOutput": "Default: same folder as source media",
     "task.empty": "No tasks yet",

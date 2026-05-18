@@ -10,7 +10,9 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::{
-    job_events::{emit_job, ExportedSubtitlePaths, JobOutputs, JobStatus, StoredSubtitleResult},
+    job_events::{
+        publish_job_event, ExportedSubtitlePaths, JobEventDraft, JobOutputs, StoredSubtitleResult,
+    },
     paths::path_to_string,
     state::{AppState, JobError},
     subtitles::{parse_srt_file, render_srt, write_srt_text},
@@ -63,20 +65,14 @@ pub(crate) fn import_source_srt(
         },
     );
 
-    emit_job(
+    publish_job_event(
         &app,
-        &job_id,
-        "completed",
-        JobStatus::Completed,
-        "已导入原文 SRT",
-        1.0,
-        Some(JobOutputs {
+        JobEventDraft::completed(&job_id, "completed", "已导入原文 SRT").with_outputs(JobOutputs {
             source_file_name,
             translated_file_name: None,
             output_dir,
             segment_count,
         }),
-        None,
     );
 
     Ok(job_id)
@@ -92,50 +88,27 @@ pub(crate) fn start_job(
     let job_id = Uuid::new_v4().to_string();
     let cancel = Arc::new(AtomicBool::new(false));
     state.tasks.lock().insert(job_id.clone(), cancel.clone());
-    emit_job(
+    publish_job_event(
         &app,
-        &job_id,
-        "queued",
-        JobStatus::Running,
-        "任务已创建",
-        0.0,
-        None,
-        None,
+        JobEventDraft::running(&job_id, "queued", "任务已创建", 0.0),
     );
     let app_handle = app.clone();
     let spawned_job_id = job_id.clone();
     tauri::async_runtime::spawn(async move {
         let result = run_job(app_handle.clone(), spawned_job_id.clone(), request, cancel).await;
         match result {
-            Ok(outputs) => emit_job(
+            Ok(outputs) => publish_job_event(
                 &app_handle,
-                &spawned_job_id,
-                "completed",
-                JobStatus::Completed,
-                "SRT 已生成",
-                1.0,
-                Some(outputs),
-                None,
+                JobEventDraft::completed(&spawned_job_id, "completed", "SRT 已生成")
+                    .with_outputs(outputs),
             ),
-            Err(JobError::Cancelled) => emit_job(
+            Err(JobError::Cancelled) => publish_job_event(
                 &app_handle,
-                &spawned_job_id,
-                "cancelled",
-                JobStatus::Cancelled,
-                "任务已取消",
-                0.0,
-                None,
-                Some("任务已取消".to_string()),
+                JobEventDraft::cancelled(&spawned_job_id, "cancelled", "任务已取消", "任务已取消"),
             ),
-            Err(JobError::Failed(message)) => emit_job(
+            Err(JobError::Failed(message)) => publish_job_event(
                 &app_handle,
-                &spawned_job_id,
-                "failed",
-                JobStatus::Failed,
-                "任务失败",
-                0.0,
-                None,
-                Some(message),
+                JobEventDraft::failed(&spawned_job_id, "failed", "任务失败", message),
             ),
         }
         app_handle
@@ -208,15 +181,14 @@ pub(crate) fn translate_subtitles(
     request: TranslateSubtitlesRequest,
 ) -> Result<(), String> {
     validate_translate_request(&request)?;
-    emit_job(
+    publish_job_event(
         &app,
-        &request.job_id,
-        "preparing-translation",
-        JobStatus::Running,
-        "正在读取翻译配置",
-        0.54,
-        None,
-        None,
+        JobEventDraft::running(
+            &request.job_id,
+            "preparing-translation",
+            "正在读取翻译配置",
+            0.54,
+        ),
     );
     let cancel = Arc::new(AtomicBool::new(false));
     state
@@ -241,36 +213,19 @@ pub(crate) fn translate_subtitles(
                     .subtitle_results
                     .lock()
                     .insert(job_id.clone(), stored);
-                emit_job(
+                publish_job_event(
                     &app_handle,
-                    &job_id,
-                    "completed",
-                    JobStatus::Completed,
-                    "译文字幕已生成",
-                    1.0,
-                    Some(outputs),
-                    None,
+                    JobEventDraft::completed(&job_id, "completed", "译文字幕已生成")
+                        .with_outputs(outputs),
                 );
             }
-            Err(JobError::Cancelled) => emit_job(
+            Err(JobError::Cancelled) => publish_job_event(
                 &app_handle,
-                &job_id,
-                "cancelled",
-                JobStatus::Cancelled,
-                "翻译已取消",
-                0.0,
-                None,
-                Some("翻译已取消".to_string()),
+                JobEventDraft::cancelled(&job_id, "cancelled", "翻译已取消", "翻译已取消"),
             ),
-            Err(JobError::Failed(message)) => emit_job(
+            Err(JobError::Failed(message)) => publish_job_event(
                 &app_handle,
-                &job_id,
-                "failed",
-                JobStatus::Failed,
-                "翻译失败",
-                0.0,
-                None,
-                Some(message),
+                JobEventDraft::failed(&job_id, "failed", "翻译失败", message),
             ),
         }
     });

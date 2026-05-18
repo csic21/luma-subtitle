@@ -1,15 +1,14 @@
 use std::{
     path::Path,
-    sync::{
-        atomic::AtomicBool,
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
 };
 
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    job_events::{emit_job, ExportedSubtitlePaths, JobOutputs, JobStatus, StoredSubtitleResult},
+    job_events::{
+        publish_job_event, ExportedSubtitlePaths, JobEventDraft, JobOutputs, StoredSubtitleResult,
+    },
     paths::path_to_string,
     state::{ensure_not_cancelled, AppState, JobError, JobResult, QueuedTaskOperation},
     subtitles::{parse_srt_file, write_srt_text},
@@ -29,7 +28,7 @@ pub(super) async fn execute_task_operation(
     app: AppHandle,
     queued: QueuedTaskOperation,
     cancel: Arc<AtomicBool>,
-) {
+) -> bool {
     let result = match queued.operation.as_str() {
         "transcribe" => run_transcribe_task(app.clone(), &queued.task_id, cancel).await,
         "translate" => run_translate_task(app.clone(), &queued.task_id, cancel).await,
@@ -38,27 +37,31 @@ pub(super) async fn execute_task_operation(
     };
 
     match result {
-        Ok(()) => {}
-        Err(JobError::Cancelled) => emit_job(
-            &app,
-            &queued.task_id,
-            "cancelled",
-            JobStatus::Cancelled,
-            operation_cancelled_message(&queued.operation),
-            0.0,
-            None,
-            Some("任务已取消".to_string()),
-        ),
-        Err(JobError::Failed(message)) => emit_job(
-            &app,
-            &queued.task_id,
-            "failed",
-            JobStatus::Failed,
-            operation_failed_message(&queued.operation),
-            0.0,
-            None,
-            Some(message),
-        ),
+        Ok(()) => true,
+        Err(JobError::Cancelled) => {
+            publish_job_event(
+                &app,
+                JobEventDraft::cancelled(
+                    &queued.task_id,
+                    "cancelled",
+                    operation_cancelled_message(&queued.operation),
+                    "任务已取消",
+                ),
+            );
+            false
+        }
+        Err(JobError::Failed(message)) => {
+            publish_job_event(
+                &app,
+                JobEventDraft::failed(
+                    &queued.task_id,
+                    "failed",
+                    operation_failed_message(&queued.operation),
+                    message,
+                ),
+            );
+            false
+        }
     }
 }
 
@@ -85,15 +88,9 @@ async fn run_transcribe_task(
     };
     validate_start_request(&request).map_err(JobError::failed)?;
 
-    emit_job(
+    publish_job_event(
         &app,
-        task_id,
-        "transcribe",
-        JobStatus::Running,
-        "转写已开始",
-        0.0,
-        None,
-        None,
+        JobEventDraft::running(task_id, "transcribe", "转写已开始", 0.0),
     );
 
     let outputs = run_job(app.clone(), task_id.to_string(), request, cancel).await?;
@@ -116,15 +113,9 @@ async fn run_transcribe_task(
         stored.segments.len(),
     )
     .map_err(JobError::failed)?;
-    emit_job(
+    publish_job_event(
         &app,
-        task_id,
-        "completed",
-        JobStatus::Completed,
-        "SRT 已生成",
-        1.0,
-        Some(outputs),
-        None,
+        JobEventDraft::completed(task_id, "completed", "SRT 已生成").with_outputs(outputs),
     );
     Ok(())
 }
@@ -174,15 +165,9 @@ async fn run_translate_task(
         translated_file_name: None,
     };
 
-    emit_job(
+    publish_job_event(
         &app,
-        task_id,
-        "preparing-translation",
-        JobStatus::Running,
-        "正在读取翻译配置",
-        0.54,
-        None,
-        None,
+        JobEventDraft::running(task_id, "preparing-translation", "正在读取翻译配置", 0.54),
     );
     let (stored, outputs) = run_translation(&app, &request, stored, &api_key, cancel).await?;
     let translated_srt = stored
@@ -208,15 +193,9 @@ async fn run_translate_task(
         translated_file_name,
     )
     .map_err(JobError::failed)?;
-    emit_job(
+    publish_job_event(
         &app,
-        task_id,
-        "completed",
-        JobStatus::Completed,
-        "译文字幕已生成",
-        1.0,
-        Some(outputs),
-        None,
+        JobEventDraft::completed(task_id, "completed", "译文字幕已生成").with_outputs(outputs),
     );
     Ok(())
 }
@@ -239,15 +218,9 @@ async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>)
         .ok_or_else(|| JobError::failed("无法确定导出目录"))?;
     let output_dir_path = Path::new(&output_dir);
 
-    emit_job(
+    publish_job_event(
         &app,
-        task_id,
-        "exporting",
-        JobStatus::Running,
-        "正在导出字幕",
-        0.92,
-        None,
-        None,
+        JobEventDraft::running(task_id, "exporting", "正在导出字幕", 0.92),
     );
 
     tokio::fs::create_dir_all(output_dir_path)
@@ -279,14 +252,9 @@ async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>)
         translated_srt,
         output_dir: path_to_string(output_dir_path.to_path_buf()),
     };
-    emit_job(
+    publish_job_event(
         &app,
-        task_id,
-        "completed",
-        JobStatus::Completed,
-        "字幕已导出",
-        1.0,
-        Some(JobOutputs {
+        JobEventDraft::completed(task_id, "completed", "字幕已导出").with_outputs(JobOutputs {
             source_file_name: task
                 .source_file_name
                 .clone()
@@ -295,7 +263,6 @@ async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>)
             output_dir: exported.output_dir.clone(),
             segment_count: task.segment_count.unwrap_or(0),
         }),
-        None,
     );
     task_db::set_exported(&app, task_id, &exported).map_err(JobError::failed)?;
     Ok(())

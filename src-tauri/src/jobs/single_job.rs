@@ -6,7 +6,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    job_events::{emit_job, JobOutputs, JobStatus, StoredSubtitleResult},
+    job_events::{publish_job_event, JobEventDraft, JobOutputs, StoredSubtitleResult},
     paths::{path_to_string, resolve_output_dir, safe_stem},
     state::{ensure_not_cancelled, AppState, JobError, JobResult},
     subtitles::{parse_whisper_json, render_srt},
@@ -77,15 +77,14 @@ pub(super) async fn run_translation(
         cancel,
     )
     .await?;
-    emit_job(
+    publish_job_event(
         app,
-        &request.job_id,
-        "render-translated-srt",
-        JobStatus::Running,
-        "正在生成译文 SRT",
-        0.96,
-        None,
-        None,
+        JobEventDraft::running(
+            &request.job_id,
+            "render-translated-srt",
+            "正在生成译文 SRT",
+            0.96,
+        ),
     );
     let translated_srt = render_srt(&stored.segments, Some(&translations));
     let translated_file_name =
@@ -121,27 +120,15 @@ pub(super) async fn run_job(
     let stem = safe_stem(&video_path);
     let source_file_name = format!("{stem}.source.srt");
     ensure_not_cancelled(&cancel)?;
-    emit_job(
+    publish_job_event(
         &app,
-        &job_id,
-        "extracting",
-        JobStatus::Running,
-        "正在抽取音频",
-        0.08,
-        None,
-        None,
+        JobEventDraft::running(&job_id, "extracting", "正在抽取音频", 0.08),
     );
     extract_audio(&app, &video_path, &audio_path, cancel.clone()).await?;
     ensure_not_cancelled(&cancel)?;
-    emit_job(
+    publish_job_event(
         &app,
-        &job_id,
-        "transcribing",
-        JobStatus::Running,
-        "正在本地转写",
-        0.26,
-        None,
-        None,
+        JobEventDraft::running(&job_id, "transcribing", "正在本地转写", 0.26),
     );
     transcribe_audio(
         &app,
@@ -177,15 +164,10 @@ pub(super) async fn run_job(
             translated_file_name: None,
         },
     );
-    emit_job(
+    publish_job_event(
         &app,
-        &job_id,
-        "source-srt",
-        JobStatus::Running,
-        "原文字幕已生成到内存",
-        0.9,
-        Some(outputs.clone()),
-        None,
+        JobEventDraft::running(&job_id, "source-srt", "原文字幕已生成到内存", 0.9)
+            .with_outputs(outputs.clone()),
     );
 
     Ok(outputs)

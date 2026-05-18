@@ -1,12 +1,9 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::Ordering,
-};
+use std::{path::PathBuf, sync::atomic::Ordering};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::{
-    job_events::{emit_job, JobStatus, StoredSubtitleResult},
+    job_events::{publish_job_event, JobEventDraft, StoredSubtitleResult},
     paths::path_to_string,
     settings,
     state::AppState,
@@ -22,15 +19,15 @@ mod requests;
 mod single_job;
 mod task_runner;
 
-pub(crate) use requests::{
-    CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest, TranslateSubtitlesRequest,
-    UpdateTaskSettingsRequest,
-};
 use helpers::{
     display_file_name, job_error_to_string, task_settings_from_srt_request,
     task_settings_from_update_request, task_settings_from_video_request,
 };
 use queue::{cancel_queued_task, dispatch_queue, enqueue_task_operation};
+pub(crate) use requests::{
+    CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest, TranslateSubtitlesRequest,
+    UpdateTaskSettingsRequest,
+};
 
 #[tauri::command]
 pub(crate) fn list_tasks(app: AppHandle) -> Result<Vec<TaskRecord>, String> {
@@ -83,8 +80,15 @@ pub(crate) fn load_queue_settings(app: AppHandle) -> Result<QueueSettings, Strin
 pub(crate) fn save_queue_settings(
     app: AppHandle,
     max_concurrency: usize,
+    auto_start_next: bool,
 ) -> Result<QueueSettings, String> {
-    let settings = task_db::save_queue_settings(&app, QueueSettings { max_concurrency })?;
+    let settings = task_db::save_queue_settings(
+        &app,
+        QueueSettings {
+            max_concurrency,
+            auto_start_next,
+        },
+    )?;
     dispatch_queue(app);
     Ok(settings)
 }
@@ -206,8 +210,13 @@ pub(crate) fn delete_task(
     cancel_queued_task(&app, &state, &task_id);
     if let Some(cancel) = state.tasks.lock().get(&task_id) {
         cancel.store(true, Ordering::SeqCst);
+        return Err("任务正在运行，已请求取消，请停止后再删除".to_string());
     }
-    task_db::delete_task(&app, &task_id)
+    task_db::delete_task(&app, &task_id)?;
+    state.subtitle_results.lock().remove(&task_id);
+    state.job_events.lock().remove(&task_id);
+    state.job_logs.lock().remove(&task_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -242,15 +251,9 @@ pub(crate) fn cancel_task(
 ) -> Result<bool, String> {
     let removed_from_queue = cancel_queued_task(&app, &state, &task_id);
     if removed_from_queue {
-        emit_job(
+        publish_job_event(
             &app,
-            &task_id,
-            "cancelled",
-            JobStatus::Cancelled,
-            "任务已取消",
-            0.0,
-            None,
-            Some("任务已取消".to_string()),
+            JobEventDraft::cancelled(&task_id, "cancelled", "任务已取消", "任务已取消"),
         );
         return Ok(true);
     }

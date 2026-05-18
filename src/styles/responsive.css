@@ -80,6 +80,10 @@
     grid-template-columns: 1fr;
   }
 
+  .auto-next-field {
+    justify-content: flex-start;
+  }
+
   .outputs,
   .detail-list,
   .env-row {

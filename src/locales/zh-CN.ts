@@ -138,6 +138,8 @@ export const zhCN = {
     "tabs.taskConfig": "任务配置",
     "task.ariaSelectAll": "选择全部任务",
     "task.ariaSelect": "选择 {fileName}",
+    "task.autoStartNext": "自动下一链路",
+    "task.autoStartNextTitle": "完成转写后自动翻译，完成翻译后自动导出",
     "task.concurrency": "并发",
     "task.defaultOutput": "默认输出到素材所在目录",
     "task.empty": "暂无任务",

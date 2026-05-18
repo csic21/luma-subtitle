@@ -82,6 +82,7 @@ export function TaskToolbar({
   onPickOutputDir,
   onRefreshTasks,
   onRunSelected,
+  onSaveAutoStartNext,
   onSaveConcurrency,
 }: {
   outputDir: string;
@@ -93,6 +94,7 @@ export function TaskToolbar({
   onPickOutputDir: () => void | Promise<void>;
   onRefreshTasks: () => void | Promise<void>;
   onRunSelected: SelectedOperationHandler;
+  onSaveAutoStartNext: (autoStartNext: boolean) => void | Promise<void>;
   onSaveConcurrency: (maxConcurrency: number) => void | Promise<void>;
 }) {
   return (
@@ -128,6 +130,14 @@ export function TaskToolbar({
               onChange={(event) => void onSaveConcurrency(Number.parseInt(event.target.value, 10) || 1)}
             />
           </div>
+          <label className="auto-next-field" htmlFor="auto-start-next" title={t("task.autoStartNextTitle")}>
+            <Checkbox
+              id="auto-start-next"
+              checked={queueSettings.auto_start_next}
+              onCheckedChange={(checked) => void onSaveAutoStartNext(checked === true)}
+            />
+            <span>{t("task.autoStartNext")}</span>
+          </label>
           <Button variant="secondary" onClick={() => onRunSelected("transcribe")}>
             <Play data-icon="inline-start" />
             {t("common.transcribe")}

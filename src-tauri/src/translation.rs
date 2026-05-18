@@ -5,7 +5,7 @@ use std::{
 use tauri::AppHandle;
 
 use crate::{
-    job_events::{emit_job, JobStatus},
+    job_events::{publish_job_event, JobEventDraft},
     state::{ensure_not_cancelled, JobError, JobResult},
     subtitles::{SubtitleSegment, TranslatedSegment},
 };
@@ -53,15 +53,14 @@ pub(crate) async fn translate_with_single_request(
         .map_err(|error| JobError::failed(format!("创建 HTTP 客户端失败: {error}")))?;
 
     let shard_size = normalize_translation_shard_size(config.shard_size);
-    emit_job(
+    publish_job_event(
         app,
-        job_id,
-        "translate-shards",
-        JobStatus::Running,
-        format!("正在按每片 {shard_size} 条字幕分片翻译（并发 {MAX_CONCURRENT_SHARDS}）"),
-        0.58,
-        None,
-        None,
+        JobEventDraft::running(
+            job_id,
+            "translate-shards",
+            format!("正在按每片 {shard_size} 条字幕分片翻译（并发 {MAX_CONCURRENT_SHARDS}）"),
+            0.58,
+        ),
     );
 
     translate_shards(app, job_id, &client, config, api_key, segments, cancel).await
@@ -90,18 +89,17 @@ async fn translate_shards(
         for (offset, shard) in group.iter().cloned().enumerate() {
             let shard_index = group_index * MAX_CONCURRENT_SHARDS + offset + 1;
             let progress = shard_progress(shard_index.saturating_sub(1), total_shards);
-            emit_job(
+            publish_job_event(
                 app,
-                job_id,
-                "translate-shard",
-                JobStatus::Running,
-                format!(
-                    "分片 {shard_index}/{total_shards} 已提交（{} 条字幕）",
-                    shard.len()
+                JobEventDraft::running(
+                    job_id,
+                    "translate-shard",
+                    format!(
+                        "分片 {shard_index}/{total_shards} 已提交（{} 条字幕）",
+                        shard.len()
+                    ),
+                    progress,
                 ),
-                progress,
-                None,
-                None,
             );
 
             let client = client.clone();
@@ -128,15 +126,14 @@ async fn translate_shards(
                 .await
                 .map_err(|error| JobError::failed(format!("翻译分片任务失败: {error}")))??;
             translated.append(&mut items);
-            emit_job(
+            publish_job_event(
                 app,
-                job_id,
-                "translate-shard",
-                JobStatus::Running,
-                format!("分片 {shard_index}/{total_shards} 已完成"),
-                shard_progress(shard_index, total_shards),
-                None,
-                None,
+                JobEventDraft::running(
+                    job_id,
+                    "translate-shard",
+                    format!("分片 {shard_index}/{total_shards} 已完成"),
+                    shard_progress(shard_index, total_shards),
+                ),
             );
         }
     }

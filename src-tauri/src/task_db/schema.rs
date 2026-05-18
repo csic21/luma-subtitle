@@ -104,6 +104,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
             updated_at INTEGER NOT NULL
         );
         INSERT OR IGNORE INTO queue_settings(key, value) VALUES('max_concurrency', '2');
+        INSERT OR IGNORE INTO queue_settings(key, value) VALUES('auto_start_next', 'false');
         ",
     )
     .map_err(|error| error.to_string())

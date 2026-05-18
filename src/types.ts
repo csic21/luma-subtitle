@@ -118,6 +118,7 @@ export type SubtitlePreview = {
 
 export type QueueSettings = {
   max_concurrency: number;
+  auto_start_next: boolean;
 };
 
 export type WhisperModelPreset = {
@@ -138,4 +139,3 @@ export type TargetLanguageOption = {
 export type ModelPresetView = WhisperModelPreset & {
   labelKey: string;
 };
-

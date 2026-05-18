@@ -156,6 +156,17 @@
   gap: 7px;
 }
 
+.auto-next-field {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
 .concurrency-field label,
 .form-field label {
   color: var(--muted-foreground);
