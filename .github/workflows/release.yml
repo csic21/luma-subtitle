@@ -35,7 +35,7 @@ jobs:
           - label: macOS Apple Silicon
             platform: macos-latest
             rust-target: aarch64-apple-darwin
-            tauri-args: --target aarch64-apple-darwin --bundles dmg
+            tauri-args: --target aarch64-apple-darwin --bundles app,dmg
           - label: Windows x64
             platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
@@ -83,7 +83,6 @@ jobs:
           releaseDraft: false
           prerelease: ${{ github.event_name == 'release' && github.event.release.prerelease || github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
           args: ${{ matrix.tauri-args }}
-          releaseAssetNamePattern: Luma-Subtitle_[version]_[platform]_[arch][setup].[ext]
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
+          assetNamePattern: Luma-Subtitle_[version]_[platform]_[arch][setup].[ext]
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
