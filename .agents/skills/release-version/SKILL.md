@@ -1,13 +1,11 @@
 ---
 name: release-version
-description: Use when releasing Luma Subtitle, bumping the app version, creating release commits, creating v* tags, pushing to origin, or triggering the repository Release GitHub Action.
+description: Release Luma Subtitle by bumping app versions, validating builds, committing release changes, creating and pushing v* tags, and triggering the repository Release GitHub Action. Use when the user asks to publish, ship, tag, or trigger a new app release.
 ---
 
 # Luma Subtitle Release
 
-Use this skill when the user asks to "发版", "发个新版本", "release", "publish a version", "trigger action", or similar.
-
-## Release Workflow
+## Workflow
 
 1. Confirm the repo state:
 
@@ -17,7 +15,7 @@ rtk proxy git branch --show-current
 rtk sed -n '1,120p' .github/workflows/release.yml
 ```
 
-2. Determine the next version. Default to a patch bump unless the user specifies otherwise.
+2. Determine the next version. Default to a patch bump unless the user specifies another version.
 
 3. Update the project version in all four places:
 
@@ -52,9 +50,14 @@ rtk proxy git push origin vX.Y.Z
 
 If the release commit was already pushed, still create and push the missing `vX.Y.Z` tag at that commit.
 
-7. Report the local artifacts and remote trigger:
+7. Check the remote Action when possible:
+
+```bash
+rtk curl -sS 'https://api.github.com/repos/csic21/luma-subtitle/actions/runs?per_page=5'
+```
+
+8. Report the local artifacts and remote trigger:
 
 - local DMG: `src-tauri/target/release/bundle/dmg/Luma Subtitle_X.Y.Z_aarch64.dmg`
 - local app bundle: `src-tauri/target/release/bundle/macos/Luma Subtitle.app`
 - pushed branch and tag
-

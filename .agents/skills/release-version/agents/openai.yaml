@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Version"
+  short_description: "Bump, build, tag, and push releases"
+  default_prompt: "Use $release-version to publish the next Luma Subtitle release."

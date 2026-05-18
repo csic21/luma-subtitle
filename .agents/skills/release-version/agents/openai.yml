@@ -1,3 +1,0 @@
-interface:
-  display_name: "Release Version"
-  short_description: "Bump, build, commit, tag, and push Luma Subtitle releases so the Release Action runs."
