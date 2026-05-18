@@ -288,6 +288,7 @@ mod tests {
             whisper_model_path: "D:/models/ggml.bin".to_string(),
             whisper_language: "auto".to_string(),
             base_url: "https://example.test".to_string(),
+            base_url_is_complete: false,
             model: "test-model".to_string(),
             temperature: 0.2,
             translation_shard_size: 120,
@@ -345,6 +346,7 @@ mod tests {
             record.settings.translation_shard_size,
             DEFAULT_TRANSLATION_SHARD_SIZE
         );
+        assert!(!record.settings.base_url_is_complete);
     }
 
     #[test]
@@ -365,6 +367,7 @@ mod tests {
                 whisper_model_path: "models/ggml.bin".to_string(),
                 whisper_language: "auto".to_string(),
                 base_url: "https://example.test".to_string(),
+                base_url_is_complete: false,
                 model: "test-model".to_string(),
                 temperature: 0.2,
                 translation_shard_size: 120,

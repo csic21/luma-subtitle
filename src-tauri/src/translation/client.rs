@@ -56,10 +56,7 @@ async fn post_chat_translation(
     segments: &[SubtitleSegment],
     payload: serde_json::Value,
 ) -> JobResult<Vec<TranslatedSegment>> {
-    let endpoint = format!(
-        "{}/v1/chat/completions",
-        config.base_url.trim_end_matches('/')
-    );
+    let endpoint = chat_endpoint(&config.base_url, config.base_url_is_complete);
     let response = post_chat_request(client, &endpoint, api_key, &payload).await?;
     let status = response.status();
     if !status.is_success() {
@@ -135,4 +132,13 @@ fn trim_error_body(body: &str) -> String {
     }
     let preview = trimmed.chars().take(MAX_ERROR_BODY).collect::<String>();
     format!("{preview}...")
+}
+
+pub(crate) fn chat_endpoint(base_url: &str, base_url_is_complete: bool) -> String {
+    let base_url = base_url.trim();
+    if base_url_is_complete {
+        base_url.to_string()
+    } else {
+        format!("{}/v1/chat/completions", base_url.trim_end_matches('/'))
+    }
 }

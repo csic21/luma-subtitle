@@ -57,7 +57,11 @@ pub(super) async fn run_translation(
 ) -> JobResult<(StoredSubtitleResult, JobOutputs)> {
     let config = TranslationConfig {
         target_language: request.target_language.trim().to_string(),
-        base_url: request.base_url.trim().trim_end_matches('/').to_string(),
+        base_url: crate::settings::normalize_base_url(
+            &request.base_url,
+            request.base_url_is_complete,
+        ),
+        base_url_is_complete: request.base_url_is_complete,
         model: request.model.trim().to_string(),
         temperature: request.temperature,
         shard_size: normalize_translation_shard_size(

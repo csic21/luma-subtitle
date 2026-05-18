@@ -48,6 +48,7 @@ export function appendRealtimeLog(logs: string[], event: JobEvent) {
 export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSettingsSnapshot {
   return {
     ...settings,
+    base_url_is_complete: settings.base_url_is_complete ?? defaultSettings.base_url_is_complete,
     translation_shard_size: settings.translation_shard_size ?? defaultSettings.translation_shard_size,
   };
 }
@@ -62,6 +63,7 @@ export function taskSettingsEqual(left: TaskSettingsSnapshot, right: TaskSetting
     normalizedLeft.whisper_model_path === normalizedRight.whisper_model_path &&
     normalizedLeft.whisper_language === normalizedRight.whisper_language &&
     normalizedLeft.base_url === normalizedRight.base_url &&
+    normalizedLeft.base_url_is_complete === normalizedRight.base_url_is_complete &&
     normalizedLeft.model === normalizedRight.model &&
     normalizedLeft.temperature === normalizedRight.temperature &&
     normalizedLeft.translation_shard_size === normalizedRight.translation_shard_size
@@ -74,6 +76,7 @@ export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {
     whisper_model_path: settings.whisper_model_path,
     whisper_language: settings.whisper_language,
     base_url: settings.base_url,
+    base_url_is_complete: settings.base_url_is_complete,
     model: settings.model,
     temperature: settings.temperature,
     translation_shard_size: settings.translation_shard_size ?? defaultSettings.translation_shard_size,
@@ -92,6 +95,7 @@ export function taskCreatePayload(
     whisper_model_path: settings.whisper_model_path,
     whisper_language: settings.whisper_language,
     base_url: settings.base_url,
+    base_url_is_complete: settings.base_url_is_complete,
     model: settings.model,
     temperature: settings.temperature,
     translation_shard_size: settings.translation_shard_size,

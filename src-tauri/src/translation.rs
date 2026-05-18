@@ -14,6 +14,8 @@ mod client;
 mod parser;
 mod prompt;
 
+#[cfg(test)]
+pub(crate) use client::chat_endpoint;
 use client::translate_shard_once;
 #[cfg(test)]
 pub(crate) use parser::{attach_model_output, parse_translation_content};
@@ -22,6 +24,7 @@ pub(crate) use parser::{attach_model_output, parse_translation_content};
 pub(crate) struct TranslationConfig {
     pub(crate) target_language: String,
     pub(crate) base_url: String,
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) shard_size: usize,

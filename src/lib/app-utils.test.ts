@@ -18,6 +18,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
       whisper_model_path: "/models/whisper.gguf",
       whisper_language: "auto",
       base_url: "https://api.openai.com",
+      base_url_is_complete: false,
       model: "gpt-4.1-mini",
       temperature: 0.2,
       translation_shard_size: 30,

@@ -2,6 +2,7 @@ import type { SettingsState, TargetLanguageOption, WhisperLanguageOption, ModelP
 
 export const defaultSettings: SettingsState = {
   base_url: "https://api.openai.com",
+  base_url_is_complete: false,
   model: "gpt-4o-mini",
   temperature: 0.2,
   translation_shard_size: 200,
@@ -58,5 +59,4 @@ export const whisperModelPresets: ModelPresetView[] = [
     fileName: "ggml-large-v3-turbo-q5_0.bin",
   },
 ];
-
 

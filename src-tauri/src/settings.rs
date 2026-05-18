@@ -10,6 +10,8 @@ use crate::{
 #[derive(Clone, Deserialize, Serialize)]
 struct PersistedSettings {
     base_url: String,
+    #[serde(default)]
+    base_url_is_complete: bool,
     model: String,
     temperature: f32,
     whisper_model_path: String,
@@ -24,6 +26,7 @@ impl Default for PersistedSettings {
     fn default() -> Self {
         Self {
             base_url: "https://api.openai.com".to_string(),
+            base_url_is_complete: false,
             model: "gpt-4o-mini".to_string(),
             temperature: 0.2,
             whisper_model_path: String::new(),
@@ -37,6 +40,8 @@ impl Default for PersistedSettings {
 #[derive(Deserialize)]
 pub(crate) struct SettingsPayload {
     base_url: String,
+    #[serde(default)]
+    base_url_is_complete: bool,
     model: String,
     temperature: f32,
     whisper_model_path: String,
@@ -49,6 +54,7 @@ pub(crate) struct SettingsPayload {
 #[derive(Serialize)]
 pub(crate) struct SettingsResponse {
     base_url: String,
+    base_url_is_complete: bool,
     model: String,
     temperature: f32,
     whisper_model_path: String,
@@ -70,8 +76,10 @@ pub(crate) fn save_settings(
 ) -> Result<SettingsResponse, String> {
     let _ = payload.has_api_key;
     let has_api_key = task_db::has_api_key(&app)?;
+    let base_url_is_complete = payload.base_url_is_complete;
     let settings = PersistedSettings {
-        base_url: payload.base_url.trim().trim_end_matches('/').to_string(),
+        base_url: normalize_base_url(&payload.base_url, base_url_is_complete),
+        base_url_is_complete,
         model: payload.model.trim().to_string(),
         temperature: payload.temperature.clamp(0.0, 1.0),
         whisper_model_path: payload.whisper_model_path.trim().to_string(),
@@ -122,6 +130,15 @@ pub(crate) fn normalize_language(language: &str) -> String {
     }
 }
 
+pub(crate) fn normalize_base_url(base_url: &str, is_complete: bool) -> String {
+    let trimmed = base_url.trim();
+    if is_complete {
+        trimmed.to_string()
+    } else {
+        trimmed.trim_end_matches('/').to_string()
+    }
+}
+
 pub(crate) fn task_settings_from_current(
     app: &AppHandle,
     output_dir: Option<String>,
@@ -132,7 +149,8 @@ pub(crate) fn task_settings_from_current(
         target_language: settings.target_language.trim().to_string(),
         whisper_model_path: settings.whisper_model_path.trim().to_string(),
         whisper_language: normalize_language(&settings.whisper_language),
-        base_url: settings.base_url.trim().trim_end_matches('/').to_string(),
+        base_url: normalize_base_url(&settings.base_url, settings.base_url_is_complete),
+        base_url_is_complete: settings.base_url_is_complete,
         model: settings.model.trim().to_string(),
         temperature: settings.temperature.clamp(0.0, 1.0),
         translation_shard_size: normalize_translation_shard_size(settings.translation_shard_size),
@@ -162,6 +180,7 @@ impl PersistedSettings {
     fn into_response(self, has_api_key: bool) -> SettingsResponse {
         SettingsResponse {
             base_url: self.base_url,
+            base_url_is_complete: self.base_url_is_complete,
             model: self.model,
             temperature: self.temperature,
             whisper_model_path: self.whisper_model_path,

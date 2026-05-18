@@ -9,6 +9,8 @@ pub(crate) struct JobRequest {
     pub(crate) whisper_model_path: String,
     pub(crate) whisper_language: String,
     pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) translation_shard_size: Option<usize>,
@@ -25,6 +27,8 @@ pub(crate) struct TranslateSubtitlesRequest {
     pub(crate) job_id: String,
     pub(crate) target_language: String,
     pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) translation_shard_size: Option<usize>,
@@ -45,6 +49,8 @@ pub(crate) struct CreateVideoTaskRequest {
     pub(crate) whisper_model_path: String,
     pub(crate) whisper_language: String,
     pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) translation_shard_size: Option<usize>,
@@ -58,6 +64,8 @@ pub(crate) struct CreateSrtTaskRequest {
     pub(crate) whisper_model_path: String,
     pub(crate) whisper_language: String,
     pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) translation_shard_size: Option<usize>,
@@ -69,6 +77,8 @@ pub(crate) struct UpdateTaskSettingsRequest {
     pub(crate) whisper_model_path: String,
     pub(crate) whisper_language: String,
     pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) translation_shard_size: Option<usize>,

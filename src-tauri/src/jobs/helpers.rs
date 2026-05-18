@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     paths::{path_to_string, sanitize_file_part},
-    settings::normalize_language,
+    settings::{normalize_base_url, normalize_language},
     state::JobError,
     task_db::TaskSettingsSnapshot,
     translation::{normalize_translation_shard_size, DEFAULT_TRANSLATION_SHARD_SIZE},
@@ -25,7 +25,8 @@ pub(super) fn task_settings_from_video_request(
         target_language: request.target_language.trim().to_string(),
         whisper_model_path: request.whisper_model_path.trim().to_string(),
         whisper_language: normalize_language(&request.whisper_language),
-        base_url: request.base_url.trim().trim_end_matches('/').to_string(),
+        base_url: normalize_base_url(&request.base_url, request.base_url_is_complete),
+        base_url_is_complete: request.base_url_is_complete,
         model: request.model.trim().to_string(),
         temperature: request.temperature.clamp(0.0, 1.0),
         translation_shard_size: normalize_translation_shard_size(
@@ -48,7 +49,8 @@ pub(super) fn task_settings_from_srt_request(
         target_language: request.target_language.trim().to_string(),
         whisper_model_path: request.whisper_model_path.trim().to_string(),
         whisper_language: normalize_language(&request.whisper_language),
-        base_url: request.base_url.trim().trim_end_matches('/').to_string(),
+        base_url: normalize_base_url(&request.base_url, request.base_url_is_complete),
+        base_url_is_complete: request.base_url_is_complete,
         model: request.model.trim().to_string(),
         temperature: request.temperature.clamp(0.0, 1.0),
         translation_shard_size: normalize_translation_shard_size(
@@ -68,7 +70,8 @@ pub(super) fn task_settings_from_update_request(
         target_language: request.target_language.trim().to_string(),
         whisper_model_path: request.whisper_model_path.trim().to_string(),
         whisper_language: normalize_language(&request.whisper_language),
-        base_url: request.base_url.trim().trim_end_matches('/').to_string(),
+        base_url: normalize_base_url(&request.base_url, request.base_url_is_complete),
+        base_url_is_complete: request.base_url_is_complete,
         model: request.model.trim().to_string(),
         temperature: request.temperature.clamp(0.0, 1.0),
         translation_shard_size: normalize_translation_shard_size(

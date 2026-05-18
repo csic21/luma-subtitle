@@ -4,7 +4,7 @@ use crate::subtitles::{
     collapse_repeated_vocalization, format_srt_time, parse_srt_text, parse_timestamp_ms,
     parse_whisper_json, validate_whisper_repetition, SubtitleSegment,
 };
-use crate::translation::{attach_model_output, parse_translation_content};
+use crate::translation::{attach_model_output, chat_endpoint, parse_translation_content};
 use std::{fs, process};
 
 #[test]
@@ -271,4 +271,20 @@ fn parse_error_includes_model_output_preview() {
     assert!(message.contains("finish_reason: length"));
     assert!(message.contains("completion_tokens"));
     assert!(message.contains("{\"items\":["));
+}
+
+#[test]
+fn translation_endpoint_appends_chat_path_by_default() {
+    assert_eq!(
+        chat_endpoint("https://api.openai.com/", false),
+        "https://api.openai.com/v1/chat/completions"
+    );
+}
+
+#[test]
+fn translation_endpoint_uses_complete_url_when_enabled() {
+    assert_eq!(
+        chat_endpoint("https://example.test/custom/chat", true),
+        "https://example.test/custom/chat"
+    );
 }

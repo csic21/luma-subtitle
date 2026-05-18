@@ -46,12 +46,16 @@ const WHISPER_VAD_MODEL_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
 const HTTP_USER_AGENT: &str = "Luma Subtitle dependency installer";
 const DOWNLOAD_MAX_ATTEMPTS: usize = 4;
-#[cfg(not(target_os = "macos"))]
-const WHISPER_CPP_ASSET_CANDIDATES: &[&str] = &[
+#[cfg(any(not(target_os = "macos"), test))]
+const WHISPER_CPP_CUDA_ASSET_CANDIDATES: &[&str] = &[
     "whisper-cublas-12.4.0-bin-x64.zip",
     "whisper-cublas-11.8.0-bin-x64.zip",
+    "whisper-blas-bin-x64.zip",
     "whisper-bin-x64.zip",
 ];
+#[cfg(any(not(target_os = "macos"), test))]
+const WHISPER_CPP_CPU_ASSET_CANDIDATES: &[&str] =
+    &["whisper-blas-bin-x64.zip", "whisper-bin-x64.zip"];
 const WHISPER_MODEL_PRESETS: &[WhisperModelPreset] = &[
     WhisperModelPreset {
         id: "tiny",
@@ -416,23 +420,110 @@ async fn latest_whisper_cpp_asset() -> Result<GithubAsset, String> {
         .json::<GithubRelease>()
         .await
         .map_err(|error| format!("解析 whisper.cpp 发布包失败: {error}"))?;
-    WHISPER_CPP_ASSET_CANDIDATES
+    let available_assets = release
+        .assets
         .iter()
-        .find_map(|name| {
-            release
-                .assets
-                .iter()
-                .find(|asset| asset.name == *name)
-                .map(|asset| GithubAsset {
+        .map(|asset| asset.name.as_str())
+        .collect::<Vec<_>>();
+    let selected_name = select_whisper_cpp_asset_name(&available_assets, has_nvidia_gpu())
+        .ok_or_else(|| "未找到可用的 whisper.cpp Windows x64 发布包".to_string())?;
+    release
+        .assets
+        .iter()
+        .find_map(|asset| {
+            if asset.name == selected_name {
+                Some(GithubAsset {
                     name: asset.name.clone(),
                     browser_download_url: asset.browser_download_url.clone(),
                 })
+            } else {
+                None
+            }
         })
         .ok_or_else(|| "未找到可用的 whisper.cpp Windows x64 发布包".to_string())
 }
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn select_whisper_cpp_asset_name(
+    available_assets: &[&str],
+    has_nvidia_gpu: bool,
+) -> Option<&'static str> {
+    let candidates = if has_nvidia_gpu {
+        WHISPER_CPP_CUDA_ASSET_CANDIDATES
+    } else {
+        WHISPER_CPP_CPU_ASSET_CANDIDATES
+    };
+    candidates
+        .iter()
+        .copied()
+        .find(|name| available_assets.iter().any(|asset| asset == name))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn has_nvidia_gpu() -> bool {
+    std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| !line.trim().is_empty())
+        })
+        .unwrap_or(false)
+}
+
 fn find_whisper_model_preset(id: &str) -> Option<WhisperModelPreset> {
     WHISPER_MODEL_PRESETS
         .iter()
         .copied()
         .find(|preset| preset.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_whisper_cpp_asset_name;
+
+    #[test]
+    fn selects_cuda_package_for_nvidia_windows() {
+        let assets = [
+            "whisper-bin-x64.zip",
+            "whisper-blas-bin-x64.zip",
+            "whisper-cublas-12.4.0-bin-x64.zip",
+        ];
+
+        assert_eq!(
+            select_whisper_cpp_asset_name(&assets, true),
+            Some("whisper-cublas-12.4.0-bin-x64.zip")
+        );
+    }
+
+    #[test]
+    fn selects_blas_package_for_non_nvidia_windows() {
+        let assets = [
+            "whisper-bin-x64.zip",
+            "whisper-blas-bin-x64.zip",
+            "whisper-cublas-12.4.0-bin-x64.zip",
+        ];
+
+        assert_eq!(
+            select_whisper_cpp_asset_name(&assets, false),
+            Some("whisper-blas-bin-x64.zip")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_cpu_package_when_preferred_assets_are_missing() {
+        let assets = ["whisper-bin-x64.zip"];
+
+        assert_eq!(
+            select_whisper_cpp_asset_name(&assets, false),
+            Some("whisper-bin-x64.zip")
+        );
+        assert_eq!(
+            select_whisper_cpp_asset_name(&assets, true),
+            Some("whisper-bin-x64.zip")
+        );
+    }
 }

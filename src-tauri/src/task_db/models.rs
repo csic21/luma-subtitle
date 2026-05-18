@@ -9,6 +9,8 @@ pub(crate) struct TaskSettingsSnapshot {
     pub(crate) whisper_model_path: String,
     pub(crate) whisper_language: String,
     pub(crate) base_url: String,
+    #[serde(default)]
+    pub(crate) base_url_is_complete: bool,
     pub(crate) model: String,
     pub(crate) temperature: f32,
     #[serde(default = "default_translation_shard_size")]

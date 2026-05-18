@@ -4,6 +4,7 @@ import { FolderOpen, RefreshCw, Save, Settings } from "lucide-react";
 import { FieldBlock, IconAction, SectionTitle } from "@/components/app/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { defaultSettings, languageOptions, whisperLanguageOptions } from "@/config";
@@ -36,6 +37,12 @@ export function TaskConfigCard({
   const missingWhisperModel = !taskConfig.whisper_model_path.trim();
   const missingBaseUrl = !taskConfig.base_url.trim();
   const missingTranslationModel = !taskConfig.model.trim();
+  const normalizedBaseUrl = taskConfig.base_url.trim();
+  const baseUrlEndpoint = normalizedBaseUrl
+    ? taskConfig.base_url_is_complete
+      ? normalizedBaseUrl
+      : `${normalizedBaseUrl.replace(/\/+$/, "")}/v1/chat/completions`
+    : "-";
 
   return (
     <Card>
@@ -140,6 +147,23 @@ export function TaskConfigCard({
               disabled={taskBusy(task)}
               aria-invalid={missingBaseUrl}
             />
+            <label className="checkbox-row">
+              <Checkbox
+                checked={taskConfig.base_url_is_complete}
+                onCheckedChange={(checked) =>
+                  setSettingsDraft((current) =>
+                    current ? { ...current, base_url_is_complete: checked === true } : current,
+                  )
+                }
+                disabled={taskBusy(task)}
+              />
+              <span>{t("settings.baseUrlComplete")}</span>
+            </label>
+            <p className="field-hint">
+              {taskConfig.base_url_is_complete
+                ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
+                : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
+            </p>
           </FieldBlock>
           <FieldBlock
             label={t("settings.translationModel")}

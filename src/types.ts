@@ -4,6 +4,7 @@ export type TaskOperation = "transcribe" | "translate" | "export";
 
 export type SettingsState = {
   base_url: string;
+  base_url_is_complete: boolean;
   model: string;
   temperature: number;
   translation_shard_size: number;
@@ -94,6 +95,7 @@ export type TaskSettingsSnapshot = {
   whisper_model_path: string;
   whisper_language: string;
   base_url: string;
+  base_url_is_complete: boolean;
   model: string;
   temperature: number;
   translation_shard_size: number;

@@ -18,6 +18,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -67,6 +68,12 @@ export function ModelApiSettingsCard({
   const missingBaseUrl = !settings.base_url.trim();
   const missingTranslationModel = !settings.model.trim();
   const missingApiKey = !hasApiCredential;
+  const normalizedBaseUrl = settings.base_url.trim();
+  const baseUrlEndpoint = normalizedBaseUrl
+    ? settings.base_url_is_complete
+      ? normalizedBaseUrl
+      : `${normalizedBaseUrl.replace(/\/+$/, "")}/v1/chat/completions`
+    : "-";
   const missingRequiredLabels = [
     missingWhisperModel ? t("requirement.missingWhisperModel") : "",
     missingBaseUrl ? t("requirement.missingBaseUrl") : "",
@@ -211,6 +218,20 @@ export function ModelApiSettingsCard({
               onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value }))}
               aria-invalid={missingBaseUrl}
             />
+            <label className="checkbox-row">
+              <Checkbox
+                checked={settings.base_url_is_complete}
+                onCheckedChange={(checked) =>
+                  setSettings((current) => ({ ...current, base_url_is_complete: checked === true }))
+                }
+              />
+              <span>{t("settings.baseUrlComplete")}</span>
+            </label>
+            <p className="field-hint">
+              {settings.base_url_is_complete
+                ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
+                : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
+            </p>
           </FieldBlock>
           <FieldBlock
             label={t("settings.translationModel")}

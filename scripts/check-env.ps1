@@ -10,7 +10,11 @@ Write-Host "Rust:" -ForegroundColor Cyan
 cargo --version
 
 Write-Host "NVIDIA:" -ForegroundColor Cyan
-nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+try {
+  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+} catch {
+  Write-Host "Not detected; Windows will use BLAS/CPU whisper.cpp." -ForegroundColor Yellow
+}
 
 Write-Host "Sidecars:" -ForegroundColor Cyan
 $bin = Join-Path $PSScriptRoot "..\src-tauri\resources\bin"

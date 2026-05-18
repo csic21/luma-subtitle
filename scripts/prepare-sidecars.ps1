@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $bin = Resolve-Path (Join-Path $PSScriptRoot "..\src-tauri\resources\bin")
 
-Write-Host "Place ffmpeg.exe and CUDA-enabled whisper-cli.exe in:" -ForegroundColor Cyan
+Write-Host "Place ffmpeg.exe and CUDA, BLAS, or CPU whisper-cli.exe in:" -ForegroundColor Cyan
 Write-Host $bin
 Write-Host ""
 Write-Host "Expected files:" -ForegroundColor Cyan

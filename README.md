@@ -37,7 +37,7 @@ The macOS build targets Apple Silicon. Automatic FFmpeg and whisper.cpp builds r
 
 ## Supported Platforms
 
-- Windows x64: CUDA whisper.cpp is recommended when an NVIDIA GPU is available.
+- Windows x64: the app selects a CUDA whisper.cpp package when an NVIDIA GPU is available, otherwise it uses a BLAS/CPU package.
 - macOS Apple Silicon: the app first uses installed or bundled arm64 `ffmpeg` and `whisper-cli`; if missing, it can build FFmpeg and Metal-enabled whisper.cpp from official source archives.
 
 Intel Mac is not currently supported.
@@ -47,7 +47,7 @@ Intel Mac is not currently supported.
 - Node.js 20+
 - pnpm 9+
 - Rust 1.80+
-- Windows: NVIDIA driver and CUDA-capable GPU recommended
+- Windows: NVIDIA driver and CUDA-capable GPU optional for faster transcription
 - macOS Apple Silicon: macOS 11.0+, Xcode Command Line Tools, and `cmake`
 
 ## Install Dependencies
@@ -62,7 +62,7 @@ The in-app Environment panel shows the fixed dependency folder and model folder.
 
 Clicking "Download to dependency folder" will:
 
-- Windows: download and extract `ffmpeg.exe` and CUDA/CPU `whisper-cli.exe`.
+- Windows: download and extract `ffmpeg.exe` and the best matching CUDA, BLAS, or CPU `whisper-cli.exe`.
 - macOS Apple Silicon: use installed or bundled dependencies first; if missing, download official source archives and build locally. It does not call Homebrew or download unofficial macOS binaries.
 
 macOS automatic build requirements:
