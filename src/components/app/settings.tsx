@@ -14,6 +14,7 @@ import {
 
 import { DownloadProgress, FieldBlock, IconAction, SectionTitle, StatusBadge } from "@/components/app/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -29,6 +30,7 @@ type Translate = ReturnType<typeof useI18n>["t"];
 
 export function ModelApiSettingsCard({
   apiKey,
+  downloadedWhisperModelFiles,
   hasApiCredential,
   modelDownload,
   modelDownloading,
@@ -44,6 +46,7 @@ export function ModelApiSettingsCard({
   setWhisperPresetId,
 }: {
   apiKey: string;
+  downloadedWhisperModelFiles: Set<string>;
   hasApiCredential: boolean;
   modelDownload: ModelDownloadEvent | null;
   modelDownloading: boolean;
@@ -58,6 +61,8 @@ export function ModelApiSettingsCard({
   setSettings: Dispatch<SetStateAction<SettingsState>>;
   setWhisperPresetId: Dispatch<SetStateAction<string>>;
 }) {
+  const selectedPresetDownloaded = downloadedWhisperModelFiles.has(selectedWhisperPreset.fileName);
+
   return (
     <Card>
       <CardHeader>
@@ -80,28 +85,47 @@ export function ModelApiSettingsCard({
         </FieldBlock>
 
         <FieldBlock label={t("model.preset")}>
-          <div className="input-action">
-            <Select value={whisperPresetId} onValueChange={setWhisperPresetId}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {whisperModelPresets.map((preset) => (
-                    <SelectItem key={preset.id} value={preset.id}>
-                      {t(preset.labelKey)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <IconAction
-              label={t("download.pickPreset", { fileName: selectedWhisperPreset.fileName })}
-              onClick={onDownloadWhisperPreset}
-              disabled={modelDownloading}
-            >
-              {modelDownloading ? <Loader2 className="spin" /> : <Download />}
-            </IconAction>
+          <div className="preset-control">
+            <div className="input-action">
+              <Select value={whisperPresetId} onValueChange={setWhisperPresetId}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {whisperModelPresets.map((preset) => {
+                      const downloaded = downloadedWhisperModelFiles.has(preset.fileName);
+                      return (
+                        <SelectItem key={preset.id} value={preset.id}>
+                          <span className="preset-option">
+                            <span>{t(preset.labelKey)}</span>
+                            {downloaded && (
+                              <Badge variant="secondary" className="downloaded-badge">
+                                <CheckCircle2 />
+                                {t("model.downloaded")}
+                              </Badge>
+                            )}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <IconAction
+                label={t("download.pickPreset", { fileName: selectedWhisperPreset.fileName })}
+                onClick={onDownloadWhisperPreset}
+                disabled={modelDownloading}
+              >
+                {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+              </IconAction>
+            </div>
+            {selectedPresetDownloaded && (
+              <div className="preset-status">
+                <CheckCircle2 />
+                <span>{t("model.downloaded")}</span>
+              </div>
+            )}
           </div>
         </FieldBlock>
 

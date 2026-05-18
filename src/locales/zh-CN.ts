@@ -67,6 +67,7 @@ export const zhCN = {
     "language.simplifiedChinese": "简体中文",
     "language.traditionalChinese": "繁体中文",
     "model.base": "base · 142 MiB · 快速测试",
+    "model.downloaded": "已下载",
     "model.largeTurbo": "large-v3-turbo-q5_0 · 547 MiB · 高精度",
     "model.preset": "模型预设",
     "model.small": "small · 466 MiB · 更准",

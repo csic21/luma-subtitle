@@ -155,6 +155,18 @@ pub(crate) async fn ensure_whisper_vad_model(app: &AppHandle) -> Result<PathBuf,
     );
     Ok(model_path)
 }
+
+pub(crate) fn downloaded_whisper_model_files(app: &AppHandle) -> Vec<String> {
+    let Ok(models_dir) = whisper_models_dir(app) else {
+        return Vec::new();
+    };
+    WHISPER_MODEL_PRESETS
+        .iter()
+        .filter(|preset| is_existing_file(&models_dir.join(preset.file_name)))
+        .map(|preset| preset.file_name.to_string())
+        .collect()
+}
+
 #[tauri::command]
 pub(crate) async fn download_whisper_model(
     app: AppHandle,

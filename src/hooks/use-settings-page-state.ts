@@ -41,6 +41,10 @@ export function useSettingsPageState(t: TFunction) {
     () => whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0],
     [whisperPresetId],
   );
+  const downloadedWhisperModelFiles = useMemo(
+    () => new Set(env?.downloaded_model_files ?? []),
+    [env?.downloaded_model_files],
+  );
   const modelDownloading = modelDownload?.status === "running";
   const dependencyInstalling = dependencyInstall?.status === "running";
   const hasApiCredential = settings.has_api_key || apiKey.trim().length > 0;
@@ -204,6 +208,7 @@ export function useSettingsPageState(t: TFunction) {
         path: modelPath,
         error: null,
       }));
+      await refreshEnvironment();
       setNotice(t("notice.downloadedAndSelected", { fileName: fileName(modelPath) }));
     } catch (error) {
       setModelDownload((current) =>
@@ -219,7 +224,7 @@ export function useSettingsPageState(t: TFunction) {
       );
       setNotice(String(error));
     }
-  }, [apiKey, selectedWhisperPreset, settings, t]);
+  }, [apiKey, refreshEnvironment, selectedWhisperPreset, settings, t]);
 
   const installDependencies = useCallback(async () => {
     setNotice("");
@@ -374,6 +379,7 @@ export function useSettingsPageState(t: TFunction) {
     checkForUpdates,
     dependencyInstall,
     dependencyInstalling,
+    downloadedWhisperModelFiles,
     downloadWhisperPreset,
     env,
     environmentReady,

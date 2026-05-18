@@ -1,7 +1,10 @@
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::paths::{locate_binary, managed_dir, path_to_string};
+use crate::{
+    dependencies::downloaded_whisper_model_files,
+    paths::{locate_binary, managed_dir, path_to_string},
+};
 
 #[derive(Serialize)]
 pub(crate) struct EnvironmentResponse {
@@ -13,6 +16,7 @@ pub(crate) struct EnvironmentResponse {
     config_dir: String,
     sidecar_dir: String,
     model_dir: String,
+    downloaded_model_files: Vec<String>,
 }
 
 #[tauri::command]
@@ -39,6 +43,7 @@ pub(crate) fn check_environment(app: AppHandle) -> EnvironmentResponse {
         model_dir: managed_dir(&app, "models")
             .map(path_to_string)
             .unwrap_or_else(|_| "模型目录不可用".to_string()),
+        downloaded_model_files: downloaded_whisper_model_files(&app),
     }
 }
 

@@ -104,6 +104,8 @@ export function useTasksPageState(t: TFunction) {
         return;
       }
       unlistenTask = fn;
+    }).catch((error) => {
+      if (!disposed) setNotice(errorText(error));
     });
 
     listen<string>("task-deleted", (event) => {
@@ -119,6 +121,8 @@ export function useTasksPageState(t: TFunction) {
         return;
       }
       unlistenDeleted = fn;
+    }).catch((error) => {
+      if (!disposed) setNotice(errorText(error));
     });
 
     return () => {

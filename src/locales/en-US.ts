@@ -67,6 +67,7 @@ export const enUS = {
     "language.simplifiedChinese": "Simplified Chinese",
     "language.traditionalChinese": "Traditional Chinese",
     "model.base": "base · 142 MiB · quick test",
+    "model.downloaded": "Downloaded",
     "model.largeTurbo": "large-v3-turbo-q5_0 · 547 MiB · high accuracy",
     "model.preset": "Model preset",
     "model.small": "small · 466 MiB · more accurate",

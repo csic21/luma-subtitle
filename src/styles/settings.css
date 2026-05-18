@@ -24,6 +24,43 @@
   gap: 8px;
 }
 
+.preset-control {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.preset-option {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.downloaded-badge {
+  color: #72e0bc;
+}
+
+.preset-status {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  background: rgba(114, 224, 188, 0.12);
+  color: #72e0bc;
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.preset-status svg {
+  width: 14px;
+  height: 14px;
+}
+
 .key-field {
   display: grid;
   grid-template-columns: 32px minmax(0, 1fr);

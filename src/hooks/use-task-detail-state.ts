@@ -89,7 +89,9 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     let unlistenTask: (() => void) | undefined;
     let unlistenJob: (() => void) | undefined;
 
-    const taskListener = listen<TaskRecord>("task-updated", (event) => {
+    void refreshTask();
+
+    listen<TaskRecord>("task-updated", (event) => {
       if (event.payload.id !== taskId) return;
       setTask(event.payload);
       setSettingsDraft(normalizeTaskSettings(event.payload.settings));
@@ -101,9 +103,11 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
         return;
       }
       unlistenTask = fn;
+    }).catch((error) => {
+      if (!disposed) setNotice(errorText(error));
     });
 
-    const jobListener = listen<JobEvent>("job-event", (event) => {
+    listen<JobEvent>("job-event", (event) => {
       if (event.payload.job_id !== taskId) return;
       setLogs((current) => appendRealtimeLog(current, event.payload));
     }).then((fn) => {
@@ -112,10 +116,8 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
         return;
       }
       unlistenJob = fn;
-    });
-
-    void Promise.all([taskListener, jobListener]).then(() => {
-      if (!disposed) void refreshTask();
+    }).catch((error) => {
+      if (!disposed) setNotice(errorText(error));
     });
 
     return () => {

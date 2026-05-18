@@ -17,6 +17,7 @@ export function SettingsPage() {
     checkForUpdates,
     dependencyInstall,
     dependencyInstalling,
+    downloadedWhisperModelFiles,
     downloadWhisperPreset,
     env,
     environmentReady,
@@ -60,6 +61,7 @@ export function SettingsPage() {
           hasApiCredential={hasApiCredential}
           modelDownload={modelDownload}
           modelDownloading={modelDownloading}
+          downloadedWhisperModelFiles={downloadedWhisperModelFiles}
           selectedWhisperPreset={selectedWhisperPreset}
           settings={settings}
           t={t}

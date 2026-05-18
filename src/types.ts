@@ -22,6 +22,7 @@ export type EnvironmentState = {
   config_dir: string;
   sidecar_dir: string;
   model_dir: string;
+  downloaded_model_files?: string[];
 };
 
 export type JobOutputs = {
