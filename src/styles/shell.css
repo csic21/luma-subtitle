@@ -84,8 +84,17 @@
 }
 
 .notice-alert {
-  border-color: color-mix(in srgb, var(--primary) 44%, var(--border));
-  background: color-mix(in srgb, var(--primary) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--hotdog-mustard) 58%, var(--hotdog-red));
+  background:
+    linear-gradient(90deg, rgba(226, 57, 45, 0.2), rgba(255, 196, 71, 0.09)),
+    color-mix(in srgb, var(--card) 86%, black);
+  box-shadow:
+    0 0 0 1px rgba(255, 196, 71, 0.08),
+    0 12px 28px rgba(0, 0, 0, 0.24);
+}
+
+.notice-alert [data-slot="alert-title"] {
+  color: var(--hotdog-mustard);
 }
 
 .metric-grid {
@@ -172,6 +181,16 @@
   color: var(--muted-foreground);
   font-size: 0.78rem;
   font-weight: 650;
+}
+
+.form-field[data-invalid="true"] label,
+.field-description {
+  color: var(--hotdog-mustard);
+}
+
+.field-description {
+  font-size: 0.76rem;
+  line-height: 1.35;
 }
 
 .section-title {

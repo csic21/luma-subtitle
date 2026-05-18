@@ -33,6 +33,10 @@ export function TaskConfigCard({
   onSaveTaskSettings: () => void | Promise<void>;
   setSettingsDraft: Dispatch<SetStateAction<TaskSettingsSnapshot | null>>;
 }) {
+  const missingWhisperModel = !taskConfig.whisper_model_path.trim();
+  const missingBaseUrl = !taskConfig.base_url.trim();
+  const missingTranslationModel = !taskConfig.model.trim();
+
   return (
     <Card>
       <CardHeader>
@@ -51,7 +55,11 @@ export function TaskConfigCard({
         </CardAction>
       </CardHeader>
       <CardContent className="settings-form">
-        <FieldBlock label={t("common.whisperModel")}>
+        <FieldBlock
+          label={t("common.whisperModel")}
+          invalid={missingWhisperModel}
+          description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+        >
           <div className="input-action">
             <Input
               value={taskConfig.whisper_model_path}
@@ -63,6 +71,7 @@ export function TaskConfigCard({
               disabled={taskBusy(task)}
               placeholder={t("settings.notSet")}
               title={taskConfig.whisper_model_path || t("settings.selectWhisper")}
+              aria-invalid={missingWhisperModel}
             />
             <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel} disabled={taskBusy(task)}>
               <FolderOpen />
@@ -118,22 +127,32 @@ export function TaskConfigCard({
         </div>
 
         <div className="grid-two">
-          <FieldBlock label="Base URL">
+          <FieldBlock
+            label="Base URL"
+            invalid={missingBaseUrl}
+            description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+          >
             <Input
               value={taskConfig.base_url}
               onChange={(event) =>
                 setSettingsDraft((current) => (current ? { ...current, base_url: event.target.value } : current))
               }
               disabled={taskBusy(task)}
+              aria-invalid={missingBaseUrl}
             />
           </FieldBlock>
-          <FieldBlock label={t("settings.translationModel")}>
+          <FieldBlock
+            label={t("settings.translationModel")}
+            invalid={missingTranslationModel}
+            description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
+          >
             <Input
               value={taskConfig.model}
               onChange={(event) =>
                 setSettingsDraft((current) => (current ? { ...current, model: event.target.value } : current))
               }
               disabled={taskBusy(task)}
+              aria-invalid={missingTranslationModel}
             />
           </FieldBlock>
         </div>

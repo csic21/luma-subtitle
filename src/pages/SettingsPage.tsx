@@ -2,7 +2,12 @@ import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { NoticeAlert } from "@/components/app/shared";
-import { EnvironmentSettingsCard, ModelApiSettingsCard, UpdateSettingsCard } from "@/components/app/settings";
+import {
+  EnvironmentSettingsCard,
+  ModelApiSettingsCard,
+  QuickStartGuideCard,
+  UpdateSettingsCard,
+} from "@/components/app/settings";
 import { Button } from "@/components/ui/button";
 import { useSettingsPageState } from "@/hooks/use-settings-page-state";
 import { useI18n } from "@/i18n";
@@ -56,43 +61,48 @@ export function SettingsPage() {
       <NoticeAlert message={notice} />
 
       <section className="settings-page-grid">
-        <ModelApiSettingsCard
-          apiKey={apiKey}
-          hasApiCredential={hasApiCredential}
-          modelDownload={modelDownload}
-          modelDownloading={modelDownloading}
-          downloadedWhisperModelFiles={downloadedWhisperModelFiles}
-          selectedWhisperPreset={selectedWhisperPreset}
-          settings={settings}
-          t={t}
-          whisperPresetId={whisperPresetId}
-          onDownloadWhisperPreset={downloadWhisperPreset}
-          onPickWhisperModel={pickWhisperModel}
-          onSaveSettings={() => saveSettings()}
-          setApiKey={setApiKey}
-          setSettings={setSettings}
-          setWhisperPresetId={setWhisperPresetId}
-        />
+        <div className="settings-main-stack">
+          <ModelApiSettingsCard
+            apiKey={apiKey}
+            hasApiCredential={hasApiCredential}
+            modelDownload={modelDownload}
+            modelDownloading={modelDownloading}
+            downloadedWhisperModelFiles={downloadedWhisperModelFiles}
+            selectedWhisperPreset={selectedWhisperPreset}
+            settings={settings}
+            t={t}
+            whisperPresetId={whisperPresetId}
+            onDownloadWhisperPreset={downloadWhisperPreset}
+            onPickWhisperModel={pickWhisperModel}
+            onSaveSettings={() => saveSettings()}
+            setApiKey={setApiKey}
+            setSettings={setSettings}
+            setWhisperPresetId={setWhisperPresetId}
+          />
 
-        <EnvironmentSettingsCard
-          dependencyInstall={dependencyInstall}
-          dependencyInstalling={dependencyInstalling}
-          environmentReady={environmentReady}
-          env={env}
-          envRows={envRows}
-          t={t}
-          onInstallDependencies={installDependencies}
-          onOpenManagedDir={openManagedDir}
-          onRefreshEnvironment={refreshEnvironment}
-        />
+          <UpdateSettingsCard
+            appUpdate={appUpdate}
+            appUpdating={appUpdating}
+            t={t}
+            onCheckForUpdates={checkForUpdates}
+            onInstallUpdate={installUpdate}
+          />
+        </div>
 
-        <UpdateSettingsCard
-          appUpdate={appUpdate}
-          appUpdating={appUpdating}
-          t={t}
-          onCheckForUpdates={checkForUpdates}
-          onInstallUpdate={installUpdate}
-        />
+        <div className="settings-side-stack">
+          <EnvironmentSettingsCard
+            dependencyInstall={dependencyInstall}
+            dependencyInstalling={dependencyInstalling}
+            environmentReady={environmentReady}
+            env={env}
+            envRows={envRows}
+            t={t}
+            onInstallDependencies={installDependencies}
+            onOpenManagedDir={openManagedDir}
+            onRefreshEnvironment={refreshEnvironment}
+          />
+          <QuickStartGuideCard t={t} />
+        </div>
       </section>
     </>
   );

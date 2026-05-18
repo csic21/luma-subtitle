@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.superpowers/
 src-tauri/target/
 src-tauri/resources/bin/*.exe
 src-tauri/resources/bin/*.dll

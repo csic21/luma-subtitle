@@ -72,16 +72,21 @@ export function IconAction({
 }
 
 export function FieldBlock({
+  description,
+  invalid,
   label,
   children,
 }: {
+  description?: string;
+  invalid?: boolean;
   label: string;
   children: ReactNode;
 }) {
   return (
-    <div className="form-field">
+    <div className="form-field" data-invalid={invalid ? "true" : undefined}>
       <Label>{label}</Label>
       {children}
+      {description && <span className="field-description">{description}</span>}
     </div>
   );
 }
@@ -100,5 +105,4 @@ export function DownloadProgress({ event }: { event: ModelDownloadEvent | Depend
     </div>
   );
 }
-
 

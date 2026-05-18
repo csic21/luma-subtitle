@@ -29,6 +29,7 @@ export function TaskDetailPage() {
     logs,
     notice,
     openOutputDir,
+    operationContext,
     pickTaskWhisperModel,
     refreshPreview,
     runOperation,
@@ -79,6 +80,7 @@ export function TaskDetailPage() {
             t={t}
             onCancelTask={cancelTask}
             onRunOperation={runOperation}
+            operationContext={operationContext}
           />
           <TaskConfigCard
             task={task}
@@ -93,7 +95,13 @@ export function TaskDetailPage() {
         </div>
 
         <div className="right-column">
-          <TaskProgressCard task={task} t={t} onOpenOutputDir={openOutputDir} onRunOperation={runOperation} />
+          <TaskProgressCard
+            task={task}
+            t={t}
+            onOpenOutputDir={openOutputDir}
+            onRunOperation={runOperation}
+            operationContext={operationContext}
+          />
           <SubtitlePreviewCard
             activeSubtitleBody={activeSubtitleBody}
             activeSubtitleFileName={activeSubtitleFileName}

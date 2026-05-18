@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { errorText, hasTauriRuntime, isTranslateStage, operationLabel, taskBusy } from "@/lib/app-utils";
+import {
+  canRunOperation,
+  errorText,
+  hasTauriRuntime,
+  isTranslateStage,
+  operationLabel,
+  operationRequirementIssues,
+  operationRequirementSummary,
+  taskBusy,
+} from "@/lib/app-utils";
 import {
   applyCurrentSettingsToTask,
   cancelTask as cancelTaskCommand,
+  checkEnvironment,
   getTask,
   getTaskLogs,
+  loadSettings,
   openPath,
   runTaskOperation,
   selectWhisperModel,
@@ -14,7 +25,16 @@ import {
   updateTaskSettings,
 } from "@/lib/tauri-api";
 import { appendRealtimeLog, normalizeTaskSettings, taskSettingsEqual, taskSettingsUpdatePayload } from "@/lib/task-data";
-import type { JobEvent, SubtitlePreview, TaskOperation, TaskRecord, TaskSettingsSnapshot, TFunction } from "@/types";
+import type {
+  EnvironmentState,
+  JobEvent,
+  SettingsState,
+  SubtitlePreview,
+  TaskOperation,
+  TaskRecord,
+  TaskSettingsSnapshot,
+  TFunction,
+} from "@/types";
 
 import { useAppResume } from "./use-app-resume";
 
@@ -29,6 +49,8 @@ type FlowStep = {
 export function useTaskDetailState(taskId: string, t: TFunction) {
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<TaskSettingsSnapshot | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<Pick<SettingsState, "has_api_key"> | null>(null);
+  const [env, setEnv] = useState<EnvironmentState | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null);
   const [subtitleView, setSubtitleView] = useState<SubtitleView>("source");
@@ -36,6 +58,13 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const taskRef = useRef<TaskRecord | null>(null);
 
   const tauriReady = hasTauriRuntime();
+  const operationContext = useMemo(
+    () => ({
+      environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
+      hasApiCredential: Boolean(globalSettings?.has_api_key),
+    }),
+    [env?.ffmpeg_path, env?.whisper_path, globalSettings?.has_api_key],
+  );
 
   useEffect(() => {
     taskRef.current = task;
@@ -78,6 +107,16 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     [refreshLogs, refreshPreview, taskId],
   );
 
+  const refreshRunPrerequisites = useCallback(async () => {
+    try {
+      const [loadedSettings, loadedEnv] = await Promise.all([loadSettings(), checkEnvironment()]);
+      setGlobalSettings({ has_api_key: loadedSettings.has_api_key });
+      setEnv(loadedEnv);
+    } catch (error) {
+      setNotice(errorText(error));
+    }
+  }, []);
+
   useEffect(() => {
     if (!taskId) return;
     if (!tauriReady) {
@@ -90,6 +129,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     let unlistenJob: (() => void) | undefined;
 
     void refreshTask();
+    void refreshRunPrerequisites();
 
     listen<TaskRecord>("task-updated", (event) => {
       if (event.payload.id !== taskId) return;
@@ -125,16 +165,22 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
       unlistenTask?.();
       unlistenJob?.();
     };
-  }, [refreshLogs, refreshPreview, refreshTask, t, taskId, tauriReady]);
+  }, [refreshLogs, refreshPreview, refreshRunPrerequisites, refreshTask, t, taskId, tauriReady]);
 
   const refreshTaskOnResume = useCallback(() => {
     void refreshTask({ preview: false });
-  }, [refreshTask]);
+    void refreshRunPrerequisites();
+  }, [refreshRunPrerequisites, refreshTask]);
 
   useAppResume(refreshTaskOnResume, Boolean(taskId && tauriReady));
 
   const runOperation = useCallback(
     async (operation: TaskOperation) => {
+      const currentTask = taskRef.current;
+      if (currentTask && !canRunOperation(currentTask, operation, operationContext)) {
+        setNotice(operationRequirementSummary(operationRequirementIssues(currentTask, operation, operationContext), t));
+        return;
+      }
       try {
         await runTaskOperation(taskId, operation);
         await refreshTask();
@@ -143,7 +189,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
         setNotice(errorText(error));
       }
     },
-    [refreshTask, t, taskId],
+    [operationContext, refreshTask, t, taskId],
   );
 
   const cancelTask = useCallback(async () => {
@@ -253,6 +299,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     logs,
     notice,
     openOutputDir,
+    operationContext,
     pickTaskWhisperModel,
     refreshPreview,
     runOperation,

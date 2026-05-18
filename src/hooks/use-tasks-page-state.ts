@@ -2,9 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { defaultSettings } from "@/config";
-import { canRunOperation, errorText, hasTauriRuntime, operationLabel, taskBusy } from "@/lib/app-utils";
+import {
+  canRunOperation,
+  errorText,
+  hasTauriRuntime,
+  operationLabel,
+  operationRequirementIssues,
+  operationRequirementSummary,
+  taskBusy,
+} from "@/lib/app-utils";
 import {
   cancelTask as cancelTaskCommand,
+  checkEnvironment,
   createSrtTask as createSrtTaskCommand,
   createVideoTask as createVideoTaskCommand,
   deleteTask as deleteTaskCommand,
@@ -19,7 +28,7 @@ import {
   selectVideo,
 } from "@/lib/tauri-api";
 import { taskCreatePayload, upsertTask } from "@/lib/task-data";
-import type { QueueSettings, SettingsState, TaskOperation, TaskRecord, TFunction } from "@/types";
+import type { EnvironmentState, QueueSettings, SettingsState, TaskOperation, TaskRecord, TFunction } from "@/types";
 
 import { useAppResume } from "./use-app-resume";
 
@@ -31,12 +40,20 @@ const defaultQueueSettings: QueueSettings = {
 export function useTasksPageState(t: TFunction) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
+  const [env, setEnv] = useState<EnvironmentState | null>(null);
   const [queueSettings, setQueueSettings] = useState<QueueSettings>(defaultQueueSettings);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [outputDir, setOutputDir] = useState("");
   const [notice, setNotice] = useState("");
 
   const tauriReady = hasTauriRuntime();
+  const operationContext = useMemo(
+    () => ({
+      environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
+      hasApiCredential: settings.has_api_key,
+    }),
+    [env?.ffmpeg_path, env?.whisper_path, settings.has_api_key],
+  );
 
   const taskCounts = useMemo(() => {
     let busyCount = 0;
@@ -57,6 +74,15 @@ export function useTasksPageState(t: TFunction) {
     [selectedIds, tasks],
   );
 
+  const selectedRunnableOperations = useMemo(
+    () => ({
+      transcribe: tasks.some((task) => selectedIds.has(task.id) && canRunOperation(task, "transcribe", operationContext)),
+      translate: tasks.some((task) => selectedIds.has(task.id) && canRunOperation(task, "translate", operationContext)),
+      export: tasks.some((task) => selectedIds.has(task.id) && canRunOperation(task, "export", operationContext)),
+    }),
+    [operationContext, selectedIds, tasks],
+  );
+
   const refreshTasks = useCallback(async () => {
     try {
       setTasks(await listTasks());
@@ -69,6 +95,14 @@ export function useTasksPageState(t: TFunction) {
     try {
       const loaded = await loadSettings();
       setSettings({ ...defaultSettings, ...loaded });
+    } catch (error) {
+      setNotice(errorText(error));
+    }
+  }, []);
+
+  const refreshEnvironment = useCallback(async () => {
+    try {
+      setEnv(await checkEnvironment());
     } catch (error) {
       setNotice(errorText(error));
     }
@@ -90,6 +124,7 @@ export function useTasksPageState(t: TFunction) {
 
     void refreshTasks();
     void refreshSettings();
+    void refreshEnvironment();
     void refreshQueueSettings();
 
     let disposed = false;
@@ -130,11 +165,13 @@ export function useTasksPageState(t: TFunction) {
       unlistenTask?.();
       unlistenDeleted?.();
     };
-  }, [refreshQueueSettings, refreshSettings, refreshTasks, t, tauriReady]);
+  }, [refreshEnvironment, refreshQueueSettings, refreshSettings, refreshTasks, t, tauriReady]);
 
   const refreshTasksOnResume = useCallback(() => {
     void refreshTasks();
-  }, [refreshTasks]);
+    void refreshSettings();
+    void refreshEnvironment();
+  }, [refreshEnvironment, refreshSettings, refreshTasks]);
 
   useAppResume(refreshTasksOnResume, tauriReady);
 
@@ -203,6 +240,11 @@ export function useTasksPageState(t: TFunction) {
 
   const runOperation = useCallback(
     async (taskId: string, operation: TaskOperation) => {
+      const task = tasks.find((current) => current.id === taskId);
+      if (task && !canRunOperation(task, operation, operationContext)) {
+        setNotice(operationRequirementSummary(operationRequirementIssues(task, operation, operationContext), t));
+        return;
+      }
       try {
         await runTaskOperation(taskId, operation);
         await refreshTasks();
@@ -211,17 +253,23 @@ export function useTasksPageState(t: TFunction) {
         setNotice(errorText(error));
       }
     },
-    [refreshTasks, t],
+    [operationContext, refreshTasks, t, tasks],
   );
 
   const runSelected = useCallback(
     async (operation: TaskOperation) => {
       const taskIds: string[] = [];
       for (const task of tasks) {
-        if (selectedIds.has(task.id) && canRunOperation(task, operation)) taskIds.push(task.id);
+        if (selectedIds.has(task.id) && canRunOperation(task, operation, operationContext)) taskIds.push(task.id);
       }
       if (taskIds.length === 0) {
-        setNotice(t("notice.noRunnableSelected"));
+        const issues = new Set<ReturnType<typeof operationRequirementIssues>[number]>();
+        for (const task of tasks) {
+          if (!selectedIds.has(task.id)) continue;
+          for (const issue of operationRequirementIssues(task, operation, operationContext)) issues.add(issue);
+        }
+        const requirements = operationRequirementSummary([...issues], t);
+        setNotice(requirements ? t("notice.noRunnableSelectedWithRequirements", { requirements }) : t("notice.noRunnableSelected"));
         return;
       }
       try {
@@ -237,7 +285,7 @@ export function useTasksPageState(t: TFunction) {
         setNotice(errorText(error));
       }
     },
-    [refreshTasks, selectedIds, t, tasks],
+    [operationContext, refreshTasks, selectedIds, t, tasks],
   );
 
   const cancelTask = useCallback(
@@ -301,6 +349,7 @@ export function useTasksPageState(t: TFunction) {
     doneCount: taskCounts.doneCount,
     failedCount: taskCounts.failedCount,
     notice,
+    operationContext,
     outputDir,
     pickOutputDir,
     queueSettings,
@@ -310,6 +359,7 @@ export function useTasksPageState(t: TFunction) {
     saveAutoStartNext,
     saveConcurrency,
     selectedIds,
+    selectedRunnableOperations,
     tasks,
     toggleAll,
     toggleTask,

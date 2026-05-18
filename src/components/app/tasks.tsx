@@ -29,6 +29,9 @@ import {
   canRunOperation,
   fileName,
   formattedTime,
+  operationRequirementIssues,
+  operationRequirementSummary,
+  type OperationReadinessContext,
   progressValue,
   stageText,
   taskBusy,
@@ -74,6 +77,7 @@ function MetricCard({ label, value }: { label: string; value: number }) {
 }
 
 export function TaskToolbar({
+  canRunSelectedOperations,
   outputDir,
   queueSettings,
   t,
@@ -86,6 +90,7 @@ export function TaskToolbar({
   onSaveAutoStartNext,
   onSaveConcurrency,
 }: {
+  canRunSelectedOperations: Record<TaskOperation, boolean>;
   outputDir: string;
   queueSettings: QueueSettings;
   t: Translate;
@@ -139,15 +144,27 @@ export function TaskToolbar({
             />
             <span>{t("task.autoStartNext")}</span>
           </label>
-          <Button variant="secondary" onClick={() => onRunSelected("transcribe")}>
+          <Button
+            variant="secondary"
+            onClick={() => onRunSelected("transcribe")}
+            disabled={!canRunSelectedOperations.transcribe}
+          >
             <Play data-icon="inline-start" />
             {t("common.transcribe")}
           </Button>
-          <Button variant="secondary" onClick={() => onRunSelected("translate")}>
+          <Button
+            variant="secondary"
+            onClick={() => onRunSelected("translate")}
+            disabled={!canRunSelectedOperations.translate}
+          >
             <Languages data-icon="inline-start" />
             {t("common.translate")}
           </Button>
-          <Button variant="secondary" onClick={() => onRunSelected("export")}>
+          <Button
+            variant="secondary"
+            onClick={() => onRunSelected("export")}
+            disabled={!canRunSelectedOperations.export}
+          >
             <Download data-icon="inline-start" />
             {t("common.export")}
           </Button>
@@ -167,6 +184,7 @@ export function TaskToolbar({
 export function TaskQueueTable({
   allSelected,
   locale,
+  operationContext,
   selectedIds,
   tasks,
   t,
@@ -179,6 +197,7 @@ export function TaskQueueTable({
 }: {
   allSelected: boolean;
   locale: Locale;
+  operationContext: OperationReadinessContext;
   selectedIds: Set<string>;
   tasks: TaskRecord[];
   t: Translate;
@@ -225,6 +244,7 @@ export function TaskQueueTable({
                 <TaskQueueRow
                   key={task.id}
                   locale={locale}
+                  operationContext={operationContext}
                   selected={selectedIds.has(task.id)}
                   task={task}
                   t={t}
@@ -245,6 +265,7 @@ export function TaskQueueTable({
 
 const TaskQueueRow = memo(function TaskQueueRow({
   locale,
+  operationContext,
   selected,
   task,
   t,
@@ -255,6 +276,7 @@ const TaskQueueRow = memo(function TaskQueueRow({
   onToggleTask,
 }: {
   locale: Locale;
+  operationContext: OperationReadinessContext;
   selected: boolean;
   task: TaskRecord;
   t: Translate;
@@ -264,6 +286,10 @@ const TaskQueueRow = memo(function TaskQueueRow({
   onRunOperation: OperationHandler;
   onToggleTask: (taskId: string) => void;
 }) {
+  const transcribeIssues = operationRequirementIssues(task, "transcribe", operationContext);
+  const translateIssues = operationRequirementIssues(task, "translate", operationContext);
+  const exportIssues = operationRequirementIssues(task, "export", operationContext);
+
   return (
     <TableRow data-state={taskBusy(task) ? "selected" : undefined}>
       <TableCell className="select-cell">
@@ -298,23 +324,23 @@ const TaskQueueRow = memo(function TaskQueueRow({
       <TableCell>
         <div className="row-actions">
           <IconAction
-            label={t("common.transcribe")}
+            label={transcribeIssues.length ? operationRequirementSummary(transcribeIssues, t) : t("common.transcribe")}
             onClick={() => onRunOperation(task.id, "transcribe")}
-            disabled={!canRunOperation(task, "transcribe")}
+            disabled={!canRunOperation(task, "transcribe", operationContext)}
           >
             <Play />
           </IconAction>
           <IconAction
-            label={t("common.translate")}
+            label={translateIssues.length ? operationRequirementSummary(translateIssues, t) : t("common.translate")}
             onClick={() => onRunOperation(task.id, "translate")}
-            disabled={!canRunOperation(task, "translate")}
+            disabled={!canRunOperation(task, "translate", operationContext)}
           >
             <Languages />
           </IconAction>
           <IconAction
-            label={t("common.export")}
+            label={exportIssues.length ? operationRequirementSummary(exportIssues, t) : t("common.export")}
             onClick={() => onRunOperation(task.id, "export")}
-            disabled={!canRunOperation(task, "export")}
+            disabled={!canRunOperation(task, "export", operationContext)}
           >
             <Download />
           </IconAction>

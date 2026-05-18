@@ -1,6 +1,21 @@
 import type { Locale } from "@/i18n";
 import type { DependencyInstallEvent, ModelDownloadEvent, TaskOperation, TaskRecord, TFunction } from "@/types";
 
+export type OperationRequirementIssue =
+  | "taskBusy"
+  | "unsupportedSource"
+  | "missingSourceSubtitles"
+  | "missingWhisperModel"
+  | "missingEnvironment"
+  | "missingBaseUrl"
+  | "missingTranslationModel"
+  | "missingApiKey";
+
+export type OperationReadinessContext = {
+  environmentReady: boolean;
+  hasApiCredential: boolean;
+};
+
 export function fileName(path?: string | null) {
   if (!path) return "";
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -108,11 +123,58 @@ export function taskBusy(task: TaskRecord) {
   return task.status === "queued" || task.status === "running";
 }
 
-export function canRunOperation(task: TaskRecord, operation: "transcribe" | "translate" | "export") {
-  if (taskBusy(task)) return false;
-  if (operation === "transcribe") return task.source_type === "video";
-  if (operation === "translate") return Boolean(task.source_srt_path);
-  return Boolean(task.source_srt_path);
+function hasConfiguredText(value?: string | null) {
+  return Boolean(value?.trim());
+}
+
+export function operationRequirementIssues(
+  task: TaskRecord,
+  operation: TaskOperation,
+  context: OperationReadinessContext,
+): OperationRequirementIssue[] {
+  if (taskBusy(task)) return ["taskBusy"];
+
+  const issues: OperationRequirementIssue[] = [];
+
+  if (operation === "transcribe") {
+    if (task.source_type !== "video") issues.push("unsupportedSource");
+    if (!hasConfiguredText(task.settings.whisper_model_path)) issues.push("missingWhisperModel");
+    if (!context.environmentReady) issues.push("missingEnvironment");
+    return issues;
+  }
+
+  if (operation === "translate") {
+    if (!hasConfiguredText(task.source_srt_path)) issues.push("missingSourceSubtitles");
+    if (!hasConfiguredText(task.settings.base_url)) issues.push("missingBaseUrl");
+    if (!hasConfiguredText(task.settings.model)) issues.push("missingTranslationModel");
+    if (!context.hasApiCredential) issues.push("missingApiKey");
+    return issues;
+  }
+
+  if (!hasConfiguredText(task.source_srt_path)) issues.push("missingSourceSubtitles");
+  return issues;
+}
+
+export function canRunOperation(task: TaskRecord, operation: TaskOperation, context: OperationReadinessContext) {
+  return operationRequirementIssues(task, operation, context).length === 0;
+}
+
+export function operationRequirementIssueLabel(issue: OperationRequirementIssue, t: TFunction) {
+  const labels: Record<OperationRequirementIssue, string> = {
+    taskBusy: t("requirement.taskBusy"),
+    unsupportedSource: t("requirement.unsupportedSource"),
+    missingSourceSubtitles: t("requirement.missingSourceSubtitles"),
+    missingWhisperModel: t("requirement.missingWhisperModel"),
+    missingEnvironment: t("requirement.missingEnvironment"),
+    missingBaseUrl: t("requirement.missingBaseUrl"),
+    missingTranslationModel: t("requirement.missingTranslationModel"),
+    missingApiKey: t("requirement.missingApiKey"),
+  };
+  return labels[issue];
+}
+
+export function operationRequirementSummary(issues: OperationRequirementIssue[], t: TFunction) {
+  return issues.map((issue) => operationRequirementIssueLabel(issue, t)).join(t("requirement.separator"));
 }
 
 export function formattedTime(seconds: number, locale: Locale) {
@@ -125,5 +187,4 @@ export function operationLabel(operation: "transcribe" | "translate" | "export",
   if (operation === "translate") return t("operation.translate");
   return t("operation.export");
 }
-
 

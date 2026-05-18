@@ -21,6 +21,7 @@ export function TasksPage() {
     doneCount,
     failedCount,
     notice,
+    operationContext,
     outputDir,
     pickOutputDir,
     queueSettings,
@@ -30,6 +31,7 @@ export function TasksPage() {
     saveAutoStartNext,
     saveConcurrency,
     selectedIds,
+    selectedRunnableOperations,
     tasks,
     toggleAll,
     toggleTask,
@@ -48,6 +50,7 @@ export function TasksPage() {
       />
 
       <TaskToolbar
+        canRunSelectedOperations={selectedRunnableOperations}
         outputDir={outputDir}
         queueSettings={queueSettings}
         t={t}
@@ -64,6 +67,7 @@ export function TasksPage() {
       <TaskQueueTable
         allSelected={allSelected}
         locale={locale}
+        operationContext={operationContext}
         selectedIds={selectedIds}
         tasks={tasks}
         t={t}

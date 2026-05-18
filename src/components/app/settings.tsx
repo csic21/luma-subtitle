@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import {
   AlertCircle,
+  BookOpenCheck,
   CheckCircle2,
   Download,
   FolderOpen,
@@ -62,6 +63,16 @@ export function ModelApiSettingsCard({
   setWhisperPresetId: Dispatch<SetStateAction<string>>;
 }) {
   const selectedPresetDownloaded = downloadedWhisperModelFiles.has(selectedWhisperPreset.fileName);
+  const missingWhisperModel = !settings.whisper_model_path.trim();
+  const missingBaseUrl = !settings.base_url.trim();
+  const missingTranslationModel = !settings.model.trim();
+  const missingApiKey = !hasApiCredential;
+  const missingRequiredLabels = [
+    missingWhisperModel ? t("requirement.missingWhisperModel") : "",
+    missingBaseUrl ? t("requirement.missingBaseUrl") : "",
+    missingTranslationModel ? t("requirement.missingTranslationModel") : "",
+    missingApiKey ? t("requirement.missingApiKey") : "",
+  ].filter(Boolean);
 
   return (
     <Card>
@@ -69,7 +80,23 @@ export function ModelApiSettingsCard({
         <SectionTitle icon={<Settings />} title={t("settings.modelApi")} description={t("settings.modelApiDescription")} />
       </CardHeader>
       <CardContent className="settings-form">
-        <FieldBlock label={t("common.whisperModel")}>
+        {missingRequiredLabels.length > 0 && (
+          <Alert className="required-alert">
+            <AlertCircle />
+            <AlertTitle>{t("settings.requiredMissing")}</AlertTitle>
+            <AlertDescription>
+              {t("settings.requiredMissingDescription", {
+                requirements: missingRequiredLabels.join(t("requirement.separator")),
+              })}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <FieldBlock
+          label={t("common.whisperModel")}
+          invalid={missingWhisperModel}
+          description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+        >
           <div className="input-action">
             <Input
               value={settings.whisper_model_path ? fileName(settings.whisper_model_path) : ""}
@@ -77,6 +104,7 @@ export function ModelApiSettingsCard({
               placeholder={selectedWhisperPreset.fileName}
               onClick={onPickWhisperModel}
               title={settings.whisper_model_path || t("settings.selectWhisper")}
+              aria-invalid={missingWhisperModel}
             />
             <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel}>
               <FolderOpen />
@@ -173,22 +201,36 @@ export function ModelApiSettingsCard({
         </div>
 
         <div className="grid-two">
-          <FieldBlock label="Base URL">
+          <FieldBlock
+            label="Base URL"
+            invalid={missingBaseUrl}
+            description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+          >
             <Input
               value={settings.base_url}
               onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value }))}
+              aria-invalid={missingBaseUrl}
             />
           </FieldBlock>
-          <FieldBlock label={t("settings.translationModel")}>
+          <FieldBlock
+            label={t("settings.translationModel")}
+            invalid={missingTranslationModel}
+            description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
+          >
             <Input
               value={settings.model}
               onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
+              aria-invalid={missingTranslationModel}
             />
           </FieldBlock>
         </div>
 
         <div className="grid-two">
-          <FieldBlock label="API Key">
+          <FieldBlock
+            label="API Key"
+            invalid={missingApiKey}
+            description={missingApiKey ? t("settings.requiredForTranslate") : undefined}
+          >
             <div className="key-field">
               <KeyRound />
               <Input
@@ -196,6 +238,7 @@ export function ModelApiSettingsCard({
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
                 placeholder={settings.has_api_key ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
+                aria-invalid={missingApiKey}
               />
             </div>
           </FieldBlock>
@@ -279,6 +322,13 @@ export function EnvironmentSettingsCard({
         </CardAction>
       </CardHeader>
       <CardContent className="stack-panel">
+        {!environmentReady && (
+          <Alert className="required-alert">
+            <AlertCircle />
+            <AlertTitle>{t("env.requiredMissing")}</AlertTitle>
+            <AlertDescription>{t("env.requiredMissingDescription")}</AlertDescription>
+          </Alert>
+        )}
         <div className="env-table">
           {envRows.map(([name, value]) => (
             <div className="env-row" key={name}>
@@ -302,6 +352,48 @@ export function EnvironmentSettingsCard({
           </Button>
         </div>
         {dependencyInstall && <DownloadProgress event={dependencyInstall} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function QuickStartGuideCard({ t }: { t: Translate }) {
+  const steps = [
+    {
+      title: t("guide.stepEnvironmentTitle"),
+      body: t("guide.stepEnvironmentBody"),
+    },
+    {
+      title: t("guide.stepModelTitle"),
+      body: t("guide.stepModelBody"),
+    },
+    {
+      title: t("guide.stepApiTitle"),
+      body: t("guide.stepApiBody"),
+    },
+    {
+      title: t("guide.stepRunTitle"),
+      body: t("guide.stepRunBody"),
+    },
+  ];
+
+  return (
+    <Card className="guide-card">
+      <CardHeader>
+        <SectionTitle icon={<BookOpenCheck />} title={t("guide.section")} description={t("guide.description")} />
+      </CardHeader>
+      <CardContent>
+        <ol className="guide-steps">
+          {steps.map((step, index) => (
+            <li key={step.title}>
+              <span className="guide-index">{index + 1}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <p>{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
       </CardContent>
     </Card>
   );

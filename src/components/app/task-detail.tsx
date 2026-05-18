@@ -27,6 +27,9 @@ import type { Locale, useI18n } from "@/i18n";
 import {
   canRunOperation,
   formattedTime,
+  operationRequirementIssues,
+  operationRequirementSummary,
+  type OperationReadinessContext,
   progressLabel,
   progressValue,
   stageText,
@@ -68,13 +71,19 @@ export function TaskSummaryCard({
   t,
   onCancelTask,
   onRunOperation,
+  operationContext,
 }: {
   locale: Locale;
   task: TaskRecord;
   t: Translate;
   onCancelTask: () => void | Promise<void>;
   onRunOperation: OperationHandler;
+  operationContext: OperationReadinessContext;
 }) {
+  const transcribeIssues = operationRequirementIssues(task, "transcribe", operationContext);
+  const translateIssues = operationRequirementIssues(task, "translate", operationContext);
+  const exportIssues = operationRequirementIssues(task, "export", operationContext);
+
   return (
     <Card>
       <CardHeader>
@@ -102,7 +111,8 @@ export function TaskSummaryCard({
           <Button
             variant="secondary"
             onClick={() => onRunOperation("transcribe")}
-            disabled={!canRunOperation(task, "transcribe")}
+            disabled={!canRunOperation(task, "transcribe", operationContext)}
+            title={transcribeIssues.length ? operationRequirementSummary(transcribeIssues, t) : t("common.transcribe")}
           >
             <Play data-icon="inline-start" />
             {t("common.transcribe")}
@@ -110,12 +120,17 @@ export function TaskSummaryCard({
           <Button
             variant="secondary"
             onClick={() => onRunOperation("translate")}
-            disabled={!canRunOperation(task, "translate")}
+            disabled={!canRunOperation(task, "translate", operationContext)}
+            title={translateIssues.length ? operationRequirementSummary(translateIssues, t) : t("common.translate")}
           >
             <Languages data-icon="inline-start" />
             {t("common.translate")}
           </Button>
-          <Button onClick={() => onRunOperation("export")} disabled={!canRunOperation(task, "export")}>
+          <Button
+            onClick={() => onRunOperation("export")}
+            disabled={!canRunOperation(task, "export", operationContext)}
+            title={exportIssues.length ? operationRequirementSummary(exportIssues, t) : t("common.export")}
+          >
             <Download data-icon="inline-start" />
             {t("common.export")}
           </Button>
@@ -134,11 +149,13 @@ export function TaskProgressCard({
   t,
   onOpenOutputDir,
   onRunOperation,
+  operationContext,
 }: {
   task: TaskRecord;
   t: Translate;
   onOpenOutputDir: () => void | Promise<void>;
   onRunOperation: OperationHandler;
+  operationContext: OperationReadinessContext;
 }) {
   const statusIcon: ReactNode =
     task.status === "completed" || task.status === "exported" ? (
@@ -165,7 +182,7 @@ export function TaskProgressCard({
         <Progress className="hotdog-progress large" value={progressValue(task.progress)} />
         {(task.source_file_name || task.translated_file_name) && (
           <div className="outputs">
-            <Button onClick={() => onRunOperation("export")} disabled={!canRunOperation(task, "export")}>
+            <Button onClick={() => onRunOperation("export")} disabled={!canRunOperation(task, "export", operationContext)}>
               <Download data-icon="inline-start" />
               {t("common.exportSubtitles")}
             </Button>
