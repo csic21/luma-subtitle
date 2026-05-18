@@ -14,6 +14,7 @@ use tokio::{io::AsyncReadExt, process::Command, time::sleep};
 use crate::{
     dependencies::ensure_whisper_vad_model,
     paths::locate_binary,
+    process_utils::hide_tokio_command_window,
     settings::normalize_language,
     state::{ensure_not_cancelled, JobError, JobResult},
 };
@@ -132,6 +133,7 @@ async fn run_process(
     cancel: Arc<AtomicBool>,
     failure_context: &str,
 ) -> JobResult<()> {
+    hide_tokio_command_window(&mut command);
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::piped());

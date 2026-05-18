@@ -1,3 +1,4 @@
+use crate::process_utils::windows_create_no_window_flag;
 use crate::settings::normalize_language;
 use crate::state::JobError;
 use crate::subtitles::{
@@ -24,6 +25,11 @@ fn normalizes_whisper_language_choices() {
     assert_eq!(normalize_language("自动检测"), "auto");
     assert_eq!(normalize_language("简体中文"), "zh");
     assert_eq!(normalize_language("English"), "en");
+}
+
+#[test]
+fn uses_windows_create_no_window_flag_for_child_processes() {
+    assert_eq!(windows_create_no_window_flag(), 0x08000000);
 }
 
 #[test]

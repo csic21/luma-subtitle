@@ -7,6 +7,8 @@ use tauri::{AppHandle, State};
 
 #[cfg(not(target_os = "macos"))]
 use crate::paths::sidecars_dir;
+#[cfg(not(target_os = "macos"))]
+use crate::process_utils::hide_std_command_window;
 use crate::{
     paths::{is_existing_file, locate_binary, path_to_string, whisper_models_dir},
     state::AppState,
@@ -461,7 +463,9 @@ fn select_whisper_cpp_asset_name(
 
 #[cfg(not(target_os = "macos"))]
 fn has_nvidia_gpu() -> bool {
-    std::process::Command::new("nvidia-smi")
+    let mut command = std::process::Command::new("nvidia-smi");
+    hide_std_command_window(&mut command);
+    command
         .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
         .output()
         .ok()

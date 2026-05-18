@@ -1,6 +1,8 @@
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
+#[cfg(not(target_os = "macos"))]
+use crate::process_utils::hide_std_command_window;
 use crate::{
     dependencies::downloaded_whisper_model_files,
     paths::{display_path_to_string, locate_binary, managed_dir},
@@ -74,7 +76,9 @@ fn gpu_info() -> (Option<String>, Option<String>) {
 
 #[cfg(not(target_os = "macos"))]
 fn gpu_info() -> (Option<String>, Option<String>) {
-    let output = std::process::Command::new("nvidia-smi")
+    let mut command = std::process::Command::new("nvidia-smi");
+    hide_std_command_window(&mut command);
+    let output = command
         .args([
             "--query-gpu=name,driver_version",
             "--format=csv,noheader,nounits",

@@ -169,8 +169,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
 
   const refreshTaskOnResume = useCallback(() => {
     void refreshTask({ preview: false });
-    void refreshRunPrerequisites();
-  }, [refreshRunPrerequisites, refreshTask]);
+  }, [refreshTask]);
 
   useAppResume(refreshTaskOnResume, Boolean(taskId && tauriReady));
 

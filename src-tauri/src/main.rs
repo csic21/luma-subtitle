@@ -6,6 +6,7 @@ mod environment;
 mod job_events;
 mod jobs;
 mod paths;
+mod process_utils;
 mod settings;
 mod state;
 mod subtitles;
