@@ -8,6 +8,10 @@ It is built for individual creators, course editors, interview workflows, and mu
 
 The macOS build targets Apple Silicon. Automatic FFmpeg and whisper.cpp builds require macOS 11.0 or later, Xcode Command Line Tools, and `cmake`; whisper.cpp is built with the Metal backend.
 
+## Screenshot
+
+![Luma Subtitle homepage](screenshots/homepage.jpg)
+
 ## Features
 
 - Video import and task management: choose video files, output folders, source language, target language, and translation settings.

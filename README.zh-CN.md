@@ -8,6 +8,10 @@ Luma Subtitle 是一款桌面端视频字幕生成与翻译工具。导入视频
 
 macOS 版本面向 Apple Silicon 设备。自动编译 FFmpeg 和 whisper.cpp 需要 macOS 11.0 或更高版本、Xcode Command Line Tools 和 `cmake`；whisper.cpp 会以 Metal 后端构建。
 
+## 项目效果
+
+![Luma Subtitle 首页](screenshots/homepage.jpg)
+
 ## 核心能力
 
 - 视频导入与任务管理：选择视频、输出目录、源语言、目标语言和翻译配置后启动任务。
