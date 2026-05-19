@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
   DownloadStatus,
@@ -34,6 +35,8 @@ type TaskSettingsUpdatePayload = {
   temperature: number;
   translation_shard_size: number;
 };
+
+const videoExtensions = ["mp4", "mkv", "mov", "avi", "webm", "m4v"];
 
 export function listTasks() {
   return invoke<TaskRecord[]>("list_tasks");
@@ -71,7 +74,10 @@ export function selectOutputDir() {
 }
 
 export function selectVideo() {
-  return invoke<string | null>("select_video");
+  return open({
+    multiple: false,
+    filters: [{ name: "Video", extensions: videoExtensions }],
+  }).then((picked) => (typeof picked === "string" ? picked : null));
 }
 
 export function selectSrt() {
