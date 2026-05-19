@@ -159,3 +159,7 @@ Before committing, make sure you do not include:
 - `.env`, `.env.*`, private keys, certificates, tokens, or real API keys.
 - `node_modules/`, `dist/`, or `src-tauri/target/`.
 - Local development logs, layout-check screenshots, Whisper models, or FFmpeg/whisper binaries.
+
+## License
+
+Luma Subtitle is licensed under the GNU General Public License v3.0 or later. See [LICENSE](LICENSE) for details.

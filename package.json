@@ -1,6 +1,7 @@
 {
   "name": "luma-subtitle",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "version": "1.0.7",
   "type": "module",
   "packageManager": "pnpm@9.9.0",

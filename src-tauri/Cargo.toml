@@ -3,6 +3,7 @@ name = "luma-subtitle"
 version = "1.0.7"
 description = "Local video transcription, translation, and SRT export."
 authors = ["Luma Subtitle"]
+license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.80"
 build = "build.rs"

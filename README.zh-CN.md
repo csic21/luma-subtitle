@@ -159,3 +159,7 @@ https://github.com/csic21/luma-subtitle/releases/latest/download/latest.json
 - 不提交 `.env`、`.env.*`、私钥、证书、token 或真实 API Key。
 - 不提交 `node_modules/`、`dist/`、`src-tauri/target/`。
 - 不提交本地开发日志、布局检查截图、Whisper 模型和 FFmpeg/whisper 二进制。
+
+## 开源协议
+
+Luma Subtitle 使用 GNU General Public License v3.0 or later 授权。详情见 [LICENSE](LICENSE)。
