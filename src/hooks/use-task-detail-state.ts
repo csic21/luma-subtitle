@@ -56,6 +56,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const [subtitleView, setSubtitleView] = useState<SubtitleView>("source");
   const [notice, setNotice] = useState("");
   const taskRef = useRef<TaskRecord | null>(null);
+  taskRef.current = task;
 
   const tauriReady = hasTauriRuntime();
   const operationContext = useMemo(
@@ -65,10 +66,6 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     }),
     [env?.ffmpeg_path, env?.whisper_path, globalSettings?.has_api_key],
   );
-
-  useEffect(() => {
-    taskRef.current = task;
-  }, [task]);
 
   const refreshLogs = useCallback(async () => {
     try {

@@ -62,6 +62,8 @@ export function useTasksPageState(t: TFunction) {
   const [notice, setNotice] = useState("");
   const tasksRef = useRef(tasks);
   const selectedIdsRef = useRef(selectedIds);
+  tasksRef.current = tasks;
+  selectedIdsRef.current = selectedIds;
 
   const tauriReady = hasTauriRuntime();
   const operationContext = useMemo(
@@ -99,14 +101,6 @@ export function useTasksPageState(t: TFunction) {
     }),
     [operationContext, selectedIds, tasks],
   );
-
-  useEffect(() => {
-    tasksRef.current = tasks;
-  }, [tasks]);
-
-  useEffect(() => {
-    selectedIdsRef.current = selectedIds;
-  }, [selectedIds]);
 
   const refreshTasks = useCallback(async () => {
     try {

@@ -3,9 +3,7 @@ import { useEffect, useRef } from "react";
 export function useAppResume(onResume: () => void, enabled = true) {
   const onResumeRef = useRef(onResume);
 
-  useEffect(() => {
-    onResumeRef.current = onResume;
-  }, [onResume]);
+  onResumeRef.current = onResume;
 
   useEffect(() => {
     if (!enabled) return;

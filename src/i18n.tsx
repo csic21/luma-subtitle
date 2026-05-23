@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import i18n from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
@@ -38,6 +38,24 @@ function translate(key: string, values: TranslationValues | undefined, locale: L
   return interpolate(template, values);
 }
 
+function currentLocale() {
+  return normalizeLocale(i18n.resolvedLanguage ?? i18n.language);
+}
+
+function subscribeLocale(onStoreChange: () => void) {
+  i18n.on("languageChanged", onStoreChange);
+  i18n.on("loaded", onStoreChange);
+
+  return () => {
+    i18n.off("languageChanged", onStoreChange);
+    i18n.off("loaded", onStoreChange);
+  };
+}
+
+function useLocale() {
+  return useSyncExternalStore(subscribeLocale, currentLocale, currentLocale);
+}
+
 void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
@@ -67,22 +85,7 @@ void i18n
   });
 
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocale] = useState(() => normalizeLocale(i18n.resolvedLanguage ?? i18n.language));
-
-  useEffect(() => {
-    const updateLocale = () => {
-      setLocale(normalizeLocale(i18n.resolvedLanguage ?? i18n.language));
-    };
-
-    i18n.on("languageChanged", updateLocale);
-    i18n.on("loaded", updateLocale);
-    updateLocale();
-
-    return () => {
-      i18n.off("languageChanged", updateLocale);
-      i18n.off("loaded", updateLocale);
-    };
-  }, []);
+  const locale = useLocale();
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -92,22 +95,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 }
 
 export function useI18n() {
-  const [locale, setLocaleState] = useState(() => normalizeLocale(i18n.resolvedLanguage ?? i18n.language));
-
-  useEffect(() => {
-    const updateLocale = () => {
-      setLocaleState(normalizeLocale(i18n.resolvedLanguage ?? i18n.language));
-    };
-
-    i18n.on("languageChanged", updateLocale);
-    i18n.on("loaded", updateLocale);
-    updateLocale();
-
-    return () => {
-      i18n.off("languageChanged", updateLocale);
-      i18n.off("loaded", updateLocale);
-    };
-  }, []);
+  const locale = useLocale();
 
   const setLocale = useCallback((nextLocale: Locale) => {
     void i18n.changeLanguage(nextLocale);

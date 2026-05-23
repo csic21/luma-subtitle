@@ -20,7 +20,19 @@ import {
   saveSettings as saveSettingsCommand,
   selectWhisperModel,
 } from "@/lib/tauri-api";
-import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState, TFunction } from "@/types";
+import type {
+  AppUpdateState,
+  DependencyInstallEvent,
+  DownloadStatus,
+  EnvironmentState,
+  ModelDownloadEvent,
+  SettingsState,
+  TFunction,
+} from "@/types";
+
+function downloadStatusRunning(status: DownloadStatus | null | undefined) {
+  return status?.model?.status === "running" || status?.dependency?.status === "running";
+}
 
 export function useSettingsPageState(t: TFunction) {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -36,6 +48,8 @@ export function useSettingsPageState(t: TFunction) {
     progress: 0,
   });
   const availableUpdateRef = useRef<AvailableAppUpdate | null>(null);
+  const autoCheckedUpdatesRef = useRef(false);
+  const downloadStatusTimerRef = useRef<number | null>(null);
 
   const selectedWhisperPreset = useMemo(
     () => whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0],
@@ -91,178 +105,35 @@ export function useSettingsPageState(t: TFunction) {
     }
   }, []);
 
+  const stopDownloadStatusPolling = useCallback(() => {
+    if (downloadStatusTimerRef.current === null) return;
+    window.clearInterval(downloadStatusTimerRef.current);
+    downloadStatusTimerRef.current = null;
+  }, []);
+
   const refreshDownloadStatus = useCallback(async () => {
     try {
       const status = await downloadStatus();
       if (status.model) setModelDownload(status.model);
       if (status.dependency) setDependencyInstall(status.dependency);
+      return status;
     } catch {
       // Event updates still work if polling is unavailable in an older backend.
+      return null;
     }
   }, []);
 
-  useEffect(() => {
-    if (!tauriReady) {
-      setNotice(t("notice.requireTauriConfig"));
-      return;
-    }
+  const refreshDownloadStatusAndStopWhenIdle = useCallback(async () => {
+    const status = await refreshDownloadStatus();
+    if (!downloadStatusRunning(status)) stopDownloadStatusPolling();
+  }, [refreshDownloadStatus, stopDownloadStatusPolling]);
 
-    void refreshSettings();
-    void refreshEnvironment();
-    void refreshDownloadStatus();
-    void refreshAppVersion();
-
-    let disposed = false;
-    let unlistenModelDownload: (() => void) | undefined;
-    let unlistenDependencyInstall: (() => void) | undefined;
-
-    listen<ModelDownloadEvent>("model-download-event", (event) => {
-      setModelDownload(event.payload);
-      if (event.payload.status === "failed") setNotice(event.payload.error ?? event.payload.message);
-    }).then((fn) => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unlistenModelDownload = fn;
-    });
-
-    listen<DependencyInstallEvent>("dependency-install-event", (event) => {
-      setDependencyInstall(event.payload);
-      if (event.payload.status === "failed") setNotice(event.payload.error ?? event.payload.message);
-    }).then((fn) => {
-      if (disposed) {
-        fn();
-        return;
-      }
-      unlistenDependencyInstall = fn;
-    });
-
-    return () => {
-      disposed = true;
-      unlistenModelDownload?.();
-      unlistenDependencyInstall?.();
-    };
-  }, [refreshAppVersion, refreshDownloadStatus, refreshEnvironment, refreshSettings, t, tauriReady]);
-
-  useEffect(() => {
-    if (!modelDownloading && !dependencyInstalling) return;
-    const timer = window.setInterval(() => {
-      void refreshDownloadStatus();
+  const startDownloadStatusPolling = useCallback(() => {
+    if (downloadStatusTimerRef.current !== null) return;
+    downloadStatusTimerRef.current = window.setInterval(() => {
+      void refreshDownloadStatusAndStopWhenIdle();
     }, 1000);
-    return () => window.clearInterval(timer);
-  }, [dependencyInstalling, modelDownloading, refreshDownloadStatus]);
-
-  const saveSettings = useCallback(
-    async (showNotice = true) => {
-      try {
-        const saved = await saveSettingsCommand({
-          ...settings,
-          api_key: apiKey,
-        });
-        setSettings(saved);
-        if (showNotice) setNotice(t("notice.settingsSaved"));
-      } catch (error) {
-        if (showNotice) setNotice(t("error.saveSettings", { error: errorText(error) }));
-        throw error;
-      }
-    },
-    [apiKey, settings, t],
-  );
-
-  const pickWhisperModel = useCallback(async () => {
-    try {
-      const picked = await selectWhisperModel();
-      if (picked) setSettings((current) => ({ ...current, whisper_model_path: picked }));
-    } catch (error) {
-      setNotice(t("error.pickWhisperModel", { error: errorText(error) }));
-    }
-  }, [t]);
-
-  const downloadWhisperPreset = useCallback(async () => {
-    setNotice("");
-    setModelDownload({
-      preset_id: selectedWhisperPreset.id,
-      file_name: selectedWhisperPreset.fileName,
-      status: "running",
-      message: t("download.modelPreparing"),
-      progress: 0,
-    });
-
-    try {
-      const modelPath = await downloadWhisperModel(selectedWhisperPreset.id);
-      const nextSettings = { ...settings, whisper_model_path: modelPath };
-      setSettings(nextSettings);
-      const saved = await saveSettingsCommand({
-        ...nextSettings,
-        api_key: apiKey,
-      });
-      setSettings(saved);
-      setModelDownload((current) => ({
-        ...(current ?? {}),
-        preset_id: selectedWhisperPreset.id,
-        file_name: selectedWhisperPreset.fileName,
-        status: "completed",
-        message: t("download.completed"),
-        progress: 1,
-        path: modelPath,
-        error: null,
-      }));
-      await refreshEnvironment();
-      setNotice(t("notice.downloadedAndSelected", { fileName: fileName(modelPath) }));
-    } catch (error) {
-      setModelDownload((current) =>
-        current
-          ? {
-              ...current,
-              status: "failed",
-              message: t("download.failed"),
-              progress: 0,
-              error: String(error),
-            }
-          : null,
-      );
-      setNotice(String(error));
-    }
-  }, [apiKey, refreshEnvironment, selectedWhisperPreset, settings, t]);
-
-  const installDependencies = useCallback(async () => {
-    setNotice("");
-    setDependencyInstall({
-      item: t("download.dependencyItem"),
-      status: "running",
-      message: t("download.dependencyPreparing"),
-      progress: 0,
-    });
-
-    try {
-      const installedPaths = await installDependenciesCommand();
-      await refreshEnvironment();
-      setDependencyInstall((current) => ({
-        item: current?.item ?? t("download.dependencyItem"),
-        ...(current ?? {}),
-        status: "completed",
-        message: t("download.dependencyCompleted"),
-        progress: 1,
-        path: installedPaths[installedPaths.length - 1] ?? current?.path ?? null,
-        error: null,
-      }));
-      setNotice(t("notice.depsInstalled"));
-    } catch (error) {
-      setDependencyInstall((current) =>
-        current
-          ? {
-              ...current,
-              status: "failed",
-              message: t("download.dependencyFailed"),
-              progress: 0,
-              error: String(error),
-            }
-          : null,
-      );
-      setNotice(String(error));
-    }
-  }, [refreshEnvironment, t]);
+  }, [refreshDownloadStatusAndStopWhenIdle]);
 
   const checkForUpdates = useCallback(async () => {
     if (!tauriReady) {
@@ -325,6 +196,182 @@ export function useSettingsPageState(t: TFunction) {
       setNotice(t("update.checkFailed", { error: message }));
     }
   }, [t, tauriReady]);
+
+  useEffect(() => {
+    if (!tauriReady) {
+      setNotice(t("notice.requireTauriConfig"));
+      return;
+    }
+
+    void refreshSettings();
+    void refreshEnvironment();
+    void refreshDownloadStatus().then((status) => {
+      if (downloadStatusRunning(status)) startDownloadStatusPolling();
+    });
+    void refreshAppVersion();
+    if (!autoCheckedUpdatesRef.current) {
+      autoCheckedUpdatesRef.current = true;
+      void checkForUpdates();
+    }
+
+    let disposed = false;
+    let unlistenModelDownload: (() => void) | undefined;
+    let unlistenDependencyInstall: (() => void) | undefined;
+
+    listen<ModelDownloadEvent>("model-download-event", (event) => {
+      setModelDownload(event.payload);
+      if (event.payload.status === "running") startDownloadStatusPolling();
+      if (event.payload.status === "failed") setNotice(event.payload.error ?? event.payload.message);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenModelDownload = fn;
+    });
+
+    listen<DependencyInstallEvent>("dependency-install-event", (event) => {
+      setDependencyInstall(event.payload);
+      if (event.payload.status === "running") startDownloadStatusPolling();
+      if (event.payload.status === "failed") setNotice(event.payload.error ?? event.payload.message);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlistenDependencyInstall = fn;
+    });
+
+    return () => {
+      disposed = true;
+      stopDownloadStatusPolling();
+      unlistenModelDownload?.();
+      unlistenDependencyInstall?.();
+    };
+  }, [
+    checkForUpdates,
+    refreshAppVersion,
+    refreshDownloadStatus,
+    refreshEnvironment,
+    refreshSettings,
+    startDownloadStatusPolling,
+    stopDownloadStatusPolling,
+    t,
+    tauriReady,
+  ]);
+
+  const saveSettings = useCallback(
+    async (showNotice = true) => {
+      try {
+        const saved = await saveSettingsCommand({
+          ...settings,
+          api_key: apiKey,
+        });
+        setSettings(saved);
+        if (showNotice) setNotice(t("notice.settingsSaved"));
+      } catch (error) {
+        if (showNotice) setNotice(t("error.saveSettings", { error: errorText(error) }));
+        throw error;
+      }
+    },
+    [apiKey, settings, t],
+  );
+
+  const pickWhisperModel = useCallback(async () => {
+    try {
+      const picked = await selectWhisperModel();
+      if (picked) setSettings((current) => ({ ...current, whisper_model_path: picked }));
+    } catch (error) {
+      setNotice(t("error.pickWhisperModel", { error: errorText(error) }));
+    }
+  }, [t]);
+
+  const downloadWhisperPreset = useCallback(async () => {
+    setNotice("");
+    setModelDownload({
+      preset_id: selectedWhisperPreset.id,
+      file_name: selectedWhisperPreset.fileName,
+      status: "running",
+      message: t("download.modelPreparing"),
+      progress: 0,
+    });
+    startDownloadStatusPolling();
+
+    try {
+      const modelPath = await downloadWhisperModel(selectedWhisperPreset.id);
+      const nextSettings = { ...settings, whisper_model_path: modelPath };
+      setSettings(nextSettings);
+      const saved = await saveSettingsCommand({
+        ...nextSettings,
+        api_key: apiKey,
+      });
+      setSettings(saved);
+      setModelDownload((current) => ({
+        ...(current ?? {}),
+        preset_id: selectedWhisperPreset.id,
+        file_name: selectedWhisperPreset.fileName,
+        status: "completed",
+        message: t("download.completed"),
+        progress: 1,
+        path: modelPath,
+        error: null,
+      }));
+      await refreshEnvironment();
+      setNotice(t("notice.downloadedAndSelected", { fileName: fileName(modelPath) }));
+    } catch (error) {
+      setModelDownload((current) =>
+        current
+          ? {
+              ...current,
+              status: "failed",
+              message: t("download.failed"),
+              progress: 0,
+              error: String(error),
+            }
+          : null,
+      );
+      setNotice(String(error));
+    }
+  }, [apiKey, refreshEnvironment, selectedWhisperPreset, settings, startDownloadStatusPolling, t]);
+
+  const installDependencies = useCallback(async () => {
+    setNotice("");
+    setDependencyInstall({
+      item: t("download.dependencyItem"),
+      status: "running",
+      message: t("download.dependencyPreparing"),
+      progress: 0,
+    });
+    startDownloadStatusPolling();
+
+    try {
+      const installedPaths = await installDependenciesCommand();
+      await refreshEnvironment();
+      setDependencyInstall((current) => ({
+        item: current?.item ?? t("download.dependencyItem"),
+        ...(current ?? {}),
+        status: "completed",
+        message: t("download.dependencyCompleted"),
+        progress: 1,
+        path: installedPaths[installedPaths.length - 1] ?? current?.path ?? null,
+        error: null,
+      }));
+      setNotice(t("notice.depsInstalled"));
+    } catch (error) {
+      setDependencyInstall((current) =>
+        current
+          ? {
+              ...current,
+              status: "failed",
+              message: t("download.dependencyFailed"),
+              progress: 0,
+              error: String(error),
+            }
+          : null,
+      );
+      setNotice(String(error));
+    }
+  }, [refreshEnvironment, startDownloadStatusPolling, t]);
 
   const installUpdate = useCallback(async () => {
     if (!availableUpdateRef.current) {
