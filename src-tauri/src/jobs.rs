@@ -206,7 +206,7 @@ pub(crate) async fn create_srt_task(
 }
 
 #[tauri::command]
-pub(crate) fn delete_task(
+pub(crate) async fn delete_task(
     app: AppHandle,
     state: State<'_, AppState>,
     task_id: String,
@@ -216,10 +216,24 @@ pub(crate) fn delete_task(
         cancel.store(true, Ordering::SeqCst);
         return Err("任务正在运行，已请求取消，请停止后再删除".to_string());
     }
-    task_db::delete_task(&app, &task_id)?;
+
+    let delete_app = app.clone();
+    let delete_task_id = task_id.clone();
+    let deleted_task = tauri::async_runtime::spawn_blocking(move || {
+        task_db::delete_task(&delete_app, &delete_task_id)
+    })
+    .await
+    .map_err(|error| format!("删除任务记录失败: {error}"))??;
+
     state.subtitle_results.lock().remove(&task_id);
     state.job_events.lock().remove(&task_id);
     state.job_logs.lock().remove(&task_id);
+
+    let cleanup_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = task_db::cleanup_task_artifacts(&cleanup_app, &deleted_task);
+    });
+
     Ok(())
 }
 

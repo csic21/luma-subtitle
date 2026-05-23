@@ -26,7 +26,6 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Locale, useI18n } from "@/i18n";
 import {
-  canRunOperation,
   fileName,
   formattedTime,
   operationRequirementIssues,
@@ -289,6 +288,9 @@ const TaskQueueRow = memo(function TaskQueueRow({
   const transcribeIssues = operationRequirementIssues(task, "transcribe", operationContext);
   const translateIssues = operationRequirementIssues(task, "translate", operationContext);
   const exportIssues = operationRequirementIssues(task, "export", operationContext);
+  const canTranscribe = transcribeIssues.length === 0;
+  const canTranslate = translateIssues.length === 0;
+  const canExport = exportIssues.length === 0;
 
   return (
     <TableRow data-state={taskBusy(task) ? "selected" : undefined}>
@@ -326,21 +328,21 @@ const TaskQueueRow = memo(function TaskQueueRow({
           <IconAction
             label={transcribeIssues.length ? operationRequirementSummary(transcribeIssues, t) : t("common.transcribe")}
             onClick={() => onRunOperation(task.id, "transcribe")}
-            disabled={!canRunOperation(task, "transcribe", operationContext)}
+            disabled={!canTranscribe}
           >
             <Play />
           </IconAction>
           <IconAction
             label={translateIssues.length ? operationRequirementSummary(translateIssues, t) : t("common.translate")}
             onClick={() => onRunOperation(task.id, "translate")}
-            disabled={!canRunOperation(task, "translate", operationContext)}
+            disabled={!canTranslate}
           >
             <Languages />
           </IconAction>
           <IconAction
             label={exportIssues.length ? operationRequirementSummary(exportIssues, t) : t("common.export")}
             onClick={() => onRunOperation(task.id, "export")}
-            disabled={!canRunOperation(task, "export", operationContext)}
+            disabled={!canExport}
           >
             <Download />
           </IconAction>

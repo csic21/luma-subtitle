@@ -103,6 +103,14 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
             value TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS task_artifact_cleanups (
+            task_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            last_error TEXT,
+            PRIMARY KEY(task_id, path)
+        );
         INSERT OR IGNORE INTO queue_settings(key, value) VALUES('max_concurrency', '2');
         INSERT OR IGNORE INTO queue_settings(key, value) VALUES('auto_start_next', 'false');
         ",

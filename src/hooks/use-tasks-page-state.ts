@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { defaultSettings } from "@/config";
@@ -37,6 +37,19 @@ const defaultQueueSettings: QueueSettings = {
   auto_start_next: false,
 };
 
+function removeTask(tasks: TaskRecord[], taskId: string) {
+  const index = tasks.findIndex((task) => task.id === taskId);
+  if (index === -1) return tasks;
+  return [...tasks.slice(0, index), ...tasks.slice(index + 1)];
+}
+
+function removeSelectedId(selectedIds: Set<string>, taskId: string) {
+  if (!selectedIds.has(taskId)) return selectedIds;
+  const next = new Set(selectedIds);
+  next.delete(taskId);
+  return next;
+}
+
 export function useTasksPageState(t: TFunction) {
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -45,6 +58,8 @@ export function useTasksPageState(t: TFunction) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [outputDir, setOutputDir] = useState("");
   const [notice, setNotice] = useState("");
+  const tasksRef = useRef(tasks);
+  const selectedIdsRef = useRef(selectedIds);
 
   const tauriReady = hasTauriRuntime();
   const operationContext = useMemo(
@@ -82,6 +97,14 @@ export function useTasksPageState(t: TFunction) {
     }),
     [operationContext, selectedIds, tasks],
   );
+
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
+
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
 
   const refreshTasks = useCallback(async () => {
     try {
@@ -146,12 +169,8 @@ export function useTasksPageState(t: TFunction) {
     });
 
     listen<string>("task-deleted", (event) => {
-      setTasks((current) => current.filter((task) => task.id !== event.payload));
-      setSelectedIds((current) => {
-        const next = new Set(current);
-        next.delete(event.payload);
-        return next;
-      });
+      setTasks((current) => removeTask(current, event.payload));
+      setSelectedIds((current) => removeSelectedId(current, event.payload));
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -242,7 +261,7 @@ export function useTasksPageState(t: TFunction) {
 
   const runOperation = useCallback(
     async (taskId: string, operation: TaskOperation) => {
-      const task = tasks.find((current) => current.id === taskId);
+      const task = tasksRef.current.find((current) => current.id === taskId);
       if (task && !canRunOperation(task, operation, operationContext)) {
         setNotice(operationRequirementSummary(operationRequirementIssues(task, operation, operationContext), t));
         return;
@@ -255,19 +274,21 @@ export function useTasksPageState(t: TFunction) {
         setNotice(errorText(error));
       }
     },
-    [operationContext, refreshTasks, t, tasks],
+    [operationContext, refreshTasks, t],
   );
 
   const runSelected = useCallback(
     async (operation: TaskOperation) => {
+      const currentTasks = tasksRef.current;
+      const currentSelectedIds = selectedIdsRef.current;
       const taskIds: string[] = [];
-      for (const task of tasks) {
-        if (selectedIds.has(task.id) && canRunOperation(task, operation, operationContext)) taskIds.push(task.id);
+      for (const task of currentTasks) {
+        if (currentSelectedIds.has(task.id) && canRunOperation(task, operation, operationContext)) taskIds.push(task.id);
       }
       if (taskIds.length === 0) {
         const issues = new Set<ReturnType<typeof operationRequirementIssues>[number]>();
-        for (const task of tasks) {
-          if (!selectedIds.has(task.id)) continue;
+        for (const task of currentTasks) {
+          if (!currentSelectedIds.has(task.id)) continue;
           for (const issue of operationRequirementIssues(task, operation, operationContext)) issues.add(issue);
         }
         const requirements = operationRequirementSummary([...issues], t);
@@ -287,7 +308,7 @@ export function useTasksPageState(t: TFunction) {
         setNotice(errorText(error));
       }
     },
-    [operationContext, refreshTasks, selectedIds, t, tasks],
+    [operationContext, refreshTasks, t],
   );
 
   const cancelTask = useCallback(
@@ -303,22 +324,20 @@ export function useTasksPageState(t: TFunction) {
   );
 
   const cancelSelected = useCallback(async () => {
+    const currentTasks = tasksRef.current;
+    const currentSelectedIds = selectedIdsRef.current;
     const taskIds: string[] = [];
-    for (const task of tasks) {
-      if (selectedIds.has(task.id) && taskBusy(task)) taskIds.push(task.id);
+    for (const task of currentTasks) {
+      if (currentSelectedIds.has(task.id) && taskBusy(task)) taskIds.push(task.id);
     }
     await Promise.all(taskIds.map((taskId) => cancelTask(taskId)));
-  }, [cancelTask, selectedIds, tasks]);
+  }, [cancelTask]);
 
   const deleteTask = useCallback(async (taskId: string) => {
     try {
       await deleteTaskCommand(taskId);
-      setTasks((current) => current.filter((task) => task.id !== taskId));
-      setSelectedIds((current) => {
-        const next = new Set(current);
-        next.delete(taskId);
-        return next;
-      });
+      setTasks((current) => removeTask(current, taskId));
+      setSelectedIds((current) => removeSelectedId(current, taskId));
     } catch (error) {
       setNotice(errorText(error));
     }
@@ -335,10 +354,11 @@ export function useTasksPageState(t: TFunction) {
 
   const toggleAll = useCallback(() => {
     setSelectedIds((current) => {
-      if (tasks.length > 0 && tasks.every((task) => current.has(task.id))) return new Set();
-      return new Set(tasks.map((task) => task.id));
+      const currentTasks = tasksRef.current;
+      if (currentTasks.length > 0 && currentTasks.every((task) => current.has(task.id))) return new Set();
+      return new Set(currentTasks.map((task) => task.id));
     });
-  }, [tasks]);
+  }, []);
 
   return {
     allSelected,

@@ -1,6 +1,8 @@
 use rusqlite::{params, OptionalExtension};
 use std::{
+    collections::HashSet,
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -28,7 +30,16 @@ use schema::{app_data_dir, connection, task_from_row};
 
 pub(crate) fn init(app: &AppHandle) -> Result<(), String> {
     let _ = connection(app)?;
-    mark_interrupted_tasks(app)
+    mark_interrupted_tasks(app)?;
+
+    let cleanup_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = cleanup_orphan_task_artifacts(&cleanup_app) {
+            log_cleanup_error(&cleanup_app, "startup", &error);
+        }
+    });
+
+    Ok(())
 }
 
 pub(crate) fn list_tasks(app: &AppHandle) -> Result<Vec<TaskRecord>, String> {
@@ -102,16 +113,19 @@ pub(crate) fn insert_task(app: &AppHandle, record: &TaskRecord) -> Result<TaskRe
     require_task(app, &record.id)
 }
 
-pub(crate) fn delete_task(app: &AppHandle, task_id: &str) -> Result<(), String> {
+pub(crate) fn delete_task(app: &AppHandle, task_id: &str) -> Result<TaskRecord, String> {
     let task = require_task(app, task_id)?;
-    cleanup_task_artifacts(app, &task)?;
-    let conn = connection(app)?;
-    conn.execute("DELETE FROM task_logs WHERE task_id = ?1", params![task_id])
+    let cleanup_dirs = task_artifact_dirs(app, &task)?;
+    let mut conn = connection(app)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    queue_artifact_cleanup_paths_in_tx(&tx, task_id, &cleanup_dirs)?;
+    tx.execute("DELETE FROM task_logs WHERE task_id = ?1", params![task_id])
         .map_err(|error| error.to_string())?;
-    conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
+    tx.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
         .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
     let _ = app.emit("task-deleted", task_id.to_string());
-    Ok(())
+    Ok(task)
 }
 
 pub(crate) fn task_logs(app: &AppHandle, task_id: &str) -> Result<Vec<String>, String> {
@@ -157,37 +171,275 @@ fn task_work_dir_path(app: &AppHandle, task_id: &str) -> Result<PathBuf, String>
     Ok(app_data_dir(app)?.join("tasks").join(task_id))
 }
 
-fn cleanup_task_artifacts(app: &AppHandle, task: &TaskRecord) -> Result<(), String> {
+pub(crate) fn cleanup_task_artifacts(app: &AppHandle, task: &TaskRecord) -> Result<(), String> {
+    let dirs = match task_artifact_dirs(app, task) {
+        Ok(dirs) => dirs,
+        Err(error) => {
+            log_cleanup_error(app, &task.id, &error);
+            return Err(error);
+        }
+    };
+    cleanup_artifact_dirs(app, &task.id, dirs)
+}
+
+pub(crate) fn cleanup_orphan_task_artifacts(app: &AppHandle) -> Result<(), String> {
+    let pending = pending_artifact_cleanups(app)?;
+    let pending_paths = pending
+        .iter()
+        .map(|(_, dir)| cleanup_path_value(dir))
+        .collect::<HashSet<_>>();
+    let mut errors = Vec::new();
+
+    for (task_id, dir) in pending {
+        if let Err(error) = cleanup_artifact_dirs(app, &task_id, vec![dir]) {
+            errors.push(error);
+        }
+    }
+
+    let conn = connection(app)?;
+    let active_task_ids = active_task_ids(&conn)?;
+    drop(conn);
+
+    cleanup_orphan_app_task_dirs(app, &active_task_ids, &pending_paths, &mut errors)?;
+    cleanup_orphan_output_work_dirs(app, &active_task_ids, &pending_paths, &mut errors)?;
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn task_artifact_dirs(app: &AppHandle, task: &TaskRecord) -> Result<Vec<PathBuf>, String> {
     let mut dirs = Vec::new();
     push_unique_path(&mut dirs, task_work_dir_path(app, &task.id)?);
     for dir in task_output_work_dirs(task) {
         push_unique_path(&mut dirs, dir);
     }
+    Ok(dirs)
+}
 
+fn cleanup_artifact_dirs(app: &AppHandle, task_id: &str, dirs: Vec<PathBuf>) -> Result<(), String> {
     let mut errors = Vec::new();
     for dir in dirs {
         if !dir.exists() {
+            let _ = remove_artifact_cleanup_path(app, task_id, &dir);
             continue;
         }
         if !dir.is_dir() {
             errors.push(format!("{} 不是目录", dir.display()));
+            record_artifact_cleanup_error(app, task_id, &dir, "不是目录");
             continue;
         }
         if let Err(error) = fs::remove_dir_all(&dir) {
-            errors.push(format!("{}: {error}", dir.display()));
+            let message = error.to_string();
+            errors.push(format!("{}: {message}", dir.display()));
+            record_artifact_cleanup_error(app, task_id, &dir, &message);
             continue;
         }
+        let _ = remove_artifact_cleanup_path(app, task_id, &dir);
         remove_empty_parent_work_dir(&dir);
     }
 
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "任务记录未删除，清理任务文件失败: {}",
-            errors.join("; ")
-        ))
+        Err(format!("清理任务文件失败: {}", errors.join("; ")))
     }
+}
+
+fn queue_artifact_cleanup_paths_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    task_id: &str,
+    dirs: &[PathBuf],
+) -> Result<(), String> {
+    let now = now_ts();
+    for dir in dirs {
+        tx.execute(
+            "INSERT INTO task_artifact_cleanups(task_id, path, created_at, updated_at, last_error)
+             VALUES(?1, ?2, ?3, ?3, NULL)
+             ON CONFLICT(task_id, path) DO UPDATE SET updated_at = excluded.updated_at, last_error = NULL",
+            params![task_id, cleanup_path_value(dir), now],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn queue_artifact_cleanup_paths(
+    app: &AppHandle,
+    task_id: &str,
+    dirs: &[PathBuf],
+) -> Result<(), String> {
+    let mut conn = connection(app)?;
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    queue_artifact_cleanup_paths_in_tx(&tx, task_id, dirs)?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+fn pending_artifact_cleanups(app: &AppHandle) -> Result<Vec<(String, PathBuf)>, String> {
+    let conn = connection(app)?;
+    let mut statement = conn
+        .prepare("SELECT task_id, path FROM task_artifact_cleanups ORDER BY created_at ASC")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                PathBuf::from(row.get::<_, String>(1)?),
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn active_task_ids(conn: &rusqlite::Connection) -> Result<HashSet<String>, String> {
+    let mut statement = conn
+        .prepare("SELECT id FROM tasks")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<HashSet<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn cleanup_orphan_app_task_dirs(
+    app: &AppHandle,
+    active_task_ids: &HashSet<String>,
+    skipped_paths: &HashSet<String>,
+    errors: &mut Vec<String>,
+) -> Result<(), String> {
+    let tasks_dir = app_data_dir(app)?.join("tasks");
+    if !tasks_dir.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&tasks_dir).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if skipped_paths.contains(&cleanup_path_value(&path)) {
+            continue;
+        }
+        let Some(task_id) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if active_task_ids.contains(&task_id) {
+            continue;
+        }
+        let dirs = vec![path];
+        let _ = queue_artifact_cleanup_paths(app, &task_id, &dirs);
+        if let Err(error) = cleanup_artifact_dirs(app, &task_id, dirs) {
+            errors.push(error);
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_orphan_output_work_dirs(
+    app: &AppHandle,
+    active_task_ids: &HashSet<String>,
+    skipped_paths: &HashSet<String>,
+    errors: &mut Vec<String>,
+) -> Result<(), String> {
+    let tasks = list_tasks(app)?;
+    let mut work_parents = Vec::new();
+    for task in tasks {
+        for dir in task_output_work_dirs(&task) {
+            if let Some(parent) = dir.parent() {
+                push_unique_path(&mut work_parents, parent.to_path_buf());
+            }
+        }
+    }
+
+    for parent in work_parents {
+        if !parent.is_dir()
+            || !parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == ".luma-subtitle-work")
+        {
+            continue;
+        }
+        for entry in fs::read_dir(&parent).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if skipped_paths.contains(&cleanup_path_value(&path)) {
+                continue;
+            }
+            let Some(task_id) = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if active_task_ids.contains(&task_id) {
+                continue;
+            }
+            let dirs = vec![path];
+            let _ = queue_artifact_cleanup_paths(app, &task_id, &dirs);
+            if let Err(error) = cleanup_artifact_dirs(app, &task_id, dirs) {
+                errors.push(error);
+            }
+        }
+        remove_empty_work_dir(&parent);
+    }
+
+    Ok(())
+}
+
+fn remove_artifact_cleanup_path(app: &AppHandle, task_id: &str, dir: &Path) -> Result<(), String> {
+    let conn = connection(app)?;
+    conn.execute(
+        "DELETE FROM task_artifact_cleanups WHERE task_id = ?1 AND path = ?2",
+        params![task_id, cleanup_path_value(dir)],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn record_artifact_cleanup_error(app: &AppHandle, task_id: &str, dir: &Path, error: &str) {
+    let now = now_ts();
+    if let Ok(conn) = connection(app) {
+        let _ = conn.execute(
+            "INSERT INTO task_artifact_cleanups(task_id, path, created_at, updated_at, last_error)
+             VALUES(?1, ?2, ?3, ?3, ?4)
+             ON CONFLICT(task_id, path) DO UPDATE SET updated_at = excluded.updated_at, last_error = excluded.last_error",
+            params![task_id, cleanup_path_value(dir), now, error],
+        );
+    }
+    log_cleanup_error(app, task_id, &format!("{}: {error}", dir.display()));
+}
+
+fn cleanup_path_value(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn log_cleanup_error(app: &AppHandle, task_id: &str, message: &str) {
+    eprintln!("清理任务文件失败 [{task_id}]: {message}");
+    let Ok(dir) = app_data_dir(app) else {
+        return;
+    };
+    let log_path = dir.join("cleanup.log");
+    let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    else {
+        return;
+    };
+    let _ = writeln!(file, "[{}] {task_id}: {message}", now_ts());
 }
 
 fn task_output_work_dirs(task: &TaskRecord) -> Vec<PathBuf> {
@@ -220,6 +472,10 @@ fn remove_empty_parent_work_dir(dir: &Path) {
     let Some(parent) = dir.parent() else {
         return;
     };
+    remove_empty_work_dir(parent);
+}
+
+fn remove_empty_work_dir(parent: &Path) {
     if parent
         .file_name()
         .and_then(|name| name.to_str())
@@ -276,6 +532,21 @@ mod tests {
             )
             .expect("app secret should be readable");
         assert_eq!(api_key, "sk-test");
+
+        conn.execute(
+            "INSERT INTO task_artifact_cleanups(task_id, path, created_at, updated_at)
+             VALUES('task-1', '/tmp/luma/task-1', 1, 1)",
+            [],
+        )
+        .expect("artifact cleanup should insert");
+        let cleanup_path: String = conn
+            .query_row(
+                "SELECT path FROM task_artifact_cleanups WHERE task_id = 'task-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("artifact cleanup should be readable");
+        assert_eq!(cleanup_path, "/tmp/luma/task-1");
     }
 
     #[test]
