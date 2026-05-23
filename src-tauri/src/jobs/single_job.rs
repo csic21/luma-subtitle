@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc},
 };
 
@@ -9,7 +9,7 @@ use crate::{
     job_events::{publish_job_event, JobEventDraft, JobOutputs, StoredSubtitleResult},
     paths::{path_to_string, resolve_output_dir, safe_stem},
     state::{ensure_not_cancelled, AppState, JobError, JobResult},
-    subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition},
+    subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition, SubtitleSegment},
     task_db,
     translation::{
         normalize_translation_shard_size, translate_with_single_request, TranslationConfig,
@@ -19,7 +19,7 @@ use crate::{
 
 use super::{
     helpers::translated_file_name,
-    process::{extract_audio, transcribe_audio, TranscriptionMode},
+    process::{prepare_audio, transcribe_audio, TranscriptionMode},
     JobRequest, TranslateSubtitlesRequest,
 };
 
@@ -111,35 +111,92 @@ pub(super) async fn run_job(
     request: JobRequest,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<JobOutputs> {
-    let video_path = PathBuf::from(&request.video_path);
+    let media_path = PathBuf::from(&request.media_path);
     let model_path = PathBuf::from(&request.whisper_model_path);
-    let output_dir = resolve_output_dir(&video_path, request.output_dir.as_deref())?;
+    let output_dir = resolve_output_dir(&media_path, request.output_dir.as_deref())?;
     let work_dir = output_dir.join(".luma-subtitle-work").join(&job_id);
     tokio::fs::create_dir_all(&work_dir)
         .await
         .map_err(|error| JobError::failed(format!("创建任务目录失败: {error}")))?;
-    let audio_path = work_dir.join("audio.wav");
     let transcript_base = work_dir.join("transcription");
-    let transcript_json = transcript_base.with_extension("json");
-    let stem = safe_stem(&video_path);
+    let stem = safe_stem(&media_path);
     let source_file_name = format!("{stem}.source.srt");
-    ensure_not_cancelled(&cancel)?;
-    publish_job_event(
+
+    let audio_path = prepare_transcription_audio(
         &app,
-        JobEventDraft::running(&job_id, "extracting", "正在抽取音频", 0.08),
-    );
-    extract_audio(&app, &video_path, &audio_path, cancel.clone()).await?;
-    ensure_not_cancelled(&cancel)?;
-    publish_job_event(
+        &job_id,
+        &request.source_type,
+        &media_path,
+        &work_dir,
+        cancel.clone(),
+    )
+    .await?;
+    let segments = transcribe_prepared_audio(
         &app,
-        JobEventDraft::running(&job_id, "transcribing", "正在本地转写", 0.26),
-    );
-    transcribe_audio(
-        &app,
+        &job_id,
         &model_path,
         &audio_path,
         &transcript_base,
         &request.whisper_language,
+        cancel.clone(),
+    )
+    .await?;
+    let (stored, outputs) = source_subtitle_result(segments, &source_file_name, &output_dir);
+
+    app.state::<AppState>()
+        .subtitle_results
+        .lock()
+        .insert(job_id.clone(), stored);
+    publish_job_event(
+        &app,
+        JobEventDraft::running(&job_id, "source-srt", "原文字幕已生成到内存", 0.9)
+            .with_outputs(outputs.clone()),
+    );
+
+    Ok(outputs)
+}
+
+async fn prepare_transcription_audio(
+    app: &AppHandle,
+    job_id: &str,
+    source_type: &str,
+    media_path: &Path,
+    work_dir: &Path,
+    cancel: Arc<AtomicBool>,
+) -> JobResult<PathBuf> {
+    let audio_path = work_dir.join("audio.wav");
+    let (stage, message) = if source_type == "audio" {
+        ("preparing-audio", "正在准备音频")
+    } else {
+        ("extracting", "正在抽取音频")
+    };
+    ensure_not_cancelled(&cancel)?;
+    publish_job_event(app, JobEventDraft::running(job_id, stage, message, 0.08));
+    prepare_audio(app, media_path, &audio_path, cancel).await?;
+    Ok(audio_path)
+}
+
+async fn transcribe_prepared_audio(
+    app: &AppHandle,
+    job_id: &str,
+    model_path: &Path,
+    audio_path: &Path,
+    transcript_base: &Path,
+    language: &str,
+    cancel: Arc<AtomicBool>,
+) -> JobResult<Vec<SubtitleSegment>> {
+    let transcript_json = transcript_base.with_extension("json");
+    ensure_not_cancelled(&cancel)?;
+    publish_job_event(
+        app,
+        JobEventDraft::running(job_id, "transcribing", "正在本地转写", 0.26),
+    );
+    transcribe_audio(
+        app,
+        model_path,
+        audio_path,
+        transcript_base,
+        language,
         TranscriptionMode::Standard,
         cancel.clone(),
     )
@@ -153,18 +210,18 @@ pub(super) async fn run_job(
         publish_job_event(
             &app,
             JobEventDraft::running(
-                &job_id,
+                job_id,
                 "transcribing-retry",
                 "检测到疑似重复幻觉，正在用 VAD 和保守参数重试转写",
                 0.74,
             ),
         );
         transcribe_audio(
-            &app,
-            &model_path,
-            &audio_path,
-            &transcript_base,
-            &request.whisper_language,
+            app,
+            model_path,
+            audio_path,
+            transcript_base,
+            language,
             TranscriptionMode::ConservativeRetry,
             cancel.clone(),
         )
@@ -181,34 +238,34 @@ pub(super) async fn run_job(
             ))
         })?;
     }
+    Ok(segments)
+}
+
+fn source_subtitle_result(
+    segments: Vec<SubtitleSegment>,
+    source_file_name: &str,
+    output_dir: &Path,
+) -> (StoredSubtitleResult, JobOutputs) {
     let source_srt = render_srt(&segments, None);
     let segment_count = segments.len();
-    let output_dir = path_to_string(output_dir);
+    let output_dir = path_to_string(output_dir.to_path_buf());
     let outputs = JobOutputs {
-        source_file_name: source_file_name.clone(),
+        source_file_name: source_file_name.to_string(),
         translated_file_name: None,
         output_dir: output_dir.clone(),
         segment_count,
     };
-
-    app.state::<AppState>().subtitle_results.lock().insert(
-        job_id.clone(),
+    (
         StoredSubtitleResult {
             source_srt,
             translated_srt: None,
             segments,
             output_dir,
-            source_file_name,
+            source_file_name: source_file_name.to_string(),
             translated_file_name: None,
         },
-    );
-    publish_job_event(
-        &app,
-        JobEventDraft::running(&job_id, "source-srt", "原文字幕已生成到内存", 0.9)
-            .with_outputs(outputs.clone()),
-    );
-
-    Ok(outputs)
+        outputs,
+    )
 }
 
 fn job_error_message(error: JobError) -> String {

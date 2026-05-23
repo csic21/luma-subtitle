@@ -4,6 +4,8 @@ import {
   Database,
   Download,
   Eye,
+  FileAudio,
+  FileText,
   FileVideo,
   FolderOpen,
   Languages,
@@ -34,6 +36,7 @@ import {
   progressValue,
   stageText,
   taskBusy,
+  taskSourcePath,
 } from "@/lib/app-utils";
 import type { QueueSettings, TaskOperation, TaskRecord } from "@/types";
 
@@ -81,6 +84,7 @@ export function TaskToolbar({
   queueSettings,
   t,
   onCancelSelected,
+  onCreateAudioTask,
   onCreateSrtTask,
   onCreateVideoTask,
   onPickOutputDir,
@@ -94,6 +98,7 @@ export function TaskToolbar({
   queueSettings: QueueSettings;
   t: Translate;
   onCancelSelected: () => void | Promise<void>;
+  onCreateAudioTask: () => void | Promise<void>;
   onCreateSrtTask: () => void | Promise<void>;
   onCreateVideoTask: () => void | Promise<void>;
   onPickOutputDir: () => void | Promise<void>;
@@ -109,6 +114,10 @@ export function TaskToolbar({
           <Button onClick={onCreateVideoTask} title={t("task.videoNewTitle")}>
             <Plus data-icon="inline-start" />
             {t("task.videoNew")}
+          </Button>
+          <Button variant="secondary" onClick={onCreateAudioTask} title={t("task.audioNewTitle")}>
+            <FileAudio data-icon="inline-start" />
+            {t("task.audioNew")}
           </Button>
           <Button variant="secondary" onClick={onCreateSrtTask} title={t("task.srtImportTitle")}>
             <Upload data-icon="inline-start" />
@@ -303,10 +312,16 @@ const TaskQueueRow = memo(function TaskQueueRow({
       </TableCell>
       <TableCell>
         <Button variant="ghost" className="file-button" onClick={() => onOpenTask(task.id)}>
-          <FileVideo data-icon="inline-start" />
+          {task.source_type === "audio" ? (
+            <FileAudio data-icon="inline-start" />
+          ) : task.source_type === "srt" ? (
+            <FileText data-icon="inline-start" />
+          ) : (
+            <FileVideo data-icon="inline-start" />
+          )}
           <span>{task.file_name}</span>
         </Button>
-        <small>{task.source_type === "srt" ? "SRT" : fileName(task.video_path)}</small>
+        <small>{task.source_type === "srt" ? "SRT" : fileName(taskSourcePath(task))}</small>
       </TableCell>
       <TableCell>
         <StatusBadge status={task.status} />

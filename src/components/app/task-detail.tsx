@@ -7,6 +7,8 @@ import {
   CircleStop,
   Download,
   ExternalLink,
+  FileAudio,
+  FileText,
   FileVideo,
   Languages,
   Loader2,
@@ -34,6 +36,7 @@ import {
   progressValue,
   stageText,
   taskBusy,
+  taskSourcePath,
 } from "@/lib/app-utils";
 import { cn } from "@/lib/utils";
 import type { SubtitlePreview, TaskOperation, TaskRecord } from "@/types";
@@ -83,16 +86,24 @@ export function TaskSummaryCard({
   const transcribeIssues = operationRequirementIssues(task, "transcribe", operationContext);
   const translateIssues = operationRequirementIssues(task, "translate", operationContext);
   const exportIssues = operationRequirementIssues(task, "export", operationContext);
+  const materialIcon =
+    task.source_type === "audio" ? (
+      <FileAudio />
+    ) : task.source_type === "srt" ? (
+      <FileText />
+    ) : (
+      <FileVideo />
+    );
 
   return (
     <Card>
       <CardHeader>
-        <SectionTitle icon={<FileVideo />} title={t("tabs.task")} />
+        <SectionTitle icon={materialIcon} title={t("tabs.task")} />
       </CardHeader>
       <CardContent className="stack-panel">
         <div className="detail-list">
           <span>{t("flow.material")}</span>
-          <code>{task.video_path || task.srt_path || task.file_name}</code>
+          <code>{taskSourcePath(task)}</code>
           <span>{t("task.outputDir")}</span>
           <code>{task.output_dir || task.settings.output_dir || t("task.sameAsSourceDir")}</code>
           <span>{t("common.updatedAt")}</span>

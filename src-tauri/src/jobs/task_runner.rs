@@ -12,7 +12,7 @@ use crate::{
     paths::path_to_string,
     state::{ensure_not_cancelled, AppState, JobError, JobResult, QueuedTaskOperation},
     subtitles::{parse_srt_file, write_srt_text},
-    task_db,
+    task_db::{self, TaskRecord},
 };
 
 use super::{
@@ -71,12 +71,10 @@ async fn run_transcribe_task(
     cancel: Arc<AtomicBool>,
 ) -> JobResult<()> {
     let task = task_db::require_task(&app, task_id).map_err(JobError::failed)?;
-    let video_path = task
-        .video_path
-        .clone()
-        .ok_or_else(|| JobError::failed("该任务不是视频任务"))?;
+    let media_path = transcription_media_path(&task)?;
     let request = JobRequest {
-        video_path,
+        media_path,
+        source_type: task.source_type.clone(),
         output_dir: task.settings.output_dir.clone(),
         target_language: task.settings.target_language.clone(),
         whisper_model_path: task.settings.whisper_model_path.clone(),
@@ -119,6 +117,20 @@ async fn run_transcribe_task(
         JobEventDraft::completed(task_id, "completed", "SRT 已生成").with_outputs(outputs),
     );
     Ok(())
+}
+
+fn transcription_media_path(task: &TaskRecord) -> JobResult<String> {
+    match task.source_type.as_str() {
+        "video" => task
+            .video_path
+            .clone()
+            .ok_or_else(|| JobError::failed("视频任务缺少视频文件")),
+        "audio" => task
+            .audio_path
+            .clone()
+            .ok_or_else(|| JobError::failed("音频任务缺少音频文件")),
+        _ => Err(JobError::failed("该任务不是可转写的媒体任务")),
+    }
 }
 
 async fn run_translate_task(

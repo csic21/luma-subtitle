@@ -25,9 +25,9 @@ pub(super) enum TranscriptionMode {
     ConservativeRetry,
 }
 
-pub(super) async fn extract_audio(
+pub(super) async fn prepare_audio(
     app: &AppHandle,
-    video_path: &Path,
+    input_path: &Path,
     audio_path: &Path,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<()> {
@@ -37,7 +37,7 @@ pub(super) async fn extract_audio(
     command
         .arg("-y")
         .arg("-i")
-        .arg(video_path)
+        .arg(input_path)
         .arg("-vn")
         .arg("-ac")
         .arg("1")

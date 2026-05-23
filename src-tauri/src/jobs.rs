@@ -20,13 +20,14 @@ mod single_job;
 mod task_runner;
 
 use helpers::{
-    display_file_name, job_error_to_string, task_settings_from_srt_request,
-    task_settings_from_update_request, task_settings_from_video_request,
+    display_file_name, job_error_to_string, task_settings_from_audio_request,
+    task_settings_from_srt_request, task_settings_from_update_request,
+    task_settings_from_video_request,
 };
 use queue::{cancel_queued_task, dispatch_queue, enqueue_task_operation};
 pub(crate) use requests::{
-    CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest, TranslateSubtitlesRequest,
-    UpdateTaskSettingsRequest,
+    CreateAudioTaskRequest, CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest,
+    TranslateSubtitlesRequest, UpdateTaskSettingsRequest,
 };
 
 #[tauri::command]
@@ -106,20 +107,43 @@ pub(crate) fn create_video_task(
     if !video_path.exists() {
         return Err("视频文件不存在".to_string());
     }
-    let id = Uuid::new_v4().to_string();
     let settings = task_settings_from_video_request(&request);
+    create_media_task(&app, "video", video_path, settings)
+}
+
+#[tauri::command]
+pub(crate) fn create_audio_task(
+    app: AppHandle,
+    request: CreateAudioTaskRequest,
+) -> Result<TaskRecord, String> {
+    let audio_path = PathBuf::from(request.audio_path.trim());
+    if !audio_path.exists() {
+        return Err("音频文件不存在".to_string());
+    }
+    let settings = task_settings_from_audio_request(&request);
+    create_media_task(&app, "audio", audio_path, settings)
+}
+
+fn create_media_task(
+    app: &AppHandle,
+    source_type: &str,
+    media_path: PathBuf,
+    settings: task_db::TaskSettingsSnapshot,
+) -> Result<TaskRecord, String> {
+    let id = Uuid::new_v4().to_string();
     let output_dir = settings.output_dir.clone().or_else(|| {
-        video_path
+        media_path
             .parent()
             .map(|path| path_to_string(path.to_path_buf()))
     });
     let now = task_db::now_ts();
     let record = TaskRecord {
         id,
-        source_type: "video".to_string(),
-        video_path: Some(path_to_string(video_path.clone())),
+        source_type: source_type.to_string(),
+        video_path: (source_type == "video").then(|| path_to_string(media_path.clone())),
+        audio_path: (source_type == "audio").then(|| path_to_string(media_path.clone())),
         srt_path: None,
-        file_name: display_file_name(&video_path),
+        file_name: display_file_name(&media_path),
         status: "created".to_string(),
         stage: "created".to_string(),
         message: "任务已创建".to_string(),
@@ -138,7 +162,7 @@ pub(crate) fn create_video_task(
         created_at: now,
         updated_at: now,
     };
-    task_db::insert_task(&app, &record)
+    task_db::insert_task(app, &record)
 }
 
 #[tauri::command]
@@ -182,6 +206,7 @@ pub(crate) async fn create_srt_task(
         id,
         source_type: "srt".to_string(),
         video_path: None,
+        audio_path: None,
         srt_path: Some(path_to_string(srt_path)),
         file_name: source_file_name.clone(),
         status: "completed".to_string(),

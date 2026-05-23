@@ -14,6 +14,7 @@ import {
 import {
   cancelTask as cancelTaskCommand,
   checkEnvironment,
+  createAudioTask as createAudioTaskCommand,
   createSrtTask as createSrtTaskCommand,
   createVideoTask as createVideoTaskCommand,
   deleteTask as deleteTaskCommand,
@@ -24,6 +25,7 @@ import {
   runTaskOperations,
   saveQueueSettings as saveQueueSettingsCommand,
   selectOutputDir,
+  selectAudio,
   selectSrt,
   selectVideo,
 } from "@/lib/tauri-api";
@@ -245,6 +247,20 @@ export function useTasksPageState(t: TFunction) {
     }
   }, [outputDir, settings, t]);
 
+  const createAudioTask = useCallback(async () => {
+    try {
+      const picked = await selectAudio();
+      if (!picked) return;
+      const created = await createAudioTaskCommand(
+        taskCreatePayload({ ...settings, output_dir: outputDir || null }, picked, "audio"),
+      );
+      setTasks((current) => upsertTask(current, created));
+      setNotice(t("notice.createdTask", { fileName: created.file_name }));
+    } catch (error) {
+      setNotice(t("error.createTask", { error: errorText(error) }));
+    }
+  }, [outputDir, settings, t]);
+
   const createSrtTask = useCallback(async () => {
     try {
       const picked = await selectSrt();
@@ -365,6 +381,7 @@ export function useTasksPageState(t: TFunction) {
     busyCount: taskCounts.busyCount,
     cancelSelected,
     cancelTask,
+    createAudioTask,
     createSrtTask,
     createVideoTask,
     deleteTask,

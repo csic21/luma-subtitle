@@ -86,10 +86,16 @@ export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {
 export function taskCreatePayload(
   settings: SettingsState & { output_dir?: string | null },
   path: string,
-  sourceType: "video" | "srt" = "video",
+  sourceType: "video" | "audio" | "srt" = "video",
 ) {
+  const pathKey = {
+    video: "video_path",
+    audio: "audio_path",
+    srt: "srt_path",
+  }[sourceType];
+
   return {
-    [sourceType === "video" ? "video_path" : "srt_path"]: path,
+    [pathKey]: path,
     output_dir: settings.output_dir || null,
     target_language: settings.target_language,
     whisper_model_path: settings.whisper_model_path,

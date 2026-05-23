@@ -13,6 +13,7 @@ import type {
 
 type TaskCreatePayload = {
   video_path?: string;
+  audio_path?: string;
   srt_path?: string;
   output_dir: string | null;
   target_language: string;
@@ -37,6 +38,21 @@ type TaskSettingsUpdatePayload = {
 };
 
 const videoExtensions = ["mp4", "mkv", "mov", "avi", "webm", "m4v"];
+const audioExtensions = [
+  "mp3",
+  "wav",
+  "m4a",
+  "aac",
+  "flac",
+  "ogg",
+  "opus",
+  "webm",
+  "wma",
+  "aiff",
+  "aif",
+  "caf",
+  "mka",
+];
 
 export function listTasks() {
   return invoke<TaskRecord[]>("list_tasks");
@@ -80,6 +96,13 @@ export function selectVideo() {
   }).then((picked) => (typeof picked === "string" ? picked : null));
 }
 
+export function selectAudio() {
+  return open({
+    multiple: false,
+    filters: [{ name: "Audio", extensions: audioExtensions }],
+  }).then((picked) => (typeof picked === "string" ? picked : null));
+}
+
 export function selectSrt() {
   return invoke<string | null>("select_srt");
 }
@@ -90,6 +113,10 @@ export function selectWhisperModel() {
 
 export function createVideoTask(request: TaskCreatePayload) {
   return invoke<TaskRecord>("create_video_task", { request });
+}
+
+export function createAudioTask(request: TaskCreatePayload) {
+  return invoke<TaskRecord>("create_audio_task", { request });
 }
 
 export function createSrtTask(request: TaskCreatePayload) {

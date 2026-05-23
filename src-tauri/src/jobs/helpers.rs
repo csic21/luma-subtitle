@@ -9,8 +9,8 @@ use crate::{
 };
 
 use super::{
-    CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest, TranslateSubtitlesRequest,
-    UpdateTaskSettingsRequest,
+    CreateAudioTaskRequest, CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest,
+    TranslateSubtitlesRequest, UpdateTaskSettingsRequest,
 };
 
 pub(super) fn task_settings_from_video_request(
@@ -39,6 +39,30 @@ pub(super) fn task_settings_from_video_request(
 
 pub(super) fn task_settings_from_srt_request(
     request: &CreateSrtTaskRequest,
+) -> TaskSettingsSnapshot {
+    TaskSettingsSnapshot {
+        output_dir: request
+            .output_dir
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        target_language: request.target_language.trim().to_string(),
+        whisper_model_path: request.whisper_model_path.trim().to_string(),
+        whisper_language: normalize_language(&request.whisper_language),
+        base_url: normalize_base_url(&request.base_url, request.base_url_is_complete),
+        base_url_is_complete: request.base_url_is_complete,
+        model: request.model.trim().to_string(),
+        temperature: request.temperature.clamp(0.0, 1.0),
+        translation_shard_size: normalize_translation_shard_size(
+            request
+                .translation_shard_size
+                .unwrap_or(DEFAULT_TRANSLATION_SHARD_SIZE),
+        ),
+    }
+}
+
+pub(super) fn task_settings_from_audio_request(
+    request: &CreateAudioTaskRequest,
 ) -> TaskSettingsSnapshot {
     TaskSettingsSnapshot {
         output_dir: request
@@ -123,9 +147,17 @@ pub(super) fn translated_file_name(source_file_name: &str, target_language: &str
 }
 
 pub(super) fn validate_start_request(request: &JobRequest) -> Result<(), String> {
-    let video_path = PathBuf::from(&request.video_path);
-    if !video_path.exists() {
-        return Err("视频文件不存在".to_string());
+    let media_path = PathBuf::from(&request.media_path);
+    match request.source_type.as_str() {
+        "video" | "audio" => {}
+        _ => return Err("仅视频或音频任务可转写".to_string()),
+    }
+    if !media_path.exists() {
+        return Err(if request.source_type == "audio" {
+            "音频文件不存在".to_string()
+        } else {
+            "视频文件不存在".to_string()
+        });
     }
     if request.whisper_model_path.trim().is_empty() {
         return Err("请选择 Whisper 模型文件".to_string());

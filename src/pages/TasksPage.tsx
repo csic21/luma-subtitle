@@ -15,6 +15,7 @@ export function TasksPage() {
     busyCount,
     cancelSelected,
     cancelTask,
+    createAudioTask,
     createSrtTask,
     createVideoTask,
     deleteTask,
@@ -55,6 +56,7 @@ export function TasksPage() {
         queueSettings={queueSettings}
         t={t}
         onCancelSelected={cancelSelected}
+        onCreateAudioTask={createAudioTask}
         onCreateSrtTask={createSrtTask}
         onCreateVideoTask={createVideoTask}
         onPickOutputDir={pickOutputDir}

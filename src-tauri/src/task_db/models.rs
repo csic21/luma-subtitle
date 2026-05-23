@@ -22,6 +22,7 @@ pub(crate) struct TaskRecord {
     pub(crate) id: String,
     pub(crate) source_type: String,
     pub(crate) video_path: Option<String>,
+    pub(crate) audio_path: Option<String>,
     pub(crate) srt_path: Option<String>,
     pub(crate) file_name: String,
     pub(crate) status: String,

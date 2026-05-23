@@ -22,6 +22,10 @@ export function fileName(path?: string | null) {
   return parts.length > 0 ? parts[parts.length - 1] : path;
 }
 
+export function taskSourcePath(task: Pick<TaskRecord, "audio_path" | "file_name" | "srt_path" | "video_path">) {
+  return task.video_path || task.audio_path || task.srt_path || task.file_name;
+}
+
 export function progressValue(progress: number) {
   return Math.round(Math.max(0, Math.min(1, progress)) * 100);
 }
@@ -88,6 +92,7 @@ export function stageText(stage: string | undefined, t: TFunction) {
     transcribing: t("stage.transcribing"),
     "source-srt": t("stage.sourceSrt"),
     "source-ready": t("stage.sourceReady"),
+    "preparing-audio": t("stage.preparingAudio"),
     "preparing-translation": t("stage.preparingTranslation"),
     "translate-shards": t("stage.translateShards"),
     "translate-shard": t("stage.translateShard"),
@@ -137,7 +142,7 @@ export function operationRequirementIssues(
   const issues: OperationRequirementIssue[] = [];
 
   if (operation === "transcribe") {
-    if (task.source_type !== "video") issues.push("unsupportedSource");
+    if (task.source_type !== "video" && task.source_type !== "audio") issues.push("unsupportedSource");
     if (!hasConfiguredText(task.settings.whisper_model_path)) issues.push("missingWhisperModel");
     if (!context.environmentReady) issues.push("missingEnvironment");
     return issues;
@@ -187,4 +192,3 @@ export function operationLabel(operation: "transcribe" | "translate" | "export",
   if (operation === "translate") return t("operation.translate");
   return t("operation.export");
 }
-

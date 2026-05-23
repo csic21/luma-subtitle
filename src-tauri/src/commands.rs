@@ -11,6 +11,24 @@ pub(crate) async fn select_video() -> Result<Option<String>, String> {
     .map_err(|error| error.to_string())?;
     Ok(picked.map(path_to_string))
 }
+
+#[tauri::command]
+pub(crate) async fn select_audio() -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .add_filter(
+                "Audio",
+                &[
+                    "mp3", "wav", "m4a", "aac", "flac", "ogg", "opus", "webm", "wma", "aiff",
+                    "aif", "caf", "mka",
+                ],
+            )
+            .pick_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(picked.map(path_to_string))
+}
 #[tauri::command]
 pub(crate) async fn select_output_dir() -> Result<Option<String>, String> {
     let picked = tauri::async_runtime::spawn_blocking(|| rfd::FileDialog::new().pick_folder())

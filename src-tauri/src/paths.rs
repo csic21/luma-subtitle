@@ -7,13 +7,13 @@ use tauri::{path::BaseDirectory, AppHandle, Manager};
 use crate::state::{JobError, JobResult};
 
 pub(crate) fn resolve_output_dir(
-    video_path: &Path,
+    media_path: &Path,
     output_dir: Option<&str>,
 ) -> JobResult<PathBuf> {
     let dir = output_dir
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
-        .or_else(|| video_path.parent().map(Path::to_path_buf))
+        .or_else(|| media_path.parent().map(Path::to_path_buf))
         .ok_or_else(|| JobError::failed("无法确定输出目录"))?;
     Ok(dir)
 }

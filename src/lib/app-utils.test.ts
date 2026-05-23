@@ -8,6 +8,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
     id: "task-1",
     source_type: "video",
     video_path: "/tmp/video.mp4",
+    audio_path: null,
     file_name: "video.mp4",
     status: "created",
     stage: "created",
@@ -43,6 +44,18 @@ describe("operation readiness", () => {
       "missingEnvironment",
     ]);
     expect(canRunOperation(pending, "transcribe", { environmentReady: false, hasApiCredential: false })).toBe(false);
+  });
+
+  it("allows audio tasks to be transcribed with the same local prerequisites", () => {
+    const ready = task({
+      source_type: "audio",
+      video_path: null,
+      audio_path: "/tmp/interview.m4a",
+      file_name: "interview.m4a",
+    });
+
+    expect(operationRequirementIssues(ready, "transcribe", { environmentReady: true, hasApiCredential: false })).toEqual([]);
+    expect(canRunOperation(ready, "transcribe", { environmentReady: true, hasApiCredential: false })).toBe(true);
   });
 
   it("blocks translation until source subtitles and translation API configuration are ready", () => {

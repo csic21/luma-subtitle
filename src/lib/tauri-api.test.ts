@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectVideo } from "./tauri-api";
+import { selectAudio, selectVideo } from "./tauri-api";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -27,5 +27,41 @@ describe("selectVideo", () => {
       filters: [{ name: "Video", extensions: ["mp4", "mkv", "mov", "avi", "webm", "m4v"] }],
     });
     expect(invoke).not.toHaveBeenCalledWith("select_video");
+  });
+});
+
+describe("selectAudio", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("opens the frontend audio picker with the supported audio extensions", async () => {
+    vi.mocked(open).mockResolvedValue("/audio/voice.m4a");
+
+    await expect(selectAudio()).resolves.toBe("/audio/voice.m4a");
+
+    expect(open).toHaveBeenCalledWith({
+      multiple: false,
+      filters: [
+        {
+          name: "Audio",
+          extensions: [
+            "mp3",
+            "wav",
+            "m4a",
+            "aac",
+            "flac",
+            "ogg",
+            "opus",
+            "webm",
+            "wma",
+            "aiff",
+            "aif",
+            "caf",
+            "mka",
+          ],
+        },
+      ],
+    });
   });
 });

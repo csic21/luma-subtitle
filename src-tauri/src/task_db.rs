@@ -75,17 +75,18 @@ pub(crate) fn insert_task(app: &AppHandle, record: &TaskRecord) -> Result<TaskRe
         serde_json::to_string(&record.settings).map_err(|error| error.to_string())?;
     conn.execute(
         "INSERT INTO tasks (
-            id, source_type, video_path, srt_path, file_name, status, stage, message, progress,
+            id, source_type, video_path, audio_path, srt_path, file_name, status, stage, message, progress,
             settings_json, source_srt_path, translated_srt_path, source_file_name,
             translated_file_name, output_dir, segment_count, exported_source_srt,
             exported_translated_srt, exported_output_dir, error, created_at, updated_at
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
         )",
         params![
             record.id,
             record.source_type,
             record.video_path,
+            record.audio_path,
             record.srt_path,
             record.file_name,
             record.status,
@@ -455,6 +456,11 @@ fn task_output_work_dirs(task: &TaskRecord) -> Vec<PathBuf> {
             push_unique_path(&mut output_dirs, parent.to_path_buf());
         }
     }
+    if let Some(audio_path) = task.audio_path.as_deref() {
+        if let Some(parent) = Path::new(audio_path).parent() {
+            push_unique_path(&mut output_dirs, parent.to_path_buf());
+        }
+    }
 
     output_dirs
         .into_iter()
@@ -518,6 +524,18 @@ mod tests {
             )
             .expect("default auto-chain setting should exist");
         assert_eq!(auto_start_next, "false");
+
+        conn.execute(
+            "INSERT INTO tasks (
+                id, source_type, video_path, audio_path, srt_path, file_name, status, stage, message,
+                progress, settings_json, created_at, updated_at
+            ) VALUES (
+                'task-audio', 'audio', NULL, '/tmp/voice.mp3', NULL, 'voice.mp3', 'created',
+                'created', '任务已创建', 0.0, '{}', 1, 1
+            )",
+            [],
+        )
+        .expect("audio path column should exist");
 
         conn.execute(
             "INSERT INTO app_secrets(key, value, updated_at) VALUES('translation_api_key', 'sk-test', 1)",
@@ -626,6 +644,7 @@ mod tests {
             id: "task-1".to_string(),
             source_type: "video".to_string(),
             video_path: Some("videos/clip.mp4".to_string()),
+            audio_path: None,
             srt_path: None,
             file_name: "clip.mp4".to_string(),
             status: "completed".to_string(),
@@ -669,6 +688,54 @@ mod tests {
                     .join(".luma-subtitle-work")
                     .join("task-1"),
             ]
+        );
+    }
+
+    #[test]
+    fn task_output_work_dirs_cover_audio_source_location() {
+        let task = TaskRecord {
+            id: "task-audio".to_string(),
+            source_type: "audio".to_string(),
+            video_path: None,
+            audio_path: Some("audio/interview.m4a".to_string()),
+            srt_path: None,
+            file_name: "interview.m4a".to_string(),
+            status: "created".to_string(),
+            stage: "created".to_string(),
+            message: "任务已创建".to_string(),
+            progress: 0.0,
+            settings: TaskSettingsSnapshot {
+                output_dir: None,
+                target_language: "简体中文".to_string(),
+                whisper_model_path: "models/ggml.bin".to_string(),
+                whisper_language: "auto".to_string(),
+                base_url: "https://example.test".to_string(),
+                base_url_is_complete: false,
+                model: "test-model".to_string(),
+                temperature: 0.2,
+                translation_shard_size: 120,
+            },
+            source_srt_path: None,
+            translated_srt_path: None,
+            source_file_name: None,
+            translated_file_name: None,
+            output_dir: None,
+            segment_count: None,
+            exported_source_srt: None,
+            exported_translated_srt: None,
+            exported_output_dir: None,
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+
+        let dirs = task_output_work_dirs(&task);
+
+        assert_eq!(
+            dirs,
+            vec![PathBuf::from("audio")
+                .join(".luma-subtitle-work")
+                .join("task-audio"),]
         );
     }
 }

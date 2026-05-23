@@ -30,6 +30,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::select_video,
+            commands::select_audio,
             commands::select_output_dir,
             commands::select_whisper_model,
             commands::select_srt,
@@ -45,6 +46,7 @@ fn main() {
             jobs::apply_current_settings_to_task,
             jobs::update_task_settings,
             jobs::create_video_task,
+            jobs::create_audio_task,
             jobs::create_srt_task,
             jobs::delete_task,
             jobs::run_task_operation,

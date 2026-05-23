@@ -21,6 +21,7 @@ pub(super) fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         id: row.get("id")?,
         source_type: row.get("source_type")?,
         video_path: row.get("video_path")?,
+        audio_path: row.get("audio_path")?,
         srt_path: row.get("srt_path")?,
         file_name: row.get("file_name")?,
         status: row.get("status")?,
@@ -67,6 +68,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
             id TEXT PRIMARY KEY,
             source_type TEXT NOT NULL,
             video_path TEXT,
+            audio_path TEXT,
             srt_path TEXT,
             file_name TEXT NOT NULL,
             status TEXT NOT NULL,
@@ -115,5 +117,32 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
         INSERT OR IGNORE INTO queue_settings(key, value) VALUES('auto_start_next', 'false');
         ",
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    ensure_column(conn, "tasks", "audio_path", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+    column_definition: &str,
+) -> Result<(), String> {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .map_err(|error| error.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    if columns.iter().any(|column| column == column_name) {
+        return Ok(());
+    }
+    conn.execute(
+        &format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"),
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }

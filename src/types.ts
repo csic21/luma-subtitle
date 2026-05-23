@@ -103,8 +103,9 @@ export type TaskSettingsSnapshot = {
 
 export type TaskRecord = {
   id: string;
-  source_type: "video" | "srt";
+  source_type: "video" | "audio" | "srt";
   video_path?: string | null;
+  audio_path?: string | null;
   srt_path?: string | null;
   file_name: string;
   status: string;
