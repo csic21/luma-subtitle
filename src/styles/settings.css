@@ -233,6 +233,31 @@
   line-height: 1.45;
 }
 
+@media (min-width: 981px) {
+  .settings-page-grid {
+    align-items: stretch;
+  }
+
+  .settings-side-stack {
+    height: 100%;
+  }
+
+  .guide-card {
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .guide-card [data-slot="card-content"] {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .guide-steps {
+    flex: 1;
+  }
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }

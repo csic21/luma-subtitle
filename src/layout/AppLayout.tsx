@@ -39,7 +39,7 @@ export function AppLayout() {
               </SelectGroup>
             </SelectContent>
           </Select>
-          <Button asChild variant="secondary" size="icon" title={t("app.settings")}>
+          <Button asChild variant="secondary" size="icon" className="topbar-settings-button" title={t("app.settings")}>
             <Link to="/settings" aria-label={t("app.settings")}>
               <Settings />
             </Link>

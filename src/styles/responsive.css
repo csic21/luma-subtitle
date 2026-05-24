@@ -15,6 +15,7 @@
   .workspace,
   .settings-page-grid {
     grid-template-columns: 1fr;
+    align-items: start;
   }
 }
 
@@ -28,6 +29,7 @@
   }
 
   .locale-select {
+    width: 8.5rem;
     flex-basis: 8.5rem;
   }
 
@@ -97,8 +99,9 @@
   }
 
   .locale-select {
-    width: 100%;
-    flex: 1;
+    width: auto;
+    min-width: 0;
+    flex: 1 1 auto;
     flex-basis: auto;
     margin-left: 0;
   }
