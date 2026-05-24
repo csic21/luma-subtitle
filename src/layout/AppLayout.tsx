@@ -24,36 +24,38 @@ export function AppLayout() {
             <span>{t("app.tagline")}</span>
           </span>
         </Link>
-        <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
-          <SelectTrigger className="locale-select" aria-label={t("app.language")}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {localeOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-        <Button asChild variant="secondary" size="icon-lg" title={t("app.settings")}>
-          <Link to="/settings" aria-label={t("app.settings")}>
-            <Settings />
-          </Link>
-        </Button>
+        <div className="topbar-actions">
+          <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
+            <SelectTrigger className="locale-select" aria-label={t("app.language")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {localeOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Button asChild variant="secondary" size="icon" title={t("app.settings")}>
+            <Link to="/settings" aria-label={t("app.settings")}>
+              <Settings />
+            </Link>
+          </Button>
+        </div>
       </header>
 
-      <Routes>
-        <Route path="/" element={<Navigate to="/tasks" replace />} />
-        <Route path="/tasks" element={<TasksPage />} />
-        <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/tasks" replace />} />
-      </Routes>
+      <section className="app-content">
+        <Routes>
+          <Route path="/" element={<Navigate to="/tasks" replace />} />
+          <Route path="/tasks" element={<TasksPage />} />
+          <Route path="/tasks/:taskId" element={<TaskDetailPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/tasks" replace />} />
+        </Routes>
+      </section>
     </main>
   );
 }
-
-

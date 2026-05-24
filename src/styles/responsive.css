@@ -1,8 +1,4 @@
-@media (max-width: 1180px) {
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
+@media (max-width: 980px) {
   .toolbar-content {
     align-items: stretch;
     flex-direction: column;
@@ -23,16 +19,8 @@
 }
 
 @media (max-width: 760px) {
-  .app-shell {
-    width: calc(100vw - 20px);
-    padding-top: 10px;
-  }
-
-  .toolbar-main,
-  .toolbar-actions,
-  .action-row {
-    align-items: stretch;
-    flex-direction: column;
+  .app-content {
+    padding: 8px;
   }
 
   .brand-link {
@@ -44,23 +32,25 @@
   }
 
   .brand-mark {
-    width: 44px;
-    height: 44px;
+    width: 30px;
+    height: 30px;
   }
 
   .brand-copy strong {
     max-width: 170px;
-    font-size: 1.05rem;
+    font-size: 0.9rem;
   }
 
   .brand-copy span {
     display: none;
   }
 
-  .metric-grid,
-  .flow-strip,
-  .grid-two,
-  .page-heading {
+  .toolbar-main > [data-slot="button"],
+  .action-row > [data-slot="button"] {
+    flex: 1 1 10rem;
+  }
+
+  .flow-strip {
     grid-template-columns: 1fr;
   }
 
@@ -87,6 +77,33 @@
   .outputs,
   .detail-list,
   .env-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar,
+  .page-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .locale-select {
+    width: 100%;
+    flex: 1;
+    flex-basis: auto;
+    margin-left: 0;
+  }
+
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 }

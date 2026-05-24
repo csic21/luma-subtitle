@@ -111,19 +111,19 @@ export function TaskToolbar({
     <Card className="toolbar-card">
       <CardContent className="toolbar-content">
         <div className="toolbar-main">
-          <Button onClick={onCreateVideoTask} title={t("task.videoNewTitle")}>
+          <Button size="sm" onClick={onCreateVideoTask} title={t("task.videoNewTitle")}>
             <Plus data-icon="inline-start" />
             {t("task.videoNew")}
           </Button>
-          <Button variant="secondary" onClick={onCreateAudioTask} title={t("task.audioNewTitle")}>
+          <Button size="sm" variant="secondary" onClick={onCreateAudioTask} title={t("task.audioNewTitle")}>
             <FileAudio data-icon="inline-start" />
             {t("task.audioNew")}
           </Button>
-          <Button variant="secondary" onClick={onCreateSrtTask} title={t("task.srtImportTitle")}>
+          <Button size="sm" variant="secondary" onClick={onCreateSrtTask} title={t("task.srtImportTitle")}>
             <Upload data-icon="inline-start" />
             {t("task.srtImport")}
           </Button>
-          <Button variant="secondary" onClick={onPickOutputDir} title={t("task.pickOutputDir")}>
+          <Button size="sm" variant="secondary" onClick={onPickOutputDir} title={t("task.pickOutputDir")}>
             <FolderOpen data-icon="inline-start" />
             {t("task.inputDir")}
           </Button>
@@ -153,6 +153,7 @@ export function TaskToolbar({
             <span>{t("task.autoStartNext")}</span>
           </label>
           <Button
+            size="sm"
             variant="secondary"
             onClick={() => onRunSelected("transcribe")}
             disabled={!canRunSelectedOperations.transcribe}
@@ -161,6 +162,7 @@ export function TaskToolbar({
             {t("common.transcribe")}
           </Button>
           <Button
+            size="sm"
             variant="secondary"
             onClick={() => onRunSelected("translate")}
             disabled={!canRunSelectedOperations.translate}
@@ -169,6 +171,7 @@ export function TaskToolbar({
             {t("common.translate")}
           </Button>
           <Button
+            size="sm"
             variant="secondary"
             onClick={() => onRunSelected("export")}
             disabled={!canRunSelectedOperations.export}
@@ -176,7 +179,7 @@ export function TaskToolbar({
             <Download data-icon="inline-start" />
             {t("common.export")}
           </Button>
-          <Button variant="destructive" onClick={onCancelSelected}>
+          <Button size="sm" variant="destructive" onClick={onCancelSelected}>
             <CircleStop data-icon="inline-start" />
             {t("common.cancel")}
           </Button>
@@ -217,7 +220,7 @@ export function TaskQueueTable({
   onToggleTask: (taskId: string) => void;
 }) {
   return (
-    <Card>
+    <Card className="task-table-card">
       <CardHeader>
         <SectionTitle icon={<Database />} title={t("task.queue")} description={t("task.queueDescription")} />
         <CardAction>

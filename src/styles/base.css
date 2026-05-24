@@ -9,9 +9,9 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  --background: #070706;
+  --background: #0b0d0c;
   --foreground: #f8e8c3;
-  --card: #11120e;
+  --card: #10120f;
   --card-foreground: #f8e8c3;
   --popover: #141510;
   --popover-foreground: #f8e8c3;
@@ -51,6 +51,12 @@
   --hotdog-mustard: #ffd43b;
   --hotdog-cream: #fff0c2;
   --panel-ring: color-mix(in srgb, var(--hotdog-bun) 24%, transparent);
+  --app-window: #0b0d0c;
+  --app-toolbar: #131514;
+  --app-toolbar-elevated: #171917;
+  --app-pane: #10120f;
+  --app-pane-alt: #151710;
+  --app-separator: #2c3027;
 }
 
 * {
@@ -60,22 +66,16 @@
 html,
 body,
 #root {
+  width: 100%;
   min-width: 0;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 body {
   margin: 0;
-  background:
-    linear-gradient(90deg, rgba(255, 196, 71, 0.055) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(255, 196, 71, 0.045) 1px, transparent 1px),
-    radial-gradient(circle at 18% 0%, rgba(226, 57, 45, 0.16), transparent 34rem),
-    linear-gradient(135deg, #060606 0%, #091211 48%, #120b07 100%);
-  background-size:
-    24px 24px,
-    24px 24px,
-    auto,
-    auto;
+  overflow-x: hidden;
+  background: var(--app-window);
 }
 
 a {
@@ -98,30 +98,37 @@ code {
 }
 
 [data-slot="card"] {
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, var(--hotdog-bun));
-  background:
-    linear-gradient(180deg, rgba(255, 199, 104, 0.035), transparent 44%),
-    color-mix(in srgb, var(--card) 92%, black);
-  box-shadow:
-    0 1px 0 rgba(255, 240, 194, 0.06) inset,
-    0 16px 38px rgba(0, 0, 0, 0.26);
+  gap: 0;
+  padding-block: 0;
+  border-radius: 6px;
+  border: 1px solid var(--app-separator);
+  background: var(--app-pane);
+  box-shadow: 0 1px 0 rgba(255, 240, 194, 0.035) inset;
   ring-color: transparent;
 }
 
+[data-slot="card-header"] {
+  border-bottom: 1px solid var(--app-separator);
+  padding: 10px 12px;
+}
+
+[data-slot="card-content"] {
+  padding: 10px 12px;
+}
+
 [data-slot="button"] {
-  border-radius: 7px;
+  border-radius: 6px;
 }
 
 [data-slot="input"],
 [data-slot="select-trigger"] {
-  min-height: 2.2rem;
-  border-color: color-mix(in srgb, var(--input) 82%, var(--hotdog-bun));
-  background: rgba(7, 7, 6, 0.38);
+  min-height: 2rem;
+  border-color: var(--app-separator);
+  background: rgba(0, 0, 0, 0.2);
 }
 
 [data-slot="table-container"] {
-  border-radius: 8px;
+  border-radius: 0 0 6px 6px;
 }
 
 @theme inline {

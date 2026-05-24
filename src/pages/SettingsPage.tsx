@@ -48,7 +48,7 @@ export function SettingsPage() {
   return (
     <>
       <section className="page-heading">
-        <Button variant="secondary" onClick={() => navigate("/tasks")}>
+        <Button variant="secondary" size="sm" onClick={() => navigate("/tasks")}>
           <ArrowLeft data-icon="inline-start" />
           {t("common.backToQueue")}
         </Button>
