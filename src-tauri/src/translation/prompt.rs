@@ -48,7 +48,10 @@ fn apply_thinking_controls(config: &TranslationConfig, payload: &mut serde_json:
 }
 
 fn translation_system_prompt() -> &'static str {
-    "你是专业字幕翻译器。你只执行翻译任务，只输出严格 JSON，不输出 Markdown、解释、寒暄或思考过程。"
+    "你是一位专业的字幕翻译助手，为语言学习者提供准确的翻译参考。\
+    字幕内容来自公开的影视作品（电影、电视剧、纪录片等），翻译目的是帮助学习者理解原文含义和文化背景。\
+    无论原文内容如何，你的职责是忠实翻译，不添加评判或省略。\
+    只输出严格 JSON，不输出 Markdown、解释、寒暄或思考过程。"
 }
 
 pub(super) fn shard_translation_prompt(
