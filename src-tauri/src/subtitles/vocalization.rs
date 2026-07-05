@@ -2,6 +2,8 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::normalize_subtitle_text;
 
+const MAX_REPEATED_VOCALIZATION_GRAPHEMES: usize = 20;
+
 pub(crate) fn collapse_repeated_vocalization(text: &str) -> String {
     let normalized = normalize_subtitle_text(text);
     let collapsed = collapse_whole_repeated_vocalization(&normalized).unwrap_or(normalized);
@@ -11,7 +13,6 @@ pub(crate) fn collapse_repeated_vocalization(text: &str) -> String {
 fn collapse_whole_repeated_vocalization(text: &str) -> Option<String> {
     const MIN_REPETITIONS: usize = 6;
     const MAX_UNIT_GRAPHEMES: usize = 4;
-    const COLLAPSED_REPETITIONS: usize = 3;
 
     let graphemes = text.graphemes(true).collect::<Vec<_>>();
     if graphemes.len() < MIN_REPETITIONS {
@@ -35,21 +36,20 @@ fn collapse_whole_repeated_vocalization(text: &str) -> Option<String> {
             continue;
         }
 
-        let mut collapsed = String::new();
-        for _ in 0..COLLAPSED_REPETITIONS.min(repetitions) {
-            collapsed.push_str(&unit.concat());
+        if core.len() > MAX_REPEATED_VOCALIZATION_GRAPHEMES {
+            return Some(
+                core.iter()
+                    .take(MAX_REPEATED_VOCALIZATION_GRAPHEMES)
+                    .copied()
+                    .collect(),
+            );
         }
-        collapsed.push_str("...");
-        return Some(collapsed);
     }
 
     None
 }
 
 fn collapse_repeated_vocalization_runs(text: &str) -> String {
-    const MIN_RUN: usize = 8;
-    const COLLAPSED_RUN: usize = 3;
-
     let graphemes = text.graphemes(true).collect::<Vec<_>>();
     let mut collapsed = String::new();
     let mut index = 0;
@@ -62,11 +62,10 @@ fn collapse_repeated_vocalization_runs(text: &str) -> String {
         }
 
         let run_len = end - index;
-        if run_len >= MIN_RUN && is_vocalization_grapheme(current) {
-            for _ in 0..COLLAPSED_RUN {
+        if run_len > MAX_REPEATED_VOCALIZATION_GRAPHEMES && is_vocalization_grapheme(current) {
+            for _ in 0..MAX_REPEATED_VOCALIZATION_GRAPHEMES {
                 collapsed.push_str(current);
             }
-            collapsed.push_str("...");
         } else {
             for grapheme in &graphemes[index..end] {
                 collapsed.push_str(grapheme);

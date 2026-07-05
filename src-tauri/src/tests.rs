@@ -53,6 +53,24 @@ fn parses_whisper_json_with_lossy_text_decoding() {
 }
 
 #[test]
+fn caps_repeated_whisper_vocalization_text() {
+    let path = std::env::temp_dir().join(format!(
+        "luma-whisper-repeat-{}-{}.json",
+        process::id(),
+        "segments"
+    ));
+    let body = format!(
+        r#"{{"segments":[{{"start":0.0,"end":1.2,"text":"{}"}}]}}"#,
+        "啊".repeat(80)
+    );
+    fs::write(&path, body).expect("test json should be written");
+
+    let parsed = parse_whisper_json(&path).expect("json should parse");
+    let _ = fs::remove_file(&path);
+    assert_eq!(parsed[0].text, "啊".repeat(20));
+}
+
+#[test]
 fn parses_imported_srt_text() {
     let parsed = parse_srt_text(
         "\u{feff}7\r\n00:00:01,000 --> 00:00:02,500\r\nHello\r\nworld\r\n\r\n9\r\n00:00:03,000 --> 00:00:04,000\r\nBye",
@@ -127,11 +145,11 @@ fn rejects_global_whisper_repetition() {
 fn collapses_long_repeated_vocalization() {
     assert_eq!(
         collapse_repeated_vocalization(&"あー".repeat(40)),
-        "あーあーあー..."
+        "あー".repeat(10)
     );
     assert_eq!(
         collapse_repeated_vocalization(&"啊".repeat(80)),
-        "啊啊啊..."
+        "啊".repeat(20)
     );
     assert_eq!(
         collapse_repeated_vocalization("你好你好你好你好你好你好"),
@@ -237,7 +255,7 @@ fn collapses_repetitive_translation_output() {
     let parsed =
         parse_translation_content(&output, &segments).expect("repetitive translation should parse");
 
-    assert_eq!(parsed[0].text, "啊啊啊...");
+    assert_eq!(parsed[0].text, "啊".repeat(20));
 }
 
 #[test]

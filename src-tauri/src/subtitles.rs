@@ -264,7 +264,7 @@ fn parse_transcription_array(items: &[Value]) -> JobResult<Vec<SubtitleSegment>>
         let text = item
             .get("text")
             .and_then(Value::as_str)
-            .map(normalize_subtitle_text)
+            .map(collapse_repeated_vocalization)
             .unwrap_or_default();
         if text.is_empty() {
             continue;
@@ -301,7 +301,7 @@ fn parse_segments_array(items: &[Value]) -> JobResult<Vec<SubtitleSegment>> {
         let text = item
             .get("text")
             .and_then(Value::as_str)
-            .map(normalize_subtitle_text)
+            .map(collapse_repeated_vocalization)
             .unwrap_or_default();
         if text.is_empty() {
             continue;
