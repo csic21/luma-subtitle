@@ -3,7 +3,8 @@ use crate::settings::normalize_language;
 use crate::state::JobError;
 use crate::subtitles::{
     collapse_repeated_vocalization, format_srt_time, parse_srt_text, parse_timestamp_ms,
-    parse_whisper_json, validate_whisper_repetition, SubtitleSegment,
+    parse_whisper_json, summarize_repeated_vocalization, validate_whisper_repetition,
+    SubtitleSegment,
 };
 use crate::translation::{attach_model_output, chat_endpoint, parse_translation_content};
 use std::{fs, process};
@@ -158,6 +159,18 @@ fn collapses_long_repeated_vocalization() {
 }
 
 #[test]
+fn summarizes_repeated_translation_vocalization() {
+    assert_eq!(
+        summarize_repeated_vocalization(&"啊".repeat(80)),
+        "啊啊啊..."
+    );
+    assert_eq!(
+        summarize_repeated_vocalization(&"あー".repeat(40)),
+        "あーあーあー..."
+    );
+}
+
+#[test]
 fn parses_translation_json_with_fence() {
     let batch = vec![SubtitleSegment {
         id: 7,
@@ -255,7 +268,7 @@ fn collapses_repetitive_translation_output() {
     let parsed =
         parse_translation_content(&output, &segments).expect("repetitive translation should parse");
 
-    assert_eq!(parsed[0].text, "啊".repeat(20));
+    assert_eq!(parsed[0].text, "啊啊啊...");
 }
 
 #[test]

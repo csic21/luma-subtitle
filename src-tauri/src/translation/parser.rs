@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     state::{JobError, JobResult},
-    subtitles::{collapse_repeated_vocalization, SubtitleSegment, TranslatedSegment},
+    subtitles::{summarize_repeated_vocalization, SubtitleSegment, TranslatedSegment},
 };
 
 #[derive(Deserialize)]
@@ -83,7 +83,7 @@ fn parse_translation_value(
             .zip(segments.iter())
             .map(|(item, segment)| TranslatedSegment {
                 id: segment.id,
-                text: collapse_repeated_vocalization(item.as_str().unwrap_or_default()),
+                text: summarize_repeated_vocalization(item.as_str().unwrap_or_default()),
             })
             .collect());
     }
@@ -107,7 +107,7 @@ fn parse_translation_value(
             .into_iter()
             .map(|item| TranslatedSegment {
                 id: item.id,
-                text: collapse_repeated_vocalization(&item.text),
+                text: summarize_repeated_vocalization(&item.text),
             })
             .collect());
     }
@@ -117,7 +117,7 @@ fn parse_translation_value(
             .zip(segments.iter())
             .map(|(item, segment)| TranslatedSegment {
                 id: segment.id,
-                text: collapse_repeated_vocalization(&item.text),
+                text: summarize_repeated_vocalization(&item.text),
             })
             .collect());
     }

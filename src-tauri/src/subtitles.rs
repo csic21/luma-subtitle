@@ -5,7 +5,7 @@ use crate::state::{JobError, JobResult};
 
 mod vocalization;
 
-pub(crate) use vocalization::collapse_repeated_vocalization;
+pub(crate) use vocalization::{collapse_repeated_vocalization, summarize_repeated_vocalization};
 
 #[derive(Clone, Debug)]
 pub(crate) struct SubtitleSegment {
