@@ -1,8 +1,10 @@
 use rusqlite::{Connection, Row};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Duration};
 use tauri::{AppHandle, Manager};
 
 use super::TaskRecord;
+
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
     let settings_json: String = row.get("settings_json")?;
@@ -47,8 +49,18 @@ pub(super) fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
 pub(super) fn connection(app: &AppHandle) -> Result<Connection, String> {
     let path = app_data_dir(app)?.join("luma.sqlite3");
     let conn = Connection::open(path).map_err(|error| error.to_string())?;
-    migrate(&conn)?;
+    configure_connection(&conn)?;
     Ok(conn)
+}
+
+fn configure_connection(conn: &Connection) -> Result<(), String> {
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .map_err(|error| error.to_string())
+}
+
+pub(super) fn enable_wal(conn: &Connection) -> Result<(), String> {
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|error| error.to_string())
 }
 
 pub(super) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -145,4 +157,34 @@ fn ensure_column(
     )
     .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn configures_file_connections_for_wal_and_busy_timeout() {
+        let path =
+            std::env::temp_dir().join(format!("luma-subtitle-schema-{}.sqlite3", Uuid::new_v4()));
+        let conn = Connection::open(&path).expect("temporary sqlite database should open");
+
+        configure_connection(&conn).expect("busy timeout should apply");
+        enable_wal(&conn).expect("WAL should apply");
+
+        let journal_mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .expect("journal mode should be readable");
+        let busy_timeout: i64 = conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .expect("busy timeout should be readable");
+        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(busy_timeout, SQLITE_BUSY_TIMEOUT.as_millis() as i64);
+
+        drop(conn);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(format!("{}{}", path.display(), suffix));
+        }
+    }
 }

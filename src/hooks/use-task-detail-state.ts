@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import {
@@ -24,7 +24,14 @@ import {
   subtitlePreview as loadSubtitlePreview,
   updateTaskSettings,
 } from "@/lib/tauri-api";
-import { appendRealtimeLog, normalizeTaskSettings, taskSettingsEqual, taskSettingsUpdatePayload } from "@/lib/task-data";
+import {
+  appendRealtimeLog,
+  mergeTaskLogs,
+  normalizeTaskSettings,
+  shouldReplaceTaskSettingsDraft,
+  taskSettingsEqual,
+  taskSettingsUpdatePayload,
+} from "@/lib/task-data";
 import type {
   EnvironmentState,
   JobEvent,
@@ -48,7 +55,7 @@ type FlowStep = {
 
 export function useTaskDetailState(taskId: string, t: TFunction) {
   const [task, setTask] = useState<TaskRecord | null>(null);
-  const [settingsDraft, setSettingsDraft] = useState<TaskSettingsSnapshot | null>(null);
+  const [settingsDraft, setSettingsDraftState] = useState<TaskSettingsSnapshot | null>(null);
   const [globalSettings, setGlobalSettings] = useState<Pick<SettingsState, "has_api_key"> | null>(null);
   const [env, setEnv] = useState<EnvironmentState | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -56,7 +63,28 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const [subtitleView, setSubtitleView] = useState<SubtitleView>("source");
   const [notice, setNotice] = useState("");
   const taskRef = useRef<TaskRecord | null>(null);
+  const settingsDraftRef = useRef<TaskSettingsSnapshot | null>(null);
   taskRef.current = task;
+  settingsDraftRef.current = settingsDraft;
+
+  const setSettingsDraft = useCallback((next: SetStateAction<TaskSettingsSnapshot | null>) => {
+    const current = settingsDraftRef.current;
+    const resolved = typeof next === "function" ? next(current) : next;
+    settingsDraftRef.current = resolved;
+    setSettingsDraftState(resolved);
+  }, []);
+
+  const syncTask = useCallback(
+    (nextTask: TaskRecord, forceSettingsDraft = false) => {
+      const previousTask = taskRef.current;
+      taskRef.current = nextTask;
+      setTask(nextTask);
+      if (shouldReplaceTaskSettingsDraft(previousTask, settingsDraftRef.current, nextTask, forceSettingsDraft)) {
+        setSettingsDraft(normalizeTaskSettings(nextTask.settings));
+      }
+    },
+    [setSettingsDraft],
+  );
 
   const tauriReady = hasTauriRuntime();
   const operationContext = useMemo(
@@ -92,16 +120,15 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const refreshTask = useCallback(
     async (options: { preview?: boolean } = {}) => {
       try {
-        const loaded = await getTask(taskId);
-        setTask(loaded);
-        setSettingsDraft(normalizeTaskSettings(loaded.settings));
-        await refreshLogs();
+        const [loaded, loadedLogs] = await Promise.all([getTask(taskId), getTaskLogs(taskId).catch(() => [])]);
+        syncTask(loaded);
+        setLogs((current) => mergeTaskLogs(loadedLogs, current));
         if ((options.preview ?? true) && loaded.source_srt_path) await refreshPreview(loaded);
       } catch (error) {
         setNotice(errorText(error));
       }
     },
-    [refreshLogs, refreshPreview, taskId],
+    [refreshPreview, syncTask, taskId],
   );
 
   const refreshRunPrerequisites = useCallback(async () => {
@@ -130,10 +157,12 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
 
     listen<TaskRecord>("task-updated", (event) => {
       if (event.payload.id !== taskId) return;
-      setTask(event.payload);
-      setSettingsDraft(normalizeTaskSettings(event.payload.settings));
-      void refreshLogs();
-      if (event.payload.source_srt_path) void refreshPreview(event.payload);
+      const previousTask = taskRef.current;
+      const subtitlePathsChanged =
+        previousTask?.source_srt_path !== event.payload.source_srt_path ||
+        previousTask?.translated_srt_path !== event.payload.translated_srt_path;
+      syncTask(event.payload);
+      if (subtitlePathsChanged && event.payload.source_srt_path) void refreshPreview(event.payload);
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -162,7 +191,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
       unlistenTask?.();
       unlistenJob?.();
     };
-  }, [refreshLogs, refreshPreview, refreshRunPrerequisites, refreshTask, t, taskId, tauriReady]);
+  }, [refreshPreview, refreshRunPrerequisites, refreshTask, syncTask, t, taskId, tauriReady]);
 
   const refreshTaskOnResume = useCallback(() => {
     void refreshTask({ preview: false });
@@ -200,27 +229,25 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const applyCurrentSettings = useCallback(async () => {
     try {
       const updated = await applyCurrentSettingsToTask(taskId);
-      setTask(updated);
-      setSettingsDraft(normalizeTaskSettings(updated.settings));
+      syncTask(updated, true);
       await refreshLogs();
       setNotice(t("notice.settingsApplied"));
     } catch (error) {
       setNotice(errorText(error));
     }
-  }, [refreshLogs, t, taskId]);
+  }, [refreshLogs, syncTask, t, taskId]);
 
   const saveTaskSettings = useCallback(async () => {
     if (!settingsDraft) return;
     try {
       const updated = await updateTaskSettings(taskId, taskSettingsUpdatePayload(settingsDraft));
-      setTask(updated);
-      setSettingsDraft(normalizeTaskSettings(updated.settings));
+      syncTask(updated, true);
       await refreshLogs();
       setNotice(t("notice.taskSettingsSaved"));
     } catch (error) {
       setNotice(errorText(error));
     }
-  }, [refreshLogs, settingsDraft, t, taskId]);
+  }, [refreshLogs, settingsDraft, syncTask, t, taskId]);
 
   const pickTaskWhisperModel = useCallback(async () => {
     try {

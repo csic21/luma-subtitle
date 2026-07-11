@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{atomic::AtomicBool, Arc},
+};
 
 use tauri::{AppHandle, Manager, State};
 
@@ -8,6 +11,12 @@ use crate::{
 };
 
 use super::task_runner::execute_task_operation;
+
+// ponytail: fixed global slots; make this hardware/provider-aware only if measured throughput needs it.
+const MAX_CONCURRENT_TRANSCRIPTIONS: usize = 1;
+const MAX_CONCURRENT_TRANSLATIONS: usize = 1;
+// ponytail: serialize exports while resolving filenames; add per-directory reservations if export throughput becomes measurable.
+const MAX_CONCURRENT_EXPORTS: usize = 1;
 
 pub(super) fn enqueue_task_operation(
     app: AppHandle,
@@ -19,7 +28,7 @@ pub(super) fn enqueue_task_operation(
     let task = task_db::require_task(&app, &task_id)?;
     validate_task_operation(&task, &operation)?;
 
-    if state.running_operations.lock().contains(&task_id)
+    if state.running_operations.lock().contains_key(&task_id)
         || state
             .queued_operations
             .lock()
@@ -52,15 +61,19 @@ pub(super) fn dispatch_queue(app: AppHandle) {
                 return;
             }
 
-            let Some(operation) = state.queued_operations.lock().pop_front() else {
-                return;
+            let operation = {
+                let mut queue = state.queued_operations.lock();
+                queue.retain(|queued| !running.contains_key(&queued.task_id));
+                let Some(index) = next_runnable_operation_index(&queue, &running) else {
+                    return;
+                };
+                queue
+                    .remove(index)
+                    .expect("queued operation index must exist")
             };
-            if running.contains(&operation.task_id) {
-                continue;
-            }
 
             let cancel = Arc::new(AtomicBool::new(false));
-            running.insert(operation.task_id.clone());
+            running.insert(operation.task_id.clone(), operation.operation.clone());
             state
                 .tasks
                 .lock()
@@ -151,7 +164,10 @@ fn enqueue_next_link(app: &AppHandle, completed: &QueuedTaskOperation) {
     }
 
     let state = app.state::<AppState>();
-    let is_running = state.running_operations.lock().contains(&completed.task_id);
+    let is_running = state
+        .running_operations
+        .lock()
+        .contains_key(&completed.task_id);
     let is_queued = state
         .queued_operations
         .lock()
@@ -178,5 +194,68 @@ fn next_operation(operation: &str) -> Option<&'static str> {
         "transcribe" => Some("translate"),
         "translate" => Some("export"),
         _ => None,
+    }
+}
+
+fn next_runnable_operation_index(
+    queue: &VecDeque<QueuedTaskOperation>,
+    running: &HashMap<String, String>,
+) -> Option<usize> {
+    queue
+        .iter()
+        .position(|queued| resource_available(running, &queued.operation))
+}
+
+fn resource_available(running: &HashMap<String, String>, operation: &str) -> bool {
+    let running_count = running
+        .values()
+        .filter(|running_operation| running_operation.as_str() == operation)
+        .count();
+
+    match operation {
+        "transcribe" => running_count < MAX_CONCURRENT_TRANSCRIPTIONS,
+        "translate" => running_count < MAX_CONCURRENT_TRANSLATIONS,
+        "export" => running_count < MAX_CONCURRENT_EXPORTS,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, VecDeque};
+
+    use super::{next_runnable_operation_index, resource_available};
+    use crate::state::QueuedTaskOperation;
+
+    #[test]
+    fn limits_each_heavy_operation_to_one_running_job() {
+        let mut running = HashMap::new();
+        running.insert("video-1".to_string(), "transcribe".to_string());
+        running.insert("srt-1".to_string(), "translate".to_string());
+
+        assert!(!resource_available(&running, "transcribe"));
+        assert!(!resource_available(&running, "translate"));
+        assert!(resource_available(&running, "export"));
+
+        running.insert("export-1".to_string(), "export".to_string());
+        assert!(!resource_available(&running, "export"));
+    }
+
+    #[test]
+    fn schedules_work_behind_a_resource_blocked_queue_head() {
+        let mut running = HashMap::new();
+        running.insert("video-1".to_string(), "transcribe".to_string());
+        let queue = VecDeque::from(vec![
+            QueuedTaskOperation {
+                task_id: "video-2".to_string(),
+                operation: "transcribe".to_string(),
+            },
+            QueuedTaskOperation {
+                task_id: "srt-1".to_string(),
+                operation: "translate".to_string(),
+            },
+        ]);
+
+        assert_eq!(next_runnable_operation_index(&queue, &running), Some(1));
     }
 }

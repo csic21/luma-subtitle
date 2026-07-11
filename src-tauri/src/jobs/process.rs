@@ -16,7 +16,7 @@ use crate::{
     paths::locate_binary,
     process_utils::hide_tokio_command_window,
     settings::normalize_language,
-    state::{ensure_not_cancelled, JobError, JobResult},
+    state::{JobError, JobResult},
 };
 
 #[derive(Clone, Copy)]
@@ -137,6 +137,7 @@ async fn run_process(
     command.stdin(Stdio::null());
     command.stdout(Stdio::null());
     command.stderr(Stdio::piped());
+    command.kill_on_drop(true);
     let mut child = command
         .spawn()
         .map_err(|error| JobError::failed(format!("{failure_context}: {error}")))?;
@@ -149,7 +150,10 @@ async fn run_process(
         String::from_utf8_lossy(&buffer).to_string()
     });
     loop {
-        ensure_not_cancelled(&cancel)?;
+        if cancel.load(Ordering::SeqCst) {
+            let _ = child.kill().await;
+            return Err(JobError::Cancelled);
+        }
         match child
             .try_wait()
             .map_err(|error| JobError::failed(format!("{failure_context}: {error}")))?
@@ -168,10 +172,6 @@ async fn run_process(
                 )));
             }
             None => sleep(Duration::from_millis(200)).await,
-        }
-        if cancel.load(Ordering::SeqCst) {
-            let _ = child.kill().await;
-            return Err(JobError::Cancelled);
         }
     }
 }
@@ -196,4 +196,52 @@ fn process_error_detail(stderr: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!("\n{detail}")
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{run_process, JobError};
+    use std::{
+        fs, process,
+        sync::{atomic::AtomicBool, Arc},
+        thread,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+    use tokio::process::Command;
+
+    #[test]
+    fn cancellation_kills_running_child() {
+        tauri::async_runtime::block_on(async {
+            let marker = std::env::temp_dir().join(format!(
+                "luma-process-cancel-{}-{}",
+                process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system time should be after epoch")
+                    .as_nanos()
+            ));
+            let mut command = Command::new("sh");
+            command
+                .arg("-c")
+                .arg("sleep 1; touch \"$1\"")
+                .arg("luma-process-test")
+                .arg(&marker);
+
+            let result = run_process(
+                command,
+                Arc::new(AtomicBool::new(true)),
+                "test process failed",
+            )
+            .await;
+
+            assert!(matches!(result, Err(JobError::Cancelled)));
+            thread::sleep(Duration::from_millis(1_200));
+            let marker_exists = marker.exists();
+            let _ = fs::remove_file(&marker);
+            assert!(
+                !marker_exists,
+                "cancelled child should not finish its script"
+            );
+        });
+    }
 }

@@ -1,5 +1,5 @@
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc},
 };
 
@@ -164,7 +164,6 @@ async fn run_translate_task(
         model: task.settings.model.clone(),
         temperature: task.settings.temperature,
         translation_shard_size: Some(task.settings.translation_shard_size),
-        api_key: None,
     };
     validate_translate_request(&request).map_err(JobError::failed)?;
     let api_key = task_db::load_api_key(&app)
@@ -240,21 +239,38 @@ async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>)
     tokio::fs::create_dir_all(output_dir_path)
         .await
         .map_err(|error| JobError::failed(format!("创建导出目录失败: {error}")))?;
-    let source_srt = tokio::fs::read_to_string(&source_srt_path)
-        .await
-        .map_err(|error| JobError::failed(format!("读取原文字幕失败: {error}")))?;
-    let source_path = output_dir_path.join(source_file_name);
-    write_srt_text(&source_path, &source_srt).await?;
-    ensure_not_cancelled(&cancel)?;
-
-    let translated_srt = if let (Some(translated_path), Some(translated_file_name)) = (
+    let source_path = resolve_export_path(
+        output_dir_path,
+        &source_file_name,
+        task_id,
+        task.exported_source_srt.as_deref(),
+    )?;
+    let translated_export = if let (Some(translated_path), Some(translated_file_name)) = (
         task.translated_srt_path.clone(),
         task.translated_file_name.clone(),
     ) {
+        Some((
+            translated_path,
+            resolve_export_path(
+                output_dir_path,
+                &translated_file_name,
+                task_id,
+                task.exported_translated_srt.as_deref(),
+            )?,
+        ))
+    } else {
+        None
+    };
+    let source_srt = tokio::fs::read_to_string(&source_srt_path)
+        .await
+        .map_err(|error| JobError::failed(format!("读取原文字幕失败: {error}")))?;
+    write_srt_text(&source_path, &source_srt).await?;
+    ensure_not_cancelled(&cancel)?;
+
+    let translated_srt = if let Some((translated_path, target)) = translated_export {
         let body = tokio::fs::read_to_string(&translated_path)
             .await
             .map_err(|error| JobError::failed(format!("读取译文字幕失败: {error}")))?;
-        let target = output_dir_path.join(translated_file_name);
         write_srt_text(&target, &body).await?;
         Some(path_to_string(target))
     } else {
@@ -280,4 +296,113 @@ async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>)
     );
     task_db::set_exported(&app, task_id, &exported).map_err(JobError::failed)?;
     Ok(())
+}
+
+fn resolve_export_path(
+    output_dir: &Path,
+    file_name: &str,
+    task_id: &str,
+    previous_export: Option<&str>,
+) -> JobResult<PathBuf> {
+    let preferred = output_dir.join(file_name);
+    if export_path_is_available(&preferred, previous_export) {
+        return Ok(preferred);
+    }
+
+    let alternative = output_dir.join(file_name_with_task_suffix(file_name, task_id));
+    if export_path_is_available(&alternative, previous_export) {
+        return Ok(alternative);
+    }
+
+    Err(JobError::failed(format!(
+        "导出文件已存在，且任务专用文件名也被占用: {}",
+        alternative.display()
+    )))
+}
+
+fn export_path_is_available(path: &Path, previous_export: Option<&str>) -> bool {
+    !path.exists() || previous_export.is_some_and(|previous| path == Path::new(previous))
+}
+
+fn file_name_with_task_suffix(file_name: &str, task_id: &str) -> String {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(file_name);
+    let short_id = task_id
+        .split('-')
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("task");
+    match path.extension().and_then(|value| value.to_str()) {
+        Some(extension) => format!("{stem}.{short_id}.{extension}"),
+        None => format!("{stem}.{short_id}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_export_path;
+    use std::{
+        fs,
+        path::PathBuf,
+        process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn export_path_keeps_the_original_name_when_available() {
+        let dir = temp_test_dir("available");
+
+        let path = resolve_export_path(&dir, "clip.source.srt", "12345678-task", None)
+            .expect("available name should be used");
+
+        assert_eq!(path, dir.join("clip.source.srt"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_path_uses_a_stable_task_suffix_for_conflicts() {
+        let dir = temp_test_dir("conflict");
+        let original = dir.join("clip.source.srt");
+        fs::write(&original, "other task").expect("conflicting file should exist");
+
+        let fallback = resolve_export_path(&dir, "clip.source.srt", "12345678-task", None)
+            .expect("task suffix should avoid the conflict");
+        assert_eq!(fallback, dir.join("clip.source.12345678.srt"));
+
+        fs::write(&fallback, "this task").expect("task fallback should exist");
+        let repeated =
+            resolve_export_path(&dir, "clip.source.srt", "12345678-task", fallback.to_str())
+                .expect("task should reuse its own fallback");
+        assert_eq!(repeated, fallback);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_path_rejects_a_foreign_task_suffix() {
+        let dir = temp_test_dir("foreign-fallback");
+        fs::write(dir.join("clip.source.srt"), "other task")
+            .expect("conflicting file should exist");
+        fs::write(dir.join("clip.source.12345678.srt"), "another task")
+            .expect("fallback file should exist");
+
+        assert!(resolve_export_path(&dir, "clip.source.srt", "12345678-task", None).is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "luma-export-path-{name}-{}-{unique}",
+            process::id()
+        ));
+        fs::create_dir_all(&dir).expect("test directory should be created");
+        dir
+    }
 }

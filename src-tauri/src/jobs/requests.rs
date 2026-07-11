@@ -20,12 +20,6 @@ pub(crate) struct JobRequest {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ExportSubtitlesRequest {
-    pub(crate) job_id: String,
-    pub(crate) output_dir: Option<String>,
-}
-
-#[derive(Deserialize)]
 pub(crate) struct TranslateSubtitlesRequest {
     pub(crate) job_id: String,
     pub(crate) target_language: String,
@@ -35,13 +29,6 @@ pub(crate) struct TranslateSubtitlesRequest {
     pub(crate) model: String,
     pub(crate) temperature: f32,
     pub(crate) translation_shard_size: Option<usize>,
-    pub(crate) api_key: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct ImportSourceSrtRequest {
-    pub(crate) srt_path: String,
-    pub(crate) output_dir: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]

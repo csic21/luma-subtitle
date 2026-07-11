@@ -1,6 +1,6 @@
 use parking_lot::Mutex;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -9,18 +9,16 @@ use std::{
 
 use crate::{
     dependencies::{DependencyInstallEvent, ModelDownloadEvent},
-    job_events::{JobEvent, StoredSubtitleResult},
+    job_events::StoredSubtitleResult,
 };
 
 #[derive(Default)]
 pub(crate) struct AppState {
     pub(crate) tasks: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub(crate) queued_operations: Mutex<VecDeque<QueuedTaskOperation>>,
-    pub(crate) running_operations: Mutex<HashSet<String>>,
+    pub(crate) running_operations: Mutex<HashMap<String, String>>,
     pub(crate) model_download: Mutex<Option<ModelDownloadEvent>>,
     pub(crate) dependency_install: Mutex<Option<DependencyInstallEvent>>,
-    pub(crate) job_events: Mutex<HashMap<String, JobEvent>>,
-    pub(crate) job_logs: Mutex<HashMap<String, Vec<String>>>,
     pub(crate) subtitle_results: Mutex<HashMap<String, StoredSubtitleResult>>,
 }
 

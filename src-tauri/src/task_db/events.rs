@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, Connection, Transaction};
 use tauri::{AppHandle, Emitter};
 
 use crate::job_events::{ExportedSubtitlePaths, JobEvent, JobStatus};
@@ -120,15 +120,25 @@ pub(crate) fn set_exported(
 }
 
 pub(crate) fn record_job_event(app: &AppHandle, event: &JobEvent) -> Result<(), String> {
-    if get_task(app, &event.job_id)?.is_none() {
-        return Ok(());
+    let mut conn = connection(app)?;
+    if record_job_event_in_transaction(&mut conn, event)? {
+        emit_task(app, &event.job_id);
     }
-    let conn = connection(app)?;
+    Ok(())
+}
+
+fn record_job_event_in_transaction(
+    conn: &mut Connection,
+    event: &JobEvent,
+) -> Result<bool, String> {
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
     let now = super::now_ts();
     let status = job_status_name(&event.status);
     let outputs = event.outputs.as_ref();
-    conn.execute(
-        "UPDATE tasks SET
+    let error = event.error.as_deref();
+    let updated = tx
+        .execute(
+            "UPDATE tasks SET
             status = ?1,
             stage = ?2,
             message = ?3,
@@ -140,30 +150,48 @@ pub(crate) fn record_job_event(app: &AppHandle, event: &JobEvent) -> Result<(), 
             error = ?9,
             updated_at = ?10
         WHERE id = ?11",
-        params![
-            status,
-            event.stage,
-            event.message,
-            event.progress,
-            outputs.map(|value| value.source_file_name.clone()),
-            outputs.and_then(|value| value.translated_file_name.clone()),
-            outputs.map(|value| value.output_dir.clone()),
-            outputs.map(|value| value.segment_count as i64),
-            event.error,
-            now,
-            event.job_id,
-        ],
-    )
-    .map_err(|error| error.to_string())?;
-    append_log(
-        app,
+            params![
+                status,
+                event.stage.as_str(),
+                event.message.as_str(),
+                event.progress,
+                outputs.map(|value| value.source_file_name.as_str()),
+                outputs.and_then(|value| value.translated_file_name.as_deref()),
+                outputs.map(|value| value.output_dir.as_str()),
+                outputs.map(|value| value.segment_count as i64),
+                error,
+                now,
+                event.job_id.as_str(),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    if updated == 0 {
+        return Ok(false);
+    }
+    append_log_in_transaction(
+        &tx,
         &event.job_id,
         &format!("{} · {}", event.stage, event.message),
+        now,
     )?;
-    if let Some(error) = event.error.as_ref() {
-        append_log(app, &event.job_id, &format!("error · {error}"))?;
+    if let Some(error) = error {
+        append_log_in_transaction(&tx, &event.job_id, &format!("error · {error}"), now)?;
     }
-    emit_task(app, &event.job_id);
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+fn append_log_in_transaction(
+    tx: &Transaction<'_>,
+    task_id: &str,
+    line: &str,
+    created_at: i64,
+) -> Result<(), String> {
+    tx.execute(
+        "INSERT INTO task_logs(task_id, created_at, line) VALUES(?1, ?2, ?3)",
+        params![task_id, created_at, line],
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -246,4 +274,68 @@ fn operation_message(operation: &str, suffix: &str) -> String {
         _ => "任务",
     };
     format!("{label}{suffix}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::job_events::{JobEvent, JobStatus};
+    use crate::task_db::schema::migrate;
+
+    #[test]
+    fn job_event_rolls_back_task_update_when_log_insert_fails() {
+        let mut conn = Connection::open_in_memory().expect("in-memory sqlite should open");
+        migrate(&conn).expect("migration should run");
+        conn.execute(
+            "INSERT INTO tasks (
+                id, source_type, file_name, status, stage, message, progress, settings_json, created_at, updated_at
+            ) VALUES ('task-1', 'video', 'clip.mp4', 'created', 'created', 'pending', 0.0, '{}', 1, 1)",
+            [],
+        )
+        .expect("task should insert");
+        conn.execute_batch(
+            "CREATE TRIGGER reject_task_logs BEFORE INSERT ON task_logs
+             BEGIN SELECT RAISE(ABORT, 'log write rejected'); END;",
+        )
+        .expect("failure trigger should create");
+
+        let event = JobEvent {
+            job_id: "task-1".to_string(),
+            stage: "transcribing".to_string(),
+            status: JobStatus::Running,
+            message: "working".to_string(),
+            progress: 0.5,
+            outputs: None,
+            error: None,
+        };
+
+        let error = record_job_event_in_transaction(&mut conn, &event)
+            .expect_err("failed log write should abort the event transaction");
+        assert!(error.contains("log write rejected"));
+
+        let (status, stage, message, progress): (String, String, String, f64) = conn
+            .query_row(
+                "SELECT status, stage, message, progress FROM tasks WHERE id = 'task-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("task should still exist");
+        assert_eq!(
+            (status, stage, message, progress),
+            (
+                "created".to_string(),
+                "created".to_string(),
+                "pending".to_string(),
+                0.0
+            )
+        );
+        let log_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM task_logs WHERE task_id = 'task-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("log count should be readable");
+        assert_eq!(log_count, 0);
+    }
 }

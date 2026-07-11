@@ -10,7 +10,6 @@ use crate::{
     paths::{path_to_string, resolve_output_dir, safe_stem},
     state::{ensure_not_cancelled, AppState, JobError, JobResult},
     subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition, SubtitleSegment},
-    task_db,
     translation::{
         normalize_translation_shard_size, translate_with_single_request, TranslationConfig,
         DEFAULT_TRANSLATION_SHARD_SIZE,
@@ -22,31 +21,6 @@ use super::{
     process::{prepare_audio, transcribe_audio, TranscriptionMode},
     JobRequest, TranslateSubtitlesRequest,
 };
-
-pub(super) fn resolve_translation_inputs(
-    app: &AppHandle,
-    request: &TranslateSubtitlesRequest,
-) -> Result<(StoredSubtitleResult, String), String> {
-    let api_key = request
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .map(Ok)
-        .unwrap_or_else(|| {
-            task_db::load_api_key(app)?
-                .ok_or_else(|| "请先保存 OpenAI 兼容接口的 API Key".to_string())
-        })?;
-    let stored = app
-        .state::<AppState>()
-        .subtitle_results
-        .lock()
-        .get(&request.job_id)
-        .cloned()
-        .ok_or_else(|| "没有找到可翻译的字幕结果".to_string())?;
-    Ok((stored, api_key))
-}
 
 pub(super) async fn run_translation(
     app: &AppHandle,

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectAudio, selectVideo } from "./tauri-api";
+import { selectAudio, selectVideo, subtitlePreview } from "./tauri-api";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -63,5 +63,17 @@ describe("selectAudio", () => {
         },
       ],
     });
+  });
+});
+
+describe("subtitlePreview", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("keeps the persisted task command and camelCase argument", () => {
+    void subtitlePreview("task-1");
+
+    expect(invoke).toHaveBeenCalledWith("subtitle_preview", { jobId: "task-1" });
   });
 });

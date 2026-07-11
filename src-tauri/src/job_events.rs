@@ -1,7 +1,7 @@
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter};
 
-use crate::{state::AppState, subtitles::SubtitleSegment};
+use crate::subtitles::SubtitleSegment;
 
 #[derive(Clone, Serialize)]
 pub(crate) struct JobOutputs {
@@ -46,12 +46,6 @@ pub(crate) struct JobEvent {
     pub(crate) progress: f32,
     pub(crate) outputs: Option<JobOutputs>,
     pub(crate) error: Option<String>,
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct JobProgressSnapshot {
-    event: Option<JobEvent>,
-    logs: Vec<String>,
 }
 
 pub(crate) struct JobEventDraft {
@@ -140,39 +134,8 @@ pub(crate) fn publish_job_event(app: &AppHandle, draft: JobEventDraft) {
         error: draft.error,
     };
 
-    let state = app.state::<AppState>();
-    state
-        .job_events
-        .lock()
-        .insert(event.job_id.clone(), event.clone());
-    state
-        .job_logs
-        .lock()
-        .entry(event.job_id.clone())
-        .or_default()
-        .push(format!("{} · {}", event.stage, event.message));
-    if let Some(error) = event.error.as_ref() {
-        state
-            .job_logs
-            .lock()
-            .entry(event.job_id.clone())
-            .or_default()
-            .push(format!("error · {error}"));
+    if let Err(error) = crate::task_db::record_job_event(app, &event) {
+        eprintln!("持久化任务事件失败 [{}]: {error}", event.job_id);
     }
-
-    let _ = crate::task_db::record_job_event(app, &event);
     let _ = app.emit("job-event", event);
-}
-
-#[tauri::command]
-pub(crate) fn job_status(state: State<'_, AppState>, job_id: String) -> JobProgressSnapshot {
-    JobProgressSnapshot {
-        event: state.job_events.lock().get(&job_id).cloned(),
-        logs: state
-            .job_logs
-            .lock()
-            .get(&job_id)
-            .cloned()
-            .unwrap_or_default(),
-    }
 }

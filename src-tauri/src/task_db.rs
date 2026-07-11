@@ -24,12 +24,14 @@ pub(crate) use models::{QueueSettings, TaskRecord, TaskSettingsSnapshot};
 pub(crate) use preferences::{
     has_api_key, load_api_key, load_queue_settings, save_api_key, save_queue_settings,
 };
-#[cfg(test)]
-use schema::migrate;
-use schema::{app_data_dir, connection, task_from_row};
+use schema::{app_data_dir, connection, enable_wal, migrate, task_from_row};
 
 pub(crate) fn init(app: &AppHandle) -> Result<(), String> {
-    let _ = connection(app)?;
+    {
+        let conn = connection(app)?;
+        enable_wal(&conn)?;
+        migrate(&conn)?;
+    }
     mark_interrupted_tasks(app)?;
 
     let cleanup_app = app.clone();

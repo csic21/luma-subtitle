@@ -45,6 +45,11 @@ export function appendRealtimeLog(logs: string[], event: JobEvent) {
   return next;
 }
 
+export function mergeTaskLogs(snapshot: string[], realtime: string[]) {
+  const known = new Set(snapshot);
+  return [...snapshot, ...realtime.filter((line) => !known.has(line))];
+}
+
 export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSettingsSnapshot {
   return {
     ...settings,
@@ -68,6 +73,15 @@ export function taskSettingsEqual(left: TaskSettingsSnapshot, right: TaskSetting
     normalizedLeft.temperature === normalizedRight.temperature &&
     normalizedLeft.translation_shard_size === normalizedRight.translation_shard_size
   );
+}
+
+export function shouldReplaceTaskSettingsDraft(
+  previousTask: Pick<TaskRecord, "id" | "settings"> | null,
+  draft: TaskSettingsSnapshot | null,
+  nextTask: Pick<TaskRecord, "id">,
+  force = false,
+) {
+  return force || previousTask?.id !== nextTask.id || !draft || taskSettingsEqual(previousTask.settings, draft);
 }
 
 export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {

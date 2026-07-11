@@ -11,7 +11,6 @@ use crate::{
     task_db::{self, QueueSettings, TaskRecord},
 };
 
-pub(crate) mod adhoc;
 mod helpers;
 mod process;
 mod queue;
@@ -27,7 +26,7 @@ use helpers::{
 use queue::{cancel_queued_task, dispatch_queue, enqueue_task_operation};
 pub(crate) use requests::{
     CreateAudioTaskRequest, CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest,
-    TranslateSubtitlesRequest, UpdateTaskSettingsRequest,
+    SubtitlePreview, TranslateSubtitlesRequest, UpdateTaskSettingsRequest,
 };
 
 #[tauri::command]
@@ -45,6 +44,31 @@ pub(crate) fn get_task(app: AppHandle, task_id: String) -> Result<TaskRecord, St
 #[tauri::command]
 pub(crate) fn get_task_logs(app: AppHandle, task_id: String) -> Result<Vec<String>, String> {
     task_db::task_logs(&app, &task_id)
+}
+
+#[tauri::command]
+pub(crate) fn subtitle_preview(app: AppHandle, job_id: String) -> Result<SubtitlePreview, String> {
+    let task = task_db::require_task(&app, &job_id)?;
+    let source_srt_path = task
+        .source_srt_path
+        .as_deref()
+        .ok_or_else(|| "没有找到可预览的字幕结果".to_string())?;
+    let source_srt = std::fs::read_to_string(source_srt_path).map_err(|error| error.to_string())?;
+    let translated_srt = task
+        .translated_srt_path
+        .as_deref()
+        .map(std::fs::read_to_string)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+
+    Ok(SubtitlePreview {
+        source_srt,
+        translated_srt,
+        source_file_name: task
+            .source_file_name
+            .unwrap_or_else(|| "source.srt".to_string()),
+        translated_file_name: task.translated_file_name,
+    })
 }
 
 #[tauri::command]
@@ -251,8 +275,6 @@ pub(crate) async fn delete_task(
     .map_err(|error| format!("删除任务记录失败: {error}"))??;
 
     state.subtitle_results.lock().remove(&task_id);
-    state.job_events.lock().remove(&task_id);
-    state.job_logs.lock().remove(&task_id);
 
     let cleanup_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {

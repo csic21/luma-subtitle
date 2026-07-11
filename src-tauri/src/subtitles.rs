@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
+use uuid::Uuid;
 
 use crate::state::{JobError, JobResult};
 
@@ -48,9 +49,16 @@ pub(crate) fn render_srt(
 }
 
 pub(crate) async fn write_srt_text(path: &Path, body: &str) -> JobResult<()> {
-    tokio::fs::write(path, body)
-        .await
-        .map_err(|error| JobError::failed(format!("写入 SRT 失败: {error}")))
+    let temporary_path = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
+    if let Err(error) = tokio::fs::write(&temporary_path, body).await {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(JobError::failed(format!("写入 SRT 失败: {error}")));
+    }
+    if let Err(error) = tokio::fs::rename(&temporary_path, path).await {
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        return Err(JobError::failed(format!("替换 SRT 失败: {error}")));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_srt_file(path: &Path) -> JobResult<Vec<SubtitleSegment>> {
@@ -364,4 +372,50 @@ pub(crate) fn format_srt_time(ms: u64) -> String {
 }
 pub(crate) fn normalize_subtitle_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_srt_text;
+    use std::{
+        fs,
+        path::PathBuf,
+        process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn write_srt_text_replaces_the_completed_file() {
+        tauri::async_runtime::block_on(async {
+            let dir = temp_test_dir();
+            let target = dir.join("clip.srt");
+            fs::write(&target, "old subtitles").expect("old file should exist");
+
+            write_srt_text(&target, "new subtitles")
+                .await
+                .expect("atomic write should succeed");
+
+            assert_eq!(
+                fs::read_to_string(&target).expect("written file should be readable"),
+                "new subtitles"
+            );
+            assert_eq!(
+                fs::read_dir(&dir)
+                    .expect("test directory should be readable")
+                    .count(),
+                1
+            );
+            let _ = fs::remove_dir_all(dir);
+        });
+    }
+
+    fn temp_test_dir() -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("luma-srt-write-{}-{unique}", process::id()));
+        fs::create_dir_all(&dir).expect("test directory should be created");
+        dir
+    }
 }
