@@ -1,9 +1,9 @@
-import { Settings } from "lucide-react";
-import { Link, Navigate, Route, Routes } from "react-router-dom";
+import { Languages, ListTodo, Settings } from "lucide-react";
+import { Link, Navigate, NavLink, Route, Routes } from "react-router-dom";
 
-import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { localeOptions, type Locale, useI18n } from "@/i18n";
+import { cn } from "@/lib/utils";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { TaskDetailPage } from "@/pages/TaskDetailPage";
 import { TasksPage } from "@/pages/TasksPage";
@@ -14,8 +14,8 @@ export function AppLayout() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <Link to="/tasks" className="brand-link">
+      <aside className="app-sidebar">
+        <Link to="/tasks" className="brand-link" title="Luma Subtitle">
           <span className="brand-mark" aria-hidden="true">
             <img src={lumaLogoMark} alt="" />
           </span>
@@ -24,9 +24,33 @@ export function AppLayout() {
             <span>{t("app.tagline")}</span>
           </span>
         </Link>
-        <div className="topbar-actions">
+
+        <nav className="app-nav" aria-label={t("app.tagline")}>
+          <NavLink
+            to="/tasks"
+            className={({ isActive }) => cn("nav-item", isActive && "active")}
+            title={t("task.queue")}
+          >
+            <ListTodo aria-hidden="true" />
+            <span className="nav-label">{t("task.queue")}</span>
+          </NavLink>
+          <NavLink
+            to="/settings"
+            className={({ isActive }) => cn("nav-item", isActive && "active")}
+            title={t("app.settings")}
+          >
+            <Settings aria-hidden="true" />
+            <span className="nav-label">{t("app.settings")}</span>
+          </NavLink>
+        </nav>
+
+        <footer className="sidebar-footer">
+          <label className="sidebar-locale-label" htmlFor="app-locale">
+            <Languages aria-hidden="true" />
+            <span>{t("app.language")}</span>
+          </label>
           <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
-            <SelectTrigger className="locale-select" aria-label={t("app.language")}>
+            <SelectTrigger id="app-locale" className="locale-select" aria-label={t("app.language")}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -39,13 +63,8 @@ export function AppLayout() {
               </SelectGroup>
             </SelectContent>
           </Select>
-          <Button asChild variant="secondary" size="icon" className="topbar-settings-button" title={t("app.settings")}>
-            <Link to="/settings" aria-label={t("app.settings")}>
-              <Settings />
-            </Link>
-          </Button>
-        </div>
-      </header>
+        </footer>
+      </aside>
 
       <section className="app-content">
         <Routes>

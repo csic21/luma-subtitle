@@ -9,14 +9,17 @@ describe("SettingsPage layout", () => {
     expect(source).toMatch(/<div className="settings-main-stack">[\s\S]*<ModelApiSettingsCard[\s\S]*<UpdateSettingsCard/);
   });
 
-  it("keeps the topbar settings action visible when the locale select shrinks", () => {
+  it("keeps app navigation available when the sidebar collapses", () => {
     const layoutSource = readFileSync(new URL("../layout/AppLayout.tsx", import.meta.url), "utf8");
     const shellStyles = readFileSync(new URL("../styles/shell.css", import.meta.url), "utf8");
+    const responsiveStyles = readFileSync(new URL("../styles/responsive.css", import.meta.url), "utf8");
 
-    expect(layoutSource).toContain('className="topbar-settings-button"');
-    expect(shellStyles).toContain(".topbar-settings-button");
-    expect(shellStyles).toMatch(/\.topbar-actions\s*{[\s\S]*min-width:\s*0;[\s\S]*flex:\s*0 1 auto;/);
-    expect(shellStyles).toMatch(/\.locale-select\s*{[\s\S]*min-width:\s*0;[\s\S]*flex:\s*1 1/);
+    expect(layoutSource).toContain('className="app-sidebar"');
+    expect(layoutSource).toContain('to="/settings"');
+    expect(shellStyles).toMatch(/\.app-shell\s*{[\s\S]*grid-template-columns:\s*196px minmax\(0, 1fr\);/);
+    expect(responsiveStyles).toMatch(
+      /@media \(max-width:\s*860px\)\s*{[\s\S]*\.app-shell\s*{[\s\S]*grid-template-columns:\s*62px minmax\(0, 1fr\);/
+    );
   });
 
   it("lets the quick start card fill the remaining side-column height on wide settings layouts", () => {

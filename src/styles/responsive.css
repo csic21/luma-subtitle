@@ -24,29 +24,6 @@
     padding: 8px;
   }
 
-  .brand-link {
-    align-items: center;
-  }
-
-  .locale-select {
-    width: 8.5rem;
-    flex-basis: 8.5rem;
-  }
-
-  .brand-mark {
-    width: 30px;
-    height: 30px;
-  }
-
-  .brand-copy strong {
-    max-width: 170px;
-    font-size: 0.9rem;
-  }
-
-  .brand-copy span {
-    display: none;
-  }
-
   .toolbar-main > [data-slot="button"],
   .action-row > [data-slot="button"] {
     flex: 1 1 10rem;
@@ -84,29 +61,53 @@
 }
 
 @media (max-width: 640px) {
-  .topbar,
   .page-heading {
     grid-template-columns: 1fr;
   }
 
-  .topbar {
-    align-items: stretch;
-    display: grid;
-  }
-
-  .topbar-actions {
-    width: 100%;
-  }
-
-  .locale-select {
-    width: auto;
-    min-width: 0;
-    flex: 1 1 auto;
-    flex-basis: auto;
-    margin-left: 0;
-  }
-
   .metric-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    padding-inline: 9px;
+  }
+
+  .brand-link,
+  .nav-item {
+    justify-content: center;
+  }
+
+  .brand-copy,
+  .nav-label,
+  .sidebar-locale-label span {
+    display: none;
+  }
+
+  .app-nav {
+    margin-top: 18px;
+  }
+
+  .nav-item {
+    padding-inline: 0;
+  }
+
+  .sidebar-locale-label {
+    justify-content: center;
+  }
+
+  .sidebar-footer [data-slot="select-value"] {
+    display: none;
+  }
+
+  .sidebar-footer [data-slot="select-trigger"] {
+    justify-content: center;
+    padding-inline: 0;
   }
 }

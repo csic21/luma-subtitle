@@ -1,63 +1,45 @@
 .app-shell {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
   width: 100%;
   max-width: none;
+  height: 100vh;
+  height: 100dvh;
   min-height: 100vh;
   min-height: 100dvh;
-  margin: 0 auto;
-  padding: 0;
-  background:
-    linear-gradient(180deg, rgba(255, 240, 194, 0.018), transparent 180px),
-    var(--app-window);
+  overflow: hidden;
+  background: var(--app-window);
 }
 
 .app-content {
   display: flex;
   min-height: 0;
-  flex: 1;
   flex-direction: column;
   gap: 10px;
-  padding: 10px 12px 12px;
+  overflow: auto;
+  background:
+    linear-gradient(180deg, rgba(255, 240, 194, 0.018), transparent 180px),
+    var(--app-window);
+  padding: 12px;
 }
 
-.topbar {
+.app-sidebar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 48px;
-  border-bottom: 1px solid var(--app-separator);
-  background: color-mix(in srgb, var(--app-toolbar) 92%, black);
-  padding: 7px 10px;
-  box-shadow: 0 1px 0 rgba(255, 240, 194, 0.035) inset;
-}
-
-.topbar > [data-slot="button"],
-.topbar-settings-button {
-  flex: 0 0 auto;
-}
-
-.topbar-actions {
-  display: flex;
-  align-items: center;
+  flex-direction: column;
   min-width: 0;
-  flex: 0 1 auto;
-  gap: 8px;
-}
-
-.locale-select {
-  width: clamp(7.75rem, 15vw, 9.5rem);
-  min-width: 0;
-  flex: 1 1 clamp(7.75rem, 15vw, 9.5rem);
+  border-right: 1px solid var(--app-separator);
+  background: color-mix(in srgb, var(--app-toolbar) 94%, black);
+  padding: 10px;
+  box-shadow: 1px 0 0 rgba(255, 240, 194, 0.025);
 }
 
 .brand-link {
   display: flex;
-  flex: 1;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   min-width: 0;
+  border-radius: 7px;
+  padding: 4px;
 }
 
 .brand-mark {
@@ -93,12 +75,77 @@
 }
 
 .brand-copy span {
-  display: none;
   color: var(--muted-foreground);
-  font-size: 0.78rem;
+  font-size: 0.68rem;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.app-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 18px;
+}
+
+.nav-item {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 9px;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  font-weight: 650;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.nav-item:hover {
+  background: rgba(255, 240, 194, 0.045);
+  color: var(--foreground);
+}
+
+.nav-item.active {
+  background: color-mix(in srgb, var(--secondary) 62%, var(--app-toolbar));
+  color: var(--secondary-foreground);
+  box-shadow: 0 0 0 1px rgba(114, 224, 188, 0.08) inset;
+}
+
+.nav-item svg,
+.sidebar-locale-label svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.nav-item.active svg {
+  color: var(--hotdog-mustard);
+}
+
+.sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: auto;
+  border-top: 1px solid var(--app-separator);
+  padding-top: 10px;
+}
+
+.sidebar-locale-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.locale-select {
+  width: 100%;
+  min-width: 0;
 }
 
 .notice-alert {
