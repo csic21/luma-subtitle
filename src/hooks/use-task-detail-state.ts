@@ -63,6 +63,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const [subtitleView, setSubtitleView] = useState<SubtitleView>("source");
   const [notice, setNotice] = useState("");
   const taskRef = useRef<TaskRecord | null>(null);
+  const previewRequest = useRef(0);
   const settingsDraftRef = useRef<TaskSettingsSnapshot | null>(null);
   taskRef.current = task;
   settingsDraftRef.current = settingsDraft;
@@ -106,12 +107,16 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const refreshPreview = useCallback(
     async (currentTask = taskRef.current) => {
       if (!currentTask?.source_srt_path) return;
+      const request = ++previewRequest.current;
       try {
         const preview = await loadSubtitlePreview(taskId);
+        if (request !== previewRequest.current || taskRef.current?.id !== taskId) return false;
         setSubtitlePreview(preview);
         setSubtitleView(preview.translated_srt?.trim() ? "translated" : "source");
+        return true;
       } catch (error) {
-        setNotice(errorText(error));
+        if (request === previewRequest.current) setNotice(errorText(error));
+        return false;
       }
     },
     [taskId],
@@ -188,6 +193,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
 
     return () => {
       disposed = true;
+      previewRequest.current += 1;
       unlistenTask?.();
       unlistenJob?.();
     };
@@ -225,6 +231,15 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
       setNotice(errorText(error));
     }
   }, [refreshTask, taskId]);
+
+  const sourceSubtitlesSaved = useCallback(async (updated: TaskRecord) => {
+    syncTask(updated);
+    previewRequest.current += 1;
+    setSubtitlePreview(null);
+    const [previewLoaded] = await Promise.all([refreshPreview(updated), refreshLogs()]);
+    setSubtitleView("source");
+    setNotice(t(previewLoaded ? "notice.sourceSubtitlesSaved" : "notice.sourceSavedPreviewFailed"));
+  }, [refreshLogs, refreshPreview, syncTask, t]);
 
   const applyCurrentSettings = useCallback(async () => {
     try {
@@ -330,6 +345,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     setSettingsDraft,
     setSubtitleView,
     subtitlePreview,
+    sourceSubtitlesSaved,
     subtitleView,
     task,
     taskConfig,

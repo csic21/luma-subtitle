@@ -1,5 +1,5 @@
 use std::{path::PathBuf, sync::atomic::Ordering};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::{
@@ -7,7 +7,7 @@ use crate::{
     paths::path_to_string,
     settings,
     state::AppState,
-    subtitles::{parse_srt_file, render_srt, write_srt_text},
+    subtitles::{parse_srt_file, parse_srt_text, render_srt, write_srt_text},
     task_db::{self, QueueSettings, TaskRecord},
 };
 
@@ -26,7 +26,7 @@ use helpers::{
 use queue::{cancel_queued_task, dispatch_queue, enqueue_task_operation};
 pub(crate) use requests::{
     CreateAudioTaskRequest, CreateSrtTaskRequest, CreateVideoTaskRequest, JobRequest,
-    SubtitlePreview, TranslateSubtitlesRequest, UpdateTaskSettingsRequest,
+    SourceSubtitleEdit, SubtitlePreview, TranslateSubtitlesRequest, UpdateTaskSettingsRequest,
 };
 
 #[tauri::command]
@@ -48,12 +48,15 @@ pub(crate) fn get_task_logs(app: AppHandle, task_id: String) -> Result<Vec<Strin
 
 #[tauri::command]
 pub(crate) fn subtitle_preview(app: AppHandle, job_id: String) -> Result<SubtitlePreview, String> {
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
     let task = task_db::require_task(&app, &job_id)?;
     let source_srt_path = task
         .source_srt_path
         .as_deref()
         .ok_or_else(|| "没有找到可预览的字幕结果".to_string())?;
     let source_srt = std::fs::read_to_string(source_srt_path).map_err(|error| error.to_string())?;
+    let source_segments = parse_srt_text(&source_srt).map_err(job_error_to_string)?;
     let translated_srt = task
         .translated_srt_path
         .as_deref()
@@ -63,6 +66,7 @@ pub(crate) fn subtitle_preview(app: AppHandle, job_id: String) -> Result<Subtitl
 
     Ok(SubtitlePreview {
         source_srt,
+        source_segments,
         translated_srt,
         source_file_name: task
             .source_file_name
@@ -72,10 +76,45 @@ pub(crate) fn subtitle_preview(app: AppHandle, job_id: String) -> Result<Subtitl
 }
 
 #[tauri::command]
+pub(crate) async fn save_source_subtitles(
+    app: AppHandle,
+    task_id: String,
+    original_source_srt: String,
+    edits: Vec<SourceSubtitleEdit>,
+) -> Result<TaskRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _mutation = state.task_mutations.lock();
+        ensure_task_is_not_busy(&state, &task_id)?;
+        let task = task_db::save_source_subtitles(&app, &task_id, &original_source_srt, edits)?;
+        state.subtitle_results.lock().remove(&task_id);
+        Ok(task)
+    })
+    .await
+    .map_err(|error| format!("保存原文字幕失败: {error}"))?
+}
+
+fn ensure_task_is_not_busy(state: &AppState, task_id: &str) -> Result<(), String> {
+    if state.running_operations.lock().contains_key(task_id)
+        || state.tasks.lock().contains_key(task_id)
+        || state
+            .queued_operations
+            .lock()
+            .iter()
+            .any(|operation| operation.task_id == task_id)
+    {
+        return Err("任务正在运行或排队中，稍后再编辑原文".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub(crate) fn apply_current_settings_to_task(
     app: AppHandle,
     task_id: String,
 ) -> Result<TaskRecord, String> {
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
     let task = task_db::require_task(&app, &task_id)?;
     if matches!(task.status.as_str(), "queued" | "running") {
         return Err("任务正在运行或排队中，稍后再应用当前设置".to_string());
@@ -90,6 +129,8 @@ pub(crate) fn update_task_settings(
     task_id: String,
     settings: UpdateTaskSettingsRequest,
 ) -> Result<TaskRecord, String> {
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
     let task = task_db::require_task(&app, &task_id)?;
     if matches!(task.status.as_str(), "queued" | "running") {
         return Err("任务正在运行或排队中，稍后再修改配置".to_string());
@@ -255,26 +296,23 @@ pub(crate) async fn create_srt_task(
 }
 
 #[tauri::command]
-pub(crate) async fn delete_task(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    task_id: String,
-) -> Result<(), String> {
-    cancel_queued_task(&app, &state, &task_id);
-    if let Some(cancel) = state.tasks.lock().get(&task_id) {
-        cancel.store(true, Ordering::SeqCst);
-        return Err("任务正在运行，已请求取消，请停止后再删除".to_string());
-    }
-
+pub(crate) async fn delete_task(app: AppHandle, task_id: String) -> Result<(), String> {
     let delete_app = app.clone();
     let delete_task_id = task_id.clone();
     let deleted_task = tauri::async_runtime::spawn_blocking(move || {
-        task_db::delete_task(&delete_app, &delete_task_id)
+        let state = delete_app.state::<AppState>();
+        let _mutation = state.task_mutations.lock();
+        cancel_queued_task(&delete_app, &state, &delete_task_id);
+        if let Some(cancel) = state.tasks.lock().get(&delete_task_id) {
+            cancel.store(true, Ordering::SeqCst);
+            return Err("任务正在运行，已请求取消，请停止后再删除".to_string());
+        }
+        let deleted_task = task_db::delete_task(&delete_app, &delete_task_id)?;
+        state.subtitle_results.lock().remove(&delete_task_id);
+        Ok(deleted_task)
     })
     .await
     .map_err(|error| format!("删除任务记录失败: {error}"))??;
-
-    state.subtitle_results.lock().remove(&task_id);
 
     let cleanup_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -314,6 +352,7 @@ pub(crate) fn cancel_task(
     state: State<'_, AppState>,
     task_id: String,
 ) -> Result<bool, String> {
+    let _mutation = state.task_mutations.lock();
     let removed_from_queue = cancel_queued_task(&app, &state, &task_id);
     if removed_from_queue {
         publish_job_event(
@@ -328,4 +367,31 @@ pub(crate) fn cancel_task(
         return Ok(true);
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::*;
+    use crate::state::QueuedTaskOperation;
+
+    #[test]
+    fn edit_rejects_in_memory_queue_and_running_states() {
+        let state = AppState::default();
+        assert!(ensure_task_is_not_busy(&state, "task-1").is_ok());
+        state
+            .queued_operations
+            .lock()
+            .push_back(QueuedTaskOperation {
+                task_id: "task-1".to_string(),
+                operation: "translate".to_string(),
+            });
+        assert!(ensure_task_is_not_busy(&state, "task-1").is_err());
+        assert!(ensure_task_is_not_busy(&state, "task-2").is_ok());
+        state.queued_operations.lock().clear();
+        state
+            .running_operations
+            .lock()
+            .insert("task-1".to_string(), "export".to_string());
+        assert!(ensure_task_is_not_busy(&state, "task-1").is_err());
+    }
 }

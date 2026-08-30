@@ -7,6 +7,7 @@ import type {
   QueueSettings,
   SettingsState,
   SubtitlePreview,
+  SourceSubtitleEdit,
   TaskOperation,
   TaskRecord,
 } from "@/types";
@@ -149,6 +150,10 @@ export function updateTaskSettings(taskId: string, settings: TaskSettingsUpdateP
 
 export function subtitlePreview(taskId: string) {
   return invoke<SubtitlePreview>("subtitle_preview", { jobId: taskId });
+}
+
+export function saveSourceSubtitles(taskId: string, originalSourceSrt: string, edits: SourceSubtitleEdit[]) {
+  return invoke<TaskRecord>("save_source_subtitles", { taskId, originalSourceSrt, edits });
 }
 
 export function openPath(path: string) {

@@ -25,6 +25,7 @@ pub(super) fn enqueue_task_operation(
     operation: String,
 ) -> Result<(), String> {
     let operation = normalize_operation(&operation)?;
+    let mutation = state.task_mutations.lock();
     let task = task_db::require_task(&app, &task_id)?;
     validate_task_operation(&task, &operation)?;
 
@@ -43,6 +44,7 @@ pub(super) fn enqueue_task_operation(
         .queued_operations
         .lock()
         .push_back(QueuedTaskOperation { task_id, operation });
+    drop(mutation);
     dispatch_queue(app);
     Ok(())
 }
@@ -56,6 +58,7 @@ pub(super) fn dispatch_queue(app: AppHandle) {
 
         let next = {
             let state = app.state::<AppState>();
+            let _mutation = state.task_mutations.lock();
             let mut running = state.running_operations.lock();
             if running.len() >= max_concurrency {
                 return;
@@ -85,11 +88,14 @@ pub(super) fn dispatch_queue(app: AppHandle) {
         tauri::async_runtime::spawn(async move {
             let completed =
                 execute_task_operation(app_handle.clone(), next.0.clone(), next.1).await;
-            let state = app_handle.state::<AppState>();
-            state.tasks.lock().remove(&next.0.task_id);
-            state.running_operations.lock().remove(&next.0.task_id);
-            if completed {
-                enqueue_next_link(&app_handle, &next.0);
+            {
+                let state = app_handle.state::<AppState>();
+                let _mutation = state.task_mutations.lock();
+                state.tasks.lock().remove(&next.0.task_id);
+                state.running_operations.lock().remove(&next.0.task_id);
+                if completed {
+                    enqueue_next_link(&app_handle, &next.0);
+                }
             }
             dispatch_queue(app_handle);
         });

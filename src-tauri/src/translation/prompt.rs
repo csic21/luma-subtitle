@@ -92,3 +92,52 @@ pub(super) fn shard_translation_prompt(
         serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_string())
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::shard_translation_prompt;
+    use crate::subtitles::parse_srt_text;
+
+    #[test]
+    fn shortens_imported_srt_filler_only_in_request_without_changing_cues() {
+        let long_text = format!("前文{}后文", "あー".repeat(40));
+        let short_text = "あー".repeat(3);
+        let srt = format!(
+            "7\n00:00:01,250 --> 00:00:08,500\n{long_text}\n\n\
+            9\n00:00:08,500 --> 00:00:09,750\n{short_text}\n\n\
+            12\n00:00:09,750 --> 00:00:11,000\n{short_text}"
+        );
+        let segments = parse_srt_text(&srt).expect("existing source SRT should parse");
+
+        let prompt = shard_translation_prompt("简体中文", &segments, 2, 3);
+        let (_, input_json) = prompt
+            .split_once("输入 JSON：\n")
+            .expect("prompt should contain input JSON");
+        let items: serde_json::Value =
+            serde_json::from_str(input_json).expect("input should be valid JSON");
+
+        assert_eq!(
+            items,
+            serde_json::json!([
+                {
+                    "id": 7,
+                    "time": "00:00:01,250 --> 00:00:08,500",
+                    "text": "前文あーあーあー...后文"
+                },
+                {
+                    "id": 9,
+                    "time": "00:00:08,500 --> 00:00:09,750",
+                    "text": short_text
+                },
+                {
+                    "id": 12,
+                    "time": "00:00:09,750 --> 00:00:11,000",
+                    "text": short_text
+                }
+            ])
+        );
+        assert_eq!(segments[0].text, long_text, "source SRT stays unchanged");
+        assert_eq!(segments[1].text, short_text);
+        assert_eq!(segments[2].text, short_text);
+    }
+}

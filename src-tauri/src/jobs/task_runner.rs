@@ -309,13 +309,25 @@ fn resolve_export_path(
         return Ok(preferred);
     }
 
-    let alternative = output_dir.join(file_name_with_task_suffix(file_name, task_id));
+    let task_file_name = file_name_with_task_suffix(file_name, task_id);
+    let alternative = output_dir.join(&task_file_name);
     if export_path_is_available(&alternative, previous_export) {
         return Ok(alternative);
     }
 
+    // Source edits invalidate prior exports while keeping those files for the user.
+    for revision in 2..=10_000 {
+        let candidate = output_dir.join(file_name_with_task_suffix(
+            &task_file_name,
+            &revision.to_string(),
+        ));
+        if export_path_is_available(&candidate, previous_export) {
+            return Ok(candidate);
+        }
+    }
+
     Err(JobError::failed(format!(
-        "导出文件已存在，且任务专用文件名也被占用: {}",
+        "导出文件名已被占用，请选择其他导出目录: {}",
         alternative.display()
     )))
 }
@@ -382,14 +394,21 @@ mod tests {
     }
 
     #[test]
-    fn export_path_rejects_a_foreign_task_suffix() {
+    fn export_path_preserves_previous_revisions_and_uses_a_numbered_name() {
         let dir = temp_test_dir("foreign-fallback");
         fs::write(dir.join("clip.source.srt"), "other task")
             .expect("conflicting file should exist");
         fs::write(dir.join("clip.source.12345678.srt"), "another task")
             .expect("fallback file should exist");
 
-        assert!(resolve_export_path(&dir, "clip.source.srt", "12345678-task", None).is_err());
+        let next = resolve_export_path(&dir, "clip.source.srt", "12345678-task", None)
+            .expect("a new revision should get a free name");
+        assert_eq!(next, dir.join("clip.source.12345678.2.srt"));
+        fs::write(&next, "second revision").expect("second revision should exist");
+        let third = resolve_export_path(&dir, "clip.source.srt", "12345678-task", None)
+            .expect("a third revision should get a free name");
+        assert_eq!(third, dir.join("clip.source.12345678.3.srt"));
+        assert_eq!(fs::read_to_string(next).unwrap(), "second revision");
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -1,4 +1,4 @@
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { lazy, Suspense, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import {
   AlertCircle,
   Check,
@@ -12,6 +12,7 @@ import {
   FileVideo,
   Languages,
   Loader2,
+  Pencil,
   Play,
   RefreshCw,
   Subtitles,
@@ -50,6 +51,9 @@ type FlowStep = {
 };
 
 type OperationHandler = (operation: TaskOperation) => void | Promise<void>;
+
+const SubtitleEditorDialog = lazy(() => import("@/components/app/subtitle-editor-dialog")
+  .then((module) => ({ default: module.SubtitleEditorDialog })));
 
 export function TaskFlowStrip({ flowSteps, progressLabel }: { flowSteps: FlowStep[]; progressLabel: string }) {
   return (
@@ -213,6 +217,7 @@ export function TaskProgressCard({
 }
 
 export function SubtitlePreviewCard({
+  task,
   activeSubtitleBody,
   activeSubtitleFileName,
   hasTranslatedSubtitle,
@@ -221,7 +226,9 @@ export function SubtitlePreviewCard({
   t,
   onRefreshPreview,
   setSubtitleView,
+  onSourceSaved,
 }: {
+  task: TaskRecord;
   activeSubtitleBody?: string | null;
   activeSubtitleFileName?: string | null;
   hasTranslatedSubtitle: boolean;
@@ -230,12 +237,26 @@ export function SubtitlePreviewCard({
   t: Translate;
   onRefreshPreview: () => void | Promise<void>;
   setSubtitleView: Dispatch<SetStateAction<"translated" | "source">>;
+  onSourceSaved: (task: TaskRecord) => Promise<void>;
 }) {
+  const [editorPreview, setEditorPreview] = useState<SubtitlePreview | null>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
   return (
     <Card>
       <CardHeader>
         <SectionTitle icon={<Subtitles />} title={t("subtitle.preview")} />
-        <CardAction>
+        <CardAction className="flex flex-wrap gap-2">
+          <Button
+            ref={editButtonRef}
+            variant="outline"
+            size="sm"
+            disabled={!subtitlePreview?.source_segments.length || taskBusy(task)}
+            title={taskBusy(task) ? t("subtitle.editBusy") : undefined}
+            onClick={() => setEditorPreview(subtitlePreview)}
+          >
+            <Pencil data-icon="inline-start" />
+            {t("subtitle.editSource")}
+          </Button>
           <Button variant="secondary" size="sm" onClick={onRefreshPreview}>
             <RefreshCw data-icon="inline-start" />
             {t("common.refresh")}
@@ -265,6 +286,19 @@ export function SubtitlePreviewCard({
           <div className="subtitle-empty">{t("subtitle.empty")}</div>
         )}
       </CardContent>
+      {editorPreview && (
+        <Suspense fallback={<span role="status">{t("subtitle.loadingEditor")}</span>}>
+          <SubtitleEditorDialog
+            taskId={task.id}
+            preview={editorPreview}
+            busy={taskBusy(task)}
+            t={t}
+            onClose={() => setEditorPreview(null)}
+            onSaved={onSourceSaved}
+            onReturnFocus={() => editButtonRef.current?.focus()}
+          />
+        </Suspense>
+      )}
     </Card>
   );
 }

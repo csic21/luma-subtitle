@@ -68,7 +68,63 @@ fn caps_repeated_whisper_vocalization_text() {
 
     let parsed = parse_whisper_json(&path).expect("json should parse");
     let _ = fs::remove_file(&path);
-    assert_eq!(parsed[0].text, "啊".repeat(20));
+    assert_eq!(parsed[0].text, "啊啊啊...");
+}
+
+#[test]
+fn cleans_repeated_filler_in_both_whisper_schemas_without_changing_cues() {
+    let long_text = format!("前文{}后文", "あー".repeat(40));
+    let short_text = "あー".repeat(3);
+    let cases = [
+        (
+            "transcription",
+            serde_json::json!({
+                "transcription": [
+                    { "offsets": { "from": 1_250, "to": 8_500 }, "text": long_text },
+                    { "offsets": { "from": 8_500, "to": 9_750 }, "text": short_text },
+                    { "offsets": { "from": 9_750, "to": 11_000 }, "text": short_text }
+                ]
+            }),
+        ),
+        (
+            "segments",
+            serde_json::json!({
+                "segments": [
+                    { "start": 1.25, "end": 8.5, "text": long_text },
+                    { "start": 8.5, "end": 9.75, "text": short_text },
+                    { "start": 9.75, "end": 11.0, "text": short_text }
+                ]
+            }),
+        ),
+    ];
+
+    for (schema, body) in cases {
+        let path = std::env::temp_dir().join(format!(
+            "luma-whisper-embedded-repeat-{}-{schema}.json",
+            process::id()
+        ));
+        fs::write(
+            &path,
+            serde_json::to_vec(&body).expect("json should serialize"),
+        )
+        .expect("test json should be written");
+        let parsed = parse_whisper_json(&path);
+        let _ = fs::remove_file(&path);
+        let parsed = parsed.expect("both Whisper schemas should parse");
+
+        assert_eq!(parsed.len(), 3, "{schema}");
+        assert_eq!(parsed[0].text, "前文あーあーあー...后文", "{schema}");
+        assert_eq!(parsed[1].text, short_text, "{schema}");
+        assert_eq!(parsed[2].text, short_text, "{schema}");
+        assert_eq!(
+            parsed
+                .iter()
+                .map(|segment| (segment.id, segment.start_ms, segment.end_ms))
+                .collect::<Vec<_>>(),
+            vec![(1, 1_250, 8_500), (2, 8_500, 9_750), (3, 9_750, 11_000)],
+            "{schema}"
+        );
+    }
 }
 
 #[test]
@@ -146,11 +202,11 @@ fn rejects_global_whisper_repetition() {
 fn collapses_long_repeated_vocalization() {
     assert_eq!(
         collapse_repeated_vocalization(&"あー".repeat(40)),
-        "あー".repeat(10)
+        "あーあーあー..."
     );
     assert_eq!(
         collapse_repeated_vocalization(&"啊".repeat(80)),
-        "啊".repeat(20)
+        "啊啊啊..."
     );
     assert_eq!(
         collapse_repeated_vocalization("你好你好你好你好你好你好"),

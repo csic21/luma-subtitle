@@ -127,8 +127,18 @@ export type TaskRecord = {
   updated_at: number;
 };
 
+export type SourceSubtitleSegment = {
+  id: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+};
+
+export type SourceSubtitleEdit = Pick<SourceSubtitleSegment, "id" | "text">;
+
 export type SubtitlePreview = {
   source_srt: string;
+  source_segments: SourceSubtitleSegment[];
   translated_srt?: string | null;
   source_file_name: string;
   translated_file_name?: string | null;

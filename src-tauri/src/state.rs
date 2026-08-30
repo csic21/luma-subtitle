@@ -14,6 +14,8 @@ use crate::{
 
 #[derive(Default)]
 pub(crate) struct AppState {
+    // Lock before task/queue/cache locks when saving, enqueueing, deleting, or dispatching.
+    pub(crate) task_mutations: Mutex<()>,
     pub(crate) tasks: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub(crate) queued_operations: Mutex<VecDeque<QueuedTaskOperation>>,
     pub(crate) running_operations: Mutex<HashMap<String, String>>,

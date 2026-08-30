@@ -16,6 +16,8 @@ The macOS build targets Apple Silicon. Automatic FFmpeg and whisper.cpp builds r
 
 - Video import and task management: choose video files, output folders, source language, target language, and translation settings.
 - Local transcription: run whisper.cpp on your machine and select local Whisper model files.
+- Source subtitle editing: correct individual cues from the preview without changing IDs or timing. Saving invalidates old translations; existing exported files are preserved.
+- Repeated filler cleanup: within each subtitle cue, recognized filler runs of six or more repetitions are shortened to three plus an ellipsis before translation, preserving dialogue and timestamps.
 - Subtitle translation: use any OpenAI-compatible Chat Completions API with configurable Base URL, model name, and API key.
 - SRT export: generate source and translated subtitle files for editors, players, and subtitle tooling.
 - Task queue: batch transcribe, translate, and export; optionally enable automatic chaining from transcription to translation to export.

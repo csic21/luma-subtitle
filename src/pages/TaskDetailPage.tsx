@@ -37,6 +37,7 @@ export function TaskDetailPage() {
     setSettingsDraft,
     setSubtitleView,
     subtitlePreview,
+    sourceSubtitlesSaved,
     subtitleView,
     task,
     taskConfig,
@@ -103,14 +104,17 @@ export function TaskDetailPage() {
             operationContext={operationContext}
           />
           <SubtitlePreviewCard
+            key={task.id}
+            task={task}
             activeSubtitleBody={activeSubtitleBody}
             activeSubtitleFileName={activeSubtitleFileName}
             hasTranslatedSubtitle={hasTranslatedSubtitle}
             subtitlePreview={subtitlePreview}
             subtitleView={subtitleView}
             t={t}
-            onRefreshPreview={() => refreshPreview()}
+            onRefreshPreview={() => { void refreshPreview(); }}
             setSubtitleView={setSubtitleView}
+            onSourceSaved={sourceSubtitlesSaved}
           />
           <TaskLogsCard logs={logs} t={t} />
         </div>

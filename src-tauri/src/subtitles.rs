@@ -8,7 +8,7 @@ mod vocalization;
 
 pub(crate) use vocalization::{collapse_repeated_vocalization, summarize_repeated_vocalization};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct SubtitleSegment {
     pub(crate) id: usize,
     pub(crate) start_ms: u64,
