@@ -6,7 +6,10 @@ use crate::subtitles::{
     parse_whisper_json, summarize_repeated_vocalization, validate_whisper_repetition,
     SubtitleSegment,
 };
-use crate::translation::{attach_model_output, chat_endpoint, parse_translation_content};
+use crate::translation::{
+    attach_model_output, chat_endpoint, is_cli_provider, normalize_translation_cli_tool,
+    normalize_translation_provider, parse_translation_content,
+};
 use std::{fs, process};
 
 #[test]
@@ -380,4 +383,23 @@ fn translation_endpoint_uses_complete_url_when_enabled() {
         chat_endpoint("https://example.test/custom/chat", true),
         "https://example.test/custom/chat"
     );
+}
+
+#[test]
+fn normalizes_translation_provider_choices() {
+    assert_eq!(normalize_translation_provider("api"), "api");
+    assert_eq!(normalize_translation_provider(""), "api");
+    assert_eq!(normalize_translation_provider("cli"), "cli");
+    assert_eq!(normalize_translation_provider("opencode"), "cli");
+    assert_eq!(normalize_translation_provider("custom"), "cli");
+    assert!(is_cli_provider("cli"));
+    assert!(!is_cli_provider("api"));
+}
+
+#[test]
+fn normalizes_translation_cli_tool_choices() {
+    assert_eq!(normalize_translation_cli_tool("opencode"), "opencode");
+    assert_eq!(normalize_translation_cli_tool(""), "opencode");
+    assert_eq!(normalize_translation_cli_tool("custom"), "custom");
+    assert_eq!(normalize_translation_cli_tool("generic"), "custom");
 }

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::translation::DEFAULT_TRANSLATION_SHARD_SIZE;
+use crate::translation::{
+    DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL, DEFAULT_TRANSLATION_PROVIDER,
+    DEFAULT_TRANSLATION_SHARD_SIZE,
+};
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct TaskSettingsSnapshot {
@@ -15,6 +18,16 @@ pub(crate) struct TaskSettingsSnapshot {
     pub(crate) temperature: f32,
     #[serde(default = "default_translation_shard_size")]
     pub(crate) translation_shard_size: usize,
+    #[serde(default = "default_translation_provider")]
+    pub(crate) translation_provider: String,
+    #[serde(default = "default_translation_cli_tool")]
+    pub(crate) translation_cli_tool: String,
+    #[serde(default = "default_translation_cli_command")]
+    pub(crate) translation_cli_command: String,
+    #[serde(default)]
+    pub(crate) translation_cli_model: String,
+    #[serde(default)]
+    pub(crate) translation_cli_args: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -52,4 +65,16 @@ pub(crate) struct QueueSettings {
 
 fn default_translation_shard_size() -> usize {
     DEFAULT_TRANSLATION_SHARD_SIZE
+}
+
+fn default_translation_provider() -> String {
+    DEFAULT_TRANSLATION_PROVIDER.to_string()
+}
+
+fn default_translation_cli_tool() -> String {
+    DEFAULT_TRANSLATION_CLI_TOOL.to_string()
+}
+
+fn default_translation_cli_command() -> String {
+    DEFAULT_TRANSLATION_CLI_COMMAND.to_string()
 }

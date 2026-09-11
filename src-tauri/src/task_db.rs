@@ -585,6 +585,11 @@ mod tests {
             model: "test-model".to_string(),
             temperature: 0.2,
             translation_shard_size: 120,
+            translation_provider: "api".to_string(),
+            translation_cli_tool: "opencode".to_string(),
+            translation_cli_command: "opencode".to_string(),
+            translation_cli_model: String::new(),
+            translation_cli_args: String::new(),
         };
         conn.execute(
             "INSERT INTO tasks (
@@ -640,6 +645,9 @@ mod tests {
             DEFAULT_TRANSLATION_SHARD_SIZE
         );
         assert!(!record.settings.base_url_is_complete);
+        assert_eq!(record.settings.translation_provider, "api");
+        assert_eq!(record.settings.translation_cli_tool, "opencode");
+        assert_eq!(record.settings.translation_cli_command, "opencode");
     }
 
     #[test]
@@ -665,6 +673,11 @@ mod tests {
                 model: "test-model".to_string(),
                 temperature: 0.2,
                 translation_shard_size: 120,
+                translation_provider: "api".to_string(),
+                translation_cli_tool: "opencode".to_string(),
+                translation_cli_command: "opencode".to_string(),
+                translation_cli_model: String::new(),
+                translation_cli_args: String::new(),
             },
             source_srt_path: Some("app-data/tasks/task-1/clip.source.srt".to_string()),
             translated_srt_path: Some("app-data/tasks/task-1/clip.zh.srt".to_string()),
@@ -718,6 +731,11 @@ mod tests {
                 model: "test-model".to_string(),
                 temperature: 0.2,
                 translation_shard_size: 120,
+                translation_provider: "api".to_string(),
+                translation_cli_tool: "opencode".to_string(),
+                translation_cli_command: "opencode".to_string(),
+                translation_cli_model: String::new(),
+                translation_cli_args: String::new(),
             },
             source_srt_path: None,
             translated_srt_path: None,

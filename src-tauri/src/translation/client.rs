@@ -94,8 +94,7 @@ async fn post_chat_translation(
             }
             // Content filter detected — retry with educational context
             let retry_payload = add_educational_context(&config.target_language, &payload);
-            let retry =
-                post_chat_request(client, &endpoint, api_key, &retry_payload).await?;
+            let retry = post_chat_request(client, &endpoint, api_key, &retry_payload).await?;
             let retry_status = retry.status();
             if retry_status.is_success() {
                 return parse_chat_response(retry, segments).await;
@@ -183,7 +182,9 @@ fn is_content_filtered(content: &str, finish_reason: Option<&str>) -> bool {
         "违反",
         "违规",
     ];
-    refusal_markers.iter().any(|marker| lowered.contains(marker))
+    refusal_markers
+        .iter()
+        .any(|marker| lowered.contains(marker))
 }
 
 fn add_educational_context(
@@ -217,7 +218,9 @@ fn parse_chat_segments(
         attach_model_output(
             error,
             content,
-            chat.choices.first().and_then(|c| c.finish_reason.as_deref()),
+            chat.choices
+                .first()
+                .and_then(|c| c.finish_reason.as_deref()),
             chat.usage.as_ref(),
         )
     })

@@ -37,6 +37,12 @@ export function TaskConfigCard({
   const missingWhisperModel = !taskConfig.whisper_model_path.trim();
   const missingBaseUrl = !taskConfig.base_url.trim();
   const missingTranslationModel = !taskConfig.model.trim();
+  const normalizedProvider = taskConfig.translation_provider ?? defaultSettings.translation_provider;
+  const isCli = normalizedProvider === "cli";
+  const cliTool = taskConfig.translation_cli_tool ?? defaultSettings.translation_cli_tool;
+  const isCustomCli = cliTool === "custom";
+  const missingCliCommand = !(taskConfig.translation_cli_command ?? "").trim();
+  const missingCliModel = !isCustomCli && !(taskConfig.translation_cli_model ?? "").trim();
   const normalizedBaseUrl = taskConfig.base_url.trim();
   const baseUrlEndpoint = normalizedBaseUrl
     ? taskConfig.base_url_is_complete
@@ -133,53 +139,170 @@ export function TaskConfigCard({
           </FieldBlock>
         </div>
 
-        <div className="grid-two">
-          <FieldBlock
-            label="Base URL"
-            invalid={missingBaseUrl}
-            description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+        <FieldBlock
+          label={t("settings.translationProvider")}
+          description={t("settings.translationProviderDescription")}
+        >
+          <Select
+            value={isCli ? "cli" : "api"}
+            onValueChange={(value) =>
+              setSettingsDraft((current) => (current ? { ...current, translation_provider: value } : current))
+            }
+            disabled={taskBusy(task)}
           >
-            <Input
-              value={taskConfig.base_url}
-              onChange={(event) =>
-                setSettingsDraft((current) => (current ? { ...current, base_url: event.target.value } : current))
-              }
-              disabled={taskBusy(task)}
-              aria-invalid={missingBaseUrl}
-            />
-            <label className="checkbox-row">
-              <Checkbox
-                checked={taskConfig.base_url_is_complete}
-                onCheckedChange={(checked) =>
-                  setSettingsDraft((current) =>
-                    current ? { ...current, base_url_is_complete: checked === true } : current,
-                  )
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="api">{t("settings.translationProviderApi")}</SelectItem>
+                <SelectItem value="cli">{t("settings.translationProviderCli")}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </FieldBlock>
+
+        {!isCli && (
+          <div className="grid-two">
+            <FieldBlock
+              label="Base URL"
+              invalid={missingBaseUrl}
+              description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+            >
+              <Input
+                value={taskConfig.base_url}
+                onChange={(event) =>
+                  setSettingsDraft((current) => (current ? { ...current, base_url: event.target.value } : current))
                 }
                 disabled={taskBusy(task)}
+                aria-invalid={missingBaseUrl}
               />
-              <span>{t("settings.baseUrlComplete")}</span>
-            </label>
-            <p className="field-hint">
-              {taskConfig.base_url_is_complete
-                ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
-                : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
-            </p>
-          </FieldBlock>
-          <FieldBlock
-            label={t("settings.translationModel")}
-            invalid={missingTranslationModel}
-            description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
-          >
-            <Input
-              value={taskConfig.model}
-              onChange={(event) =>
-                setSettingsDraft((current) => (current ? { ...current, model: event.target.value } : current))
-              }
-              disabled={taskBusy(task)}
-              aria-invalid={missingTranslationModel}
-            />
-          </FieldBlock>
-        </div>
+              <label className="checkbox-row">
+                <Checkbox
+                  checked={taskConfig.base_url_is_complete}
+                  onCheckedChange={(checked) =>
+                    setSettingsDraft((current) =>
+                      current ? { ...current, base_url_is_complete: checked === true } : current,
+                    )
+                  }
+                  disabled={taskBusy(task)}
+                />
+                <span>{t("settings.baseUrlComplete")}</span>
+              </label>
+              <p className="field-hint">
+                {taskConfig.base_url_is_complete
+                  ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
+                  : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
+              </p>
+            </FieldBlock>
+            <FieldBlock
+              label={t("settings.translationModel")}
+              invalid={missingTranslationModel}
+              description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
+            >
+              <Input
+                value={taskConfig.model}
+                onChange={(event) =>
+                  setSettingsDraft((current) => (current ? { ...current, model: event.target.value } : current))
+                }
+                disabled={taskBusy(task)}
+                aria-invalid={missingTranslationModel}
+              />
+            </FieldBlock>
+          </div>
+        )}
+
+        {isCli && (
+          <>
+            <div className="grid-two">
+              <FieldBlock label={t("settings.cliTool")}>
+                <Select
+                  value={cliTool}
+                  onValueChange={(value) =>
+                    setSettingsDraft((current) =>
+                      current ? { ...current, translation_cli_tool: value } : current,
+                    )
+                  }
+                  disabled={taskBusy(task)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="opencode">{t("settings.cliToolOpencode")}</SelectItem>
+                      <SelectItem value="custom">{t("settings.cliToolCustom")}</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </FieldBlock>
+              <FieldBlock
+                label={t("settings.cliCommand")}
+                invalid={missingCliCommand}
+                description={missingCliCommand ? t("settings.requiredForTranslate") : undefined}
+              >
+                <Input
+                  value={taskConfig.translation_cli_command ?? ""}
+                  placeholder={t("settings.cliCommandPlaceholder")}
+                  onChange={(event) =>
+                    setSettingsDraft((current) =>
+                      current ? { ...current, translation_cli_command: event.target.value } : current,
+                    )
+                  }
+                  disabled={taskBusy(task)}
+                  aria-invalid={missingCliCommand}
+                />
+              </FieldBlock>
+            </div>
+            {!isCustomCli && (
+              <FieldBlock
+                label={t("settings.cliModel")}
+                invalid={missingCliModel}
+                description={missingCliModel ? t("settings.requiredForTranslate") : undefined}
+              >
+                <Input
+                  value={taskConfig.translation_cli_model ?? ""}
+                  placeholder={t("settings.cliModelPlaceholder")}
+                  onChange={(event) =>
+                    setSettingsDraft((current) =>
+                      current ? { ...current, translation_cli_model: event.target.value } : current,
+                    )
+                  }
+                  disabled={taskBusy(task)}
+                  aria-invalid={missingCliModel}
+                />
+              </FieldBlock>
+            )}
+            {isCustomCli && (
+              <>
+                <FieldBlock label={t("settings.cliModel")}>
+                  <Input
+                    value={taskConfig.translation_cli_model ?? ""}
+                    placeholder={t("settings.cliModelPlaceholder")}
+                    onChange={(event) =>
+                      setSettingsDraft((current) =>
+                        current ? { ...current, translation_cli_model: event.target.value } : current,
+                      )
+                    }
+                    disabled={taskBusy(task)}
+                  />
+                </FieldBlock>
+                <FieldBlock label={t("settings.cliArgs")} description={t("settings.cliArgsHint")}>
+                  <Input
+                    value={taskConfig.translation_cli_args ?? ""}
+                    placeholder={t("settings.cliArgsPlaceholder")}
+                    onChange={(event) =>
+                      setSettingsDraft((current) =>
+                        current ? { ...current, translation_cli_args: event.target.value } : current,
+                      )
+                    }
+                    disabled={taskBusy(task)}
+                  />
+                </FieldBlock>
+              </>
+            )}
+          </>
+        )}
 
         <div className="grid-two">
           <FieldBlock label="Temperature">

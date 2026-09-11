@@ -10,6 +10,7 @@ import type {
   SourceSubtitleEdit,
   TaskOperation,
   TaskRecord,
+  TranslationCliStatus,
 } from "@/types";
 
 type TaskCreatePayload = {
@@ -25,6 +26,11 @@ type TaskCreatePayload = {
   model: string;
   temperature: number;
   translation_shard_size: number;
+  translation_provider: string;
+  translation_cli_tool: string;
+  translation_cli_command: string;
+  translation_cli_model: string;
+  translation_cli_args: string;
 };
 
 type TaskSettingsUpdatePayload = {
@@ -36,6 +42,11 @@ type TaskSettingsUpdatePayload = {
   model: string;
   temperature: number;
   translation_shard_size: number;
+  translation_provider: string;
+  translation_cli_tool: string;
+  translation_cli_command: string;
+  translation_cli_model: string;
+  translation_cli_args: string;
 };
 
 const videoExtensions = ["mp4", "mkv", "mov", "avi", "webm", "m4v"];
@@ -176,4 +187,12 @@ export function downloadWhisperModel(presetId: string) {
 
 export function installDependencies() {
   return invoke<string[]>("install_dependencies");
+}
+
+export function checkTranslationCli(command: string, tool: string) {
+  return invoke<TranslationCliStatus>("check_translation_cli", { command, tool });
+}
+
+export function listTranslationCliModels(command: string) {
+  return invoke<string[]>("list_translation_cli_models", { command });
 }

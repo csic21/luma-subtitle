@@ -13,6 +13,11 @@ const settings: TaskSettingsSnapshot = {
   model: "gpt-4o-mini",
   temperature: 0.2,
   translation_shard_size: 200,
+  translation_provider: "api",
+  translation_cli_tool: "opencode",
+  translation_cli_command: "opencode",
+  translation_cli_model: "",
+  translation_cli_args: "",
 };
 
 describe("shouldReplaceTaskSettingsDraft", () => {

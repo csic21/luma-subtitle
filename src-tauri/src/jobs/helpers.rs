@@ -5,7 +5,13 @@ use crate::{
     settings::{normalize_base_url, normalize_language},
     state::JobError,
     task_db::TaskSettingsSnapshot,
-    translation::{normalize_translation_shard_size, DEFAULT_TRANSLATION_SHARD_SIZE},
+    translation::{
+        is_cli_provider, normalize_translation_cli_args, normalize_translation_cli_command,
+        normalize_translation_cli_model, normalize_translation_cli_tool,
+        normalize_translation_provider, normalize_translation_shard_size,
+        DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
+        DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
+    },
 };
 
 use super::{
@@ -34,6 +40,30 @@ pub(super) fn task_settings_from_video_request(
                 .translation_shard_size
                 .unwrap_or(DEFAULT_TRANSLATION_SHARD_SIZE),
         ),
+        translation_provider: normalize_translation_provider(
+            request
+                .translation_provider
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_PROVIDER),
+        ),
+        translation_cli_tool: normalize_translation_cli_tool(
+            request
+                .translation_cli_tool
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_TOOL),
+        ),
+        translation_cli_command: normalize_translation_cli_command(
+            request
+                .translation_cli_command
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_COMMAND),
+        ),
+        translation_cli_model: normalize_translation_cli_model(
+            request.translation_cli_model.as_deref().unwrap_or(""),
+        ),
+        translation_cli_args: normalize_translation_cli_args(
+            request.translation_cli_args.as_deref().unwrap_or(""),
+        ),
     }
 }
 
@@ -57,6 +87,30 @@ pub(super) fn task_settings_from_srt_request(
             request
                 .translation_shard_size
                 .unwrap_or(DEFAULT_TRANSLATION_SHARD_SIZE),
+        ),
+        translation_provider: normalize_translation_provider(
+            request
+                .translation_provider
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_PROVIDER),
+        ),
+        translation_cli_tool: normalize_translation_cli_tool(
+            request
+                .translation_cli_tool
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_TOOL),
+        ),
+        translation_cli_command: normalize_translation_cli_command(
+            request
+                .translation_cli_command
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_COMMAND),
+        ),
+        translation_cli_model: normalize_translation_cli_model(
+            request.translation_cli_model.as_deref().unwrap_or(""),
+        ),
+        translation_cli_args: normalize_translation_cli_args(
+            request.translation_cli_args.as_deref().unwrap_or(""),
         ),
     }
 }
@@ -82,6 +136,30 @@ pub(super) fn task_settings_from_audio_request(
                 .translation_shard_size
                 .unwrap_or(DEFAULT_TRANSLATION_SHARD_SIZE),
         ),
+        translation_provider: normalize_translation_provider(
+            request
+                .translation_provider
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_PROVIDER),
+        ),
+        translation_cli_tool: normalize_translation_cli_tool(
+            request
+                .translation_cli_tool
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_TOOL),
+        ),
+        translation_cli_command: normalize_translation_cli_command(
+            request
+                .translation_cli_command
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_COMMAND),
+        ),
+        translation_cli_model: normalize_translation_cli_model(
+            request.translation_cli_model.as_deref().unwrap_or(""),
+        ),
+        translation_cli_args: normalize_translation_cli_args(
+            request.translation_cli_args.as_deref().unwrap_or(""),
+        ),
     }
 }
 
@@ -102,6 +180,30 @@ pub(super) fn task_settings_from_update_request(
             request
                 .translation_shard_size
                 .unwrap_or(DEFAULT_TRANSLATION_SHARD_SIZE),
+        ),
+        translation_provider: normalize_translation_provider(
+            request
+                .translation_provider
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_PROVIDER),
+        ),
+        translation_cli_tool: normalize_translation_cli_tool(
+            request
+                .translation_cli_tool
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_TOOL),
+        ),
+        translation_cli_command: normalize_translation_cli_command(
+            request
+                .translation_cli_command
+                .as_deref()
+                .unwrap_or(DEFAULT_TRANSLATION_CLI_COMMAND),
+        ),
+        translation_cli_model: normalize_translation_cli_model(
+            request.translation_cli_model.as_deref().unwrap_or(""),
+        ),
+        translation_cli_args: normalize_translation_cli_args(
+            request.translation_cli_args.as_deref().unwrap_or(""),
         ),
     }
 }
@@ -173,6 +275,36 @@ pub(super) fn validate_translate_request(
     }
     if request.target_language.trim().is_empty() {
         return Err("目标语言不能为空".to_string());
+    }
+    let provider =
+        normalize_translation_provider(request.translation_provider.as_deref().unwrap_or("api"));
+    if is_cli_provider(&provider) {
+        let tool = normalize_translation_cli_tool(
+            request
+                .translation_cli_tool
+                .as_deref()
+                .unwrap_or("opencode"),
+        );
+        if request
+            .translation_cli_command
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            return Err("CLI 翻译缺少可执行命令".to_string());
+        }
+        if tool == "opencode"
+            && request
+                .translation_cli_model
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+        {
+            return Err("CLI 翻译缺少模型".to_string());
+        }
+        return Ok(());
     }
     if request.base_url.trim().is_empty() || request.model.trim().is_empty() {
         return Err("翻译接口配置不完整".to_string());

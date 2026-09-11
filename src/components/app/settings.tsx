@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   AlertCircle,
@@ -24,9 +25,10 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { defaultSettings, languageOptions, whisperLanguageOptions, whisperModelPresets } from "@/config";
 import type { useI18n } from "@/i18n";
-import { bytesLabel, fileName, progressLabel, progressValue } from "@/lib/app-utils";
+import { bytesLabel, errorText, fileName, hasTauriRuntime, progressLabel, progressValue } from "@/lib/app-utils";
+import { checkTranslationCli, listTranslationCliModels } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
-import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState } from "@/types";
+import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState, TranslationCliStatus } from "@/types";
 
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -65,9 +67,20 @@ export function ModelApiSettingsCard({
 }) {
   const selectedPresetDownloaded = downloadedWhisperModelFiles.has(selectedWhisperPreset.fileName);
   const missingWhisperModel = !settings.whisper_model_path.trim();
+  const translationProvider = settings.translation_provider ?? defaultSettings.translation_provider;
+  const isCliProvider = translationProvider === "cli";
+  const cliTool = settings.translation_cli_tool ?? defaultSettings.translation_cli_tool;
+  const isCustomCli = cliTool === "custom";
   const missingBaseUrl = !settings.base_url.trim();
   const missingTranslationModel = !settings.model.trim();
   const missingApiKey = !hasApiCredential;
+  const missingCliCommand = !(settings.translation_cli_command ?? "").trim();
+  const missingCliModel = !isCustomCli && !(settings.translation_cli_model ?? "").trim();
+  const [cliStatus, setCliStatus] = useState<TranslationCliStatus | null>(null);
+  const [cliChecking, setCliChecking] = useState(false);
+  const [cliModels, setCliModels] = useState<string[]>([]);
+  const [cliModelsLoading, setCliModelsLoading] = useState(false);
+  const [cliNotice, setCliNotice] = useState("");
   const normalizedBaseUrl = settings.base_url.trim();
   const baseUrlEndpoint = normalizedBaseUrl
     ? settings.base_url_is_complete
@@ -76,10 +89,60 @@ export function ModelApiSettingsCard({
     : "-";
   const missingRequiredLabels = [
     missingWhisperModel ? t("requirement.missingWhisperModel") : "",
-    missingBaseUrl ? t("requirement.missingBaseUrl") : "",
-    missingTranslationModel ? t("requirement.missingTranslationModel") : "",
-    missingApiKey ? t("requirement.missingApiKey") : "",
+    ...(isCliProvider
+      ? [
+          missingCliCommand ? t("requirement.missingCliCommand") : "",
+          missingCliModel ? t("requirement.missingCliModel") : "",
+        ]
+      : [
+          missingBaseUrl ? t("requirement.missingBaseUrl") : "",
+          missingTranslationModel ? t("requirement.missingTranslationModel") : "",
+          missingApiKey ? t("requirement.missingApiKey") : "",
+        ]),
   ].filter(Boolean);
+
+  const handleCheckCli = async () => {
+    if (!hasTauriRuntime()) {
+      setCliNotice(t("notice.requireTauriConfig"));
+      return;
+    }
+    setCliChecking(true);
+    setCliNotice("");
+    try {
+      const status = await checkTranslationCli(
+        settings.translation_cli_command || defaultSettings.translation_cli_command,
+        cliTool,
+      );
+      setCliStatus(status);
+      if (!status.available && status.error) setCliNotice(status.error);
+    } catch (error) {
+      setCliStatus(null);
+      setCliNotice(errorText(error));
+    } finally {
+      setCliChecking(false);
+    }
+  };
+
+  const handleLoadCliModels = async () => {
+    if (!hasTauriRuntime()) {
+      setCliNotice(t("notice.requireTauriConfig"));
+      return;
+    }
+    setCliModelsLoading(true);
+    setCliNotice("");
+    try {
+      const models = await listTranslationCliModels(
+        settings.translation_cli_command || defaultSettings.translation_cli_command,
+      );
+      setCliModels(models);
+      if (models.length === 0) setCliNotice(t("settings.cliModelsEmpty"));
+    } catch (error) {
+      setCliModels([]);
+      setCliNotice(errorText(error));
+    } finally {
+      setCliModelsLoading(false);
+    }
+  };
 
   return (
     <Card>
@@ -207,75 +270,232 @@ export function ModelApiSettingsCard({
           </FieldBlock>
         </div>
 
-        <div className="grid-two">
-          <FieldBlock
-            label="Base URL"
-            invalid={missingBaseUrl}
-            description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+        <FieldBlock
+          label={t("settings.translationProvider")}
+          description={t("settings.translationProviderDescription")}
+        >
+          <Select
+            value={isCliProvider ? "cli" : "api"}
+            onValueChange={(value) =>
+              setSettings((current) => ({ ...current, translation_provider: value }))
+            }
           >
-            <Input
-              value={settings.base_url}
-              onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value }))}
-              aria-invalid={missingBaseUrl}
-            />
-            <label className="checkbox-row">
-              <Checkbox
-                checked={settings.base_url_is_complete}
-                onCheckedChange={(checked) =>
-                  setSettings((current) => ({ ...current, base_url_is_complete: checked === true }))
-                }
-              />
-              <span>{t("settings.baseUrlComplete")}</span>
-            </label>
-            <p className="field-hint">
-              {settings.base_url_is_complete
-                ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
-                : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
-            </p>
-          </FieldBlock>
-          <FieldBlock
-            label={t("settings.translationModel")}
-            invalid={missingTranslationModel}
-            description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
-          >
-            <Input
-              value={settings.model}
-              onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
-              aria-invalid={missingTranslationModel}
-            />
-          </FieldBlock>
-        </div>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="api">{t("settings.translationProviderApi")}</SelectItem>
+                <SelectItem value="cli">{t("settings.translationProviderCli")}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </FieldBlock>
 
-        <div className="grid-two">
-          <FieldBlock
-            label="API Key"
-            invalid={missingApiKey}
-            description={missingApiKey ? t("settings.requiredForTranslate") : undefined}
-          >
-            <div className="key-field">
-              <KeyRound />
-              <Input
-                type="password"
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder={settings.has_api_key ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
-                aria-invalid={missingApiKey}
-              />
+        {!isCliProvider && (
+          <>
+            <div className="grid-two">
+              <FieldBlock
+                label="Base URL"
+                invalid={missingBaseUrl}
+                description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+              >
+                <Input
+                  value={settings.base_url}
+                  onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value }))}
+                  aria-invalid={missingBaseUrl}
+                />
+                <label className="checkbox-row">
+                  <Checkbox
+                    checked={settings.base_url_is_complete}
+                    onCheckedChange={(checked) =>
+                      setSettings((current) => ({ ...current, base_url_is_complete: checked === true }))
+                    }
+                  />
+                  <span>{t("settings.baseUrlComplete")}</span>
+                </label>
+                <p className="field-hint">
+                  {settings.base_url_is_complete
+                    ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
+                    : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
+                </p>
+              </FieldBlock>
+              <FieldBlock
+                label={t("settings.translationModel")}
+                invalid={missingTranslationModel}
+                description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
+              >
+                <Input
+                  value={settings.model}
+                  onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
+                  aria-invalid={missingTranslationModel}
+                />
+              </FieldBlock>
             </div>
-          </FieldBlock>
-          <FieldBlock label="Temperature">
-            <Input
-              type="number"
-              min="0"
-              max="1"
-              step="0.1"
-              value={settings.temperature}
-              onChange={(event) =>
-                setSettings((current) => ({ ...current, temperature: Number.parseFloat(event.target.value) || 0 }))
-              }
-            />
-          </FieldBlock>
-        </div>
+
+            <div className="grid-two">
+              <FieldBlock
+                label="API Key"
+                invalid={missingApiKey}
+                description={missingApiKey ? t("settings.requiredForTranslate") : undefined}
+              >
+                <div className="key-field">
+                  <KeyRound />
+                  <Input
+                    type="password"
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder={settings.has_api_key ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
+                    aria-invalid={missingApiKey}
+                  />
+                </div>
+              </FieldBlock>
+              <FieldBlock label="Temperature">
+                <Input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={settings.temperature}
+                  onChange={(event) =>
+                    setSettings((current) => ({ ...current, temperature: Number.parseFloat(event.target.value) || 0 }))
+                  }
+                />
+              </FieldBlock>
+            </div>
+          </>
+        )}
+
+        {isCliProvider && (
+          <>
+            <div className="grid-two">
+              <FieldBlock label={t("settings.cliTool")}>
+                <Select
+                  value={cliTool}
+                  onValueChange={(value) =>
+                    setSettings((current) => ({ ...current, translation_cli_tool: value }))
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="opencode">{t("settings.cliToolOpencode")}</SelectItem>
+                      <SelectItem value="custom">{t("settings.cliToolCustom")}</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </FieldBlock>
+              <FieldBlock
+                label={t("settings.cliCommand")}
+                invalid={missingCliCommand}
+                description={missingCliCommand ? t("settings.requiredForTranslate") : undefined}
+              >
+                <div className="input-action">
+                  <Input
+                    value={settings.translation_cli_command}
+                    placeholder={t("settings.cliCommandPlaceholder")}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, translation_cli_command: event.target.value }))
+                    }
+                    aria-invalid={missingCliCommand}
+                  />
+                  <IconAction label={t("settings.cliCheck")} onClick={handleCheckCli} disabled={cliChecking}>
+                    {cliChecking ? <Loader2 className="spin" /> : <Terminal />}
+                  </IconAction>
+                </div>
+                {cliStatus && (
+                  <p className="field-hint">
+                    {cliStatus.available
+                      ? `${t("settings.cliAvailable")}${cliStatus.version ? ` · ${cliStatus.version}` : ""}${cliStatus.path ? ` · ${cliStatus.path}` : ""}`
+                      : `${t("settings.cliUnavailable")}${cliStatus.error ? ` · ${cliStatus.error}` : ""}`}
+                  </p>
+                )}
+                {cliNotice && !cliStatus?.available && <p className="field-hint">{cliNotice}</p>}
+              </FieldBlock>
+            </div>
+
+            {!isCustomCli && (
+              <FieldBlock
+                label={t("settings.cliModel")}
+                invalid={missingCliModel}
+                description={missingCliModel ? t("settings.requiredForTranslate") : undefined}
+              >
+                <div className="input-action">
+                  <Input
+                    value={settings.translation_cli_model}
+                    placeholder={t("settings.cliModelPlaceholder")}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, translation_cli_model: event.target.value }))
+                    }
+                    aria-invalid={missingCliModel}
+                  />
+                  <IconAction
+                    label={t("settings.cliLoadModels")}
+                    onClick={handleLoadCliModels}
+                    disabled={cliModelsLoading}
+                  >
+                    {cliModelsLoading ? <Loader2 className="spin" /> : <RefreshCw />}
+                  </IconAction>
+                </div>
+                {cliModels.length > 0 && (
+                  <Select
+                    value={settings.translation_cli_model}
+                    onValueChange={(value) =>
+                      setSettings((current) => ({ ...current, translation_cli_model: value }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder={t("settings.cliModelPlaceholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {cliModels.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                )}
+              </FieldBlock>
+            )}
+
+            {isCustomCli && (
+              <>
+                <FieldBlock label={t("settings.cliModel")}>
+                  <Input
+                    value={settings.translation_cli_model}
+                    placeholder={t("settings.cliModelPlaceholder")}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, translation_cli_model: event.target.value }))
+                    }
+                  />
+                </FieldBlock>
+                <FieldBlock
+                  label={t("settings.cliArgs")}
+                  description={t("settings.cliArgsHint")}
+                >
+                  <Input
+                    value={settings.translation_cli_args}
+                    placeholder={t("settings.cliArgsPlaceholder")}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, translation_cli_args: event.target.value }))
+                    }
+                  />
+                </FieldBlock>
+              </>
+            )}
+
+            <Alert className="credential-alert warn">
+              <AlertCircle />
+              <AlertTitle>{t("settings.translationProviderCli")}</AlertTitle>
+              <AlertDescription>{t("settings.cliNote")}</AlertDescription>
+            </Alert>
+          </>
+        )}
 
         <FieldBlock label={t("settings.shardSize")}>
           <Input
@@ -294,13 +514,15 @@ export function ModelApiSettingsCard({
           />
         </FieldBlock>
 
-        <Alert className={cn("credential-alert", hasApiCredential ? "ready" : "warn")}>
-          {hasApiCredential ? <CheckCircle2 /> : <AlertCircle />}
-          <AlertTitle>{hasApiCredential ? t("settings.apiReady") : t("settings.apiWarn")}</AlertTitle>
-          <AlertDescription>
-            {hasApiCredential ? t("settings.apiReadyDescription") : t("settings.apiWarnDescription")}
-          </AlertDescription>
-        </Alert>
+        {!isCliProvider && (
+          <Alert className={cn("credential-alert", hasApiCredential ? "ready" : "warn")}>
+            {hasApiCredential ? <CheckCircle2 /> : <AlertCircle />}
+            <AlertTitle>{hasApiCredential ? t("settings.apiReady") : t("settings.apiWarn")}</AlertTitle>
+            <AlertDescription>
+              {hasApiCredential ? t("settings.apiReadyDescription") : t("settings.apiWarnDescription")}
+            </AlertDescription>
+          </Alert>
+        )}
 
         <div className="action-row end">
           <Button variant="secondary" onClick={onSaveSettings} title={t("common.save")}>

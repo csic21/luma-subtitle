@@ -10,6 +10,11 @@ export const defaultSettings: SettingsState = {
   whisper_language: "auto",
   target_language: "简体中文",
   has_api_key: false,
+  translation_provider: "api",
+  translation_cli_tool: "opencode",
+  translation_cli_command: "opencode",
+  translation_cli_model: "",
+  translation_cli_args: "",
 };
 
 export const languageOptions: TargetLanguageOption[] = [

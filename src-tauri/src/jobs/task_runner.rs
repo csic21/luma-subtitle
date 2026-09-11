@@ -84,6 +84,11 @@ async fn run_transcribe_task(
         model: task.settings.model.clone(),
         temperature: task.settings.temperature,
         translation_shard_size: Some(task.settings.translation_shard_size),
+        translation_provider: Some(task.settings.translation_provider.clone()),
+        translation_cli_tool: Some(task.settings.translation_cli_tool.clone()),
+        translation_cli_command: Some(task.settings.translation_cli_command.clone()),
+        translation_cli_model: Some(task.settings.translation_cli_model.clone()),
+        translation_cli_args: Some(task.settings.translation_cli_args.clone()),
     };
     validate_start_request(&request).map_err(JobError::failed)?;
 
@@ -164,11 +169,14 @@ async fn run_translate_task(
         model: task.settings.model.clone(),
         temperature: task.settings.temperature,
         translation_shard_size: Some(task.settings.translation_shard_size),
+        translation_provider: Some(task.settings.translation_provider.clone()),
+        translation_cli_tool: Some(task.settings.translation_cli_tool.clone()),
+        translation_cli_command: Some(task.settings.translation_cli_command.clone()),
+        translation_cli_model: Some(task.settings.translation_cli_model.clone()),
+        translation_cli_args: Some(task.settings.translation_cli_args.clone()),
     };
     validate_translate_request(&request).map_err(JobError::failed)?;
-    let api_key = task_db::load_api_key(&app)
-        .map_err(JobError::failed)?
-        .ok_or_else(|| JobError::failed("请先保存 OpenAI 兼容接口的 API Key"))?;
+    let api_key = task_db::load_api_key(&app).map_err(JobError::failed)?;
     let stored = StoredSubtitleResult {
         source_srt,
         translated_srt: None,
@@ -182,7 +190,8 @@ async fn run_translate_task(
         &app,
         JobEventDraft::running(task_id, "preparing-translation", "正在读取翻译配置", 0.54),
     );
-    let (stored, outputs) = run_translation(&app, &request, stored, &api_key, cancel).await?;
+    let (stored, outputs) =
+        run_translation(&app, &request, stored, api_key.as_deref(), cancel).await?;
     let translated_srt = stored
         .translated_srt
         .clone()

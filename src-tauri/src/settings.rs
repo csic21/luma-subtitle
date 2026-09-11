@@ -4,7 +4,13 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     task_db::{self, TaskSettingsSnapshot},
-    translation::{normalize_translation_shard_size, DEFAULT_TRANSLATION_SHARD_SIZE},
+    translation::{
+        normalize_translation_cli_args, normalize_translation_cli_command,
+        normalize_translation_cli_model, normalize_translation_cli_tool,
+        normalize_translation_provider, normalize_translation_shard_size,
+        DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
+        DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
+    },
 };
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -21,6 +27,16 @@ struct PersistedSettings {
     has_api_key: bool,
     #[serde(default = "default_translation_shard_size")]
     translation_shard_size: usize,
+    #[serde(default = "default_translation_provider")]
+    translation_provider: String,
+    #[serde(default = "default_translation_cli_tool")]
+    translation_cli_tool: String,
+    #[serde(default = "default_translation_cli_command")]
+    translation_cli_command: String,
+    #[serde(default)]
+    translation_cli_model: String,
+    #[serde(default)]
+    translation_cli_args: String,
 }
 impl Default for PersistedSettings {
     fn default() -> Self {
@@ -34,6 +50,11 @@ impl Default for PersistedSettings {
             target_language: "简体中文".to_string(),
             has_api_key: false,
             translation_shard_size: DEFAULT_TRANSLATION_SHARD_SIZE,
+            translation_provider: DEFAULT_TRANSLATION_PROVIDER.to_string(),
+            translation_cli_tool: DEFAULT_TRANSLATION_CLI_TOOL.to_string(),
+            translation_cli_command: DEFAULT_TRANSLATION_CLI_COMMAND.to_string(),
+            translation_cli_model: String::new(),
+            translation_cli_args: String::new(),
         }
     }
 }
@@ -50,6 +71,16 @@ pub(crate) struct SettingsPayload {
     translation_shard_size: Option<usize>,
     api_key: Option<String>,
     has_api_key: Option<bool>,
+    #[serde(default)]
+    translation_provider: Option<String>,
+    #[serde(default)]
+    translation_cli_tool: Option<String>,
+    #[serde(default)]
+    translation_cli_command: Option<String>,
+    #[serde(default)]
+    translation_cli_model: Option<String>,
+    #[serde(default)]
+    translation_cli_args: Option<String>,
 }
 #[derive(Serialize)]
 pub(crate) struct SettingsResponse {
@@ -62,6 +93,11 @@ pub(crate) struct SettingsResponse {
     target_language: String,
     translation_shard_size: usize,
     has_api_key: bool,
+    translation_provider: String,
+    translation_cli_tool: String,
+    translation_cli_command: String,
+    translation_cli_model: String,
+    translation_cli_args: String,
 }
 
 #[tauri::command]
@@ -81,6 +117,7 @@ pub(crate) fn save_settings(
     let _ = payload.has_api_key;
     let has_api_key = task_db::has_api_key(&app)?;
     let base_url_is_complete = payload.base_url_is_complete;
+    let read_previous = read_settings(&app).unwrap_or_default();
     let settings = PersistedSettings {
         base_url: normalize_base_url(&payload.base_url, base_url_is_complete),
         base_url_is_complete,
@@ -94,6 +131,36 @@ pub(crate) fn save_settings(
             payload
                 .translation_shard_size
                 .unwrap_or(DEFAULT_TRANSLATION_SHARD_SIZE),
+        ),
+        translation_provider: normalize_translation_provider(
+            payload
+                .translation_provider
+                .as_deref()
+                .unwrap_or(&read_previous.translation_provider),
+        ),
+        translation_cli_tool: normalize_translation_cli_tool(
+            payload
+                .translation_cli_tool
+                .as_deref()
+                .unwrap_or(&read_previous.translation_cli_tool),
+        ),
+        translation_cli_command: normalize_translation_cli_command(
+            payload
+                .translation_cli_command
+                .as_deref()
+                .unwrap_or(&read_previous.translation_cli_command),
+        ),
+        translation_cli_model: normalize_translation_cli_model(
+            payload
+                .translation_cli_model
+                .as_deref()
+                .unwrap_or(&read_previous.translation_cli_model),
+        ),
+        translation_cli_args: normalize_translation_cli_args(
+            payload
+                .translation_cli_args
+                .as_deref()
+                .unwrap_or(&read_previous.translation_cli_args),
         ),
     };
     if let Some(api_key) = payload.api_key {
@@ -158,6 +225,13 @@ pub(crate) fn task_settings_from_current(
         model: settings.model.trim().to_string(),
         temperature: settings.temperature.clamp(0.0, 1.0),
         translation_shard_size: normalize_translation_shard_size(settings.translation_shard_size),
+        translation_provider: normalize_translation_provider(&settings.translation_provider),
+        translation_cli_tool: normalize_translation_cli_tool(&settings.translation_cli_tool),
+        translation_cli_command: normalize_translation_cli_command(
+            &settings.translation_cli_command,
+        ),
+        translation_cli_model: normalize_translation_cli_model(&settings.translation_cli_model),
+        translation_cli_args: normalize_translation_cli_args(&settings.translation_cli_args),
     })
 }
 
@@ -180,6 +254,15 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn default_translation_shard_size() -> usize {
     DEFAULT_TRANSLATION_SHARD_SIZE
 }
+fn default_translation_provider() -> String {
+    DEFAULT_TRANSLATION_PROVIDER.to_string()
+}
+fn default_translation_cli_tool() -> String {
+    DEFAULT_TRANSLATION_CLI_TOOL.to_string()
+}
+fn default_translation_cli_command() -> String {
+    DEFAULT_TRANSLATION_CLI_COMMAND.to_string()
+}
 impl PersistedSettings {
     fn into_response(self, has_api_key: bool) -> SettingsResponse {
         SettingsResponse {
@@ -192,6 +275,13 @@ impl PersistedSettings {
             target_language: self.target_language,
             translation_shard_size: normalize_translation_shard_size(self.translation_shard_size),
             has_api_key,
+            translation_provider: normalize_translation_provider(&self.translation_provider),
+            translation_cli_tool: normalize_translation_cli_tool(&self.translation_cli_tool),
+            translation_cli_command: normalize_translation_cli_command(
+                &self.translation_cli_command,
+            ),
+            translation_cli_model: normalize_translation_cli_model(&self.translation_cli_model),
+            translation_cli_args: normalize_translation_cli_args(&self.translation_cli_args),
         }
     }
 }

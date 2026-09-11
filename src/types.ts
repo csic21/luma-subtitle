@@ -12,6 +12,11 @@ export type SettingsState = {
   whisper_language: string;
   target_language: string;
   has_api_key: boolean;
+  translation_provider: string;
+  translation_cli_tool: string;
+  translation_cli_command: string;
+  translation_cli_model: string;
+  translation_cli_args: string;
 };
 
 export type EnvironmentState = {
@@ -99,6 +104,11 @@ export type TaskSettingsSnapshot = {
   model: string;
   temperature: number;
   translation_shard_size: number;
+  translation_provider: string;
+  translation_cli_tool: string;
+  translation_cli_command: string;
+  translation_cli_model: string;
+  translation_cli_args: string;
 };
 
 export type TaskRecord = {
@@ -157,6 +167,13 @@ export type WhisperModelPreset = {
 export type WhisperLanguageOption = {
   value: string;
   labelKey: string;
+};
+
+export type TranslationCliStatus = {
+  available: boolean;
+  path?: string | null;
+  version?: string | null;
+  error?: string | null;
 };
 
 export type TargetLanguageOption = {

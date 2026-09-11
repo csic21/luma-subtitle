@@ -9,7 +9,9 @@ export type OperationRequirementIssue =
   | "missingEnvironment"
   | "missingBaseUrl"
   | "missingTranslationModel"
-  | "missingApiKey";
+  | "missingApiKey"
+  | "missingCliCommand"
+  | "missingCliModel";
 
 export type OperationReadinessContext = {
   environmentReady: boolean;
@@ -150,6 +152,16 @@ export function operationRequirementIssues(
 
   if (operation === "translate") {
     if (!hasConfiguredText(task.source_srt_path)) issues.push("missingSourceSubtitles");
+    const provider = (task.settings.translation_provider ?? "api").trim().toLowerCase();
+    const isCli = provider === "cli" || provider === "opencode" || provider === "custom";
+    if (isCli) {
+      if (!hasConfiguredText(task.settings.translation_cli_command)) issues.push("missingCliCommand");
+      const tool = (task.settings.translation_cli_tool ?? "opencode").trim().toLowerCase();
+      if (tool !== "custom" && !hasConfiguredText(task.settings.translation_cli_model)) {
+        issues.push("missingCliModel");
+      }
+      return issues;
+    }
     if (!hasConfiguredText(task.settings.base_url)) issues.push("missingBaseUrl");
     if (!hasConfiguredText(task.settings.model)) issues.push("missingTranslationModel");
     if (!context.hasApiCredential) issues.push("missingApiKey");
@@ -174,6 +186,8 @@ export function operationRequirementIssueLabel(issue: OperationRequirementIssue,
     missingBaseUrl: t("requirement.missingBaseUrl"),
     missingTranslationModel: t("requirement.missingTranslationModel"),
     missingApiKey: t("requirement.missingApiKey"),
+    missingCliCommand: t("requirement.missingCliCommand"),
+    missingCliModel: t("requirement.missingCliModel"),
   };
   return labels[issue];
 }

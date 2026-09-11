@@ -55,6 +55,12 @@ export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSetti
     ...settings,
     base_url_is_complete: settings.base_url_is_complete ?? defaultSettings.base_url_is_complete,
     translation_shard_size: settings.translation_shard_size ?? defaultSettings.translation_shard_size,
+    translation_provider: settings.translation_provider ?? defaultSettings.translation_provider,
+    translation_cli_tool: settings.translation_cli_tool ?? defaultSettings.translation_cli_tool,
+    translation_cli_command:
+      settings.translation_cli_command ?? defaultSettings.translation_cli_command,
+    translation_cli_model: settings.translation_cli_model ?? defaultSettings.translation_cli_model,
+    translation_cli_args: settings.translation_cli_args ?? defaultSettings.translation_cli_args,
   };
 }
 
@@ -71,7 +77,12 @@ export function taskSettingsEqual(left: TaskSettingsSnapshot, right: TaskSetting
     normalizedLeft.base_url_is_complete === normalizedRight.base_url_is_complete &&
     normalizedLeft.model === normalizedRight.model &&
     normalizedLeft.temperature === normalizedRight.temperature &&
-    normalizedLeft.translation_shard_size === normalizedRight.translation_shard_size
+    normalizedLeft.translation_shard_size === normalizedRight.translation_shard_size &&
+    normalizedLeft.translation_provider === normalizedRight.translation_provider &&
+    normalizedLeft.translation_cli_tool === normalizedRight.translation_cli_tool &&
+    normalizedLeft.translation_cli_command === normalizedRight.translation_cli_command &&
+    normalizedLeft.translation_cli_model === normalizedRight.translation_cli_model &&
+    normalizedLeft.translation_cli_args === normalizedRight.translation_cli_args
   );
 }
 
@@ -94,6 +105,12 @@ export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {
     model: settings.model,
     temperature: settings.temperature,
     translation_shard_size: settings.translation_shard_size ?? defaultSettings.translation_shard_size,
+    translation_provider: settings.translation_provider ?? defaultSettings.translation_provider,
+    translation_cli_tool: settings.translation_cli_tool ?? defaultSettings.translation_cli_tool,
+    translation_cli_command:
+      settings.translation_cli_command ?? defaultSettings.translation_cli_command,
+    translation_cli_model: settings.translation_cli_model ?? defaultSettings.translation_cli_model,
+    translation_cli_args: settings.translation_cli_args ?? defaultSettings.translation_cli_args,
   };
 }
 
@@ -119,5 +136,11 @@ export function taskCreatePayload(
     model: settings.model,
     temperature: settings.temperature,
     translation_shard_size: settings.translation_shard_size,
+    translation_provider: settings.translation_provider ?? defaultSettings.translation_provider,
+    translation_cli_tool: settings.translation_cli_tool ?? defaultSettings.translation_cli_tool,
+    translation_cli_command:
+      settings.translation_cli_command ?? defaultSettings.translation_cli_command,
+    translation_cli_model: settings.translation_cli_model ?? defaultSettings.translation_cli_model,
+    translation_cli_args: settings.translation_cli_args ?? defaultSettings.translation_cli_args,
   };
 }

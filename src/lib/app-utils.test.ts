@@ -23,6 +23,11 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
       model: "gpt-4.1-mini",
       temperature: 0.2,
       translation_shard_size: 30,
+      translation_provider: "api",
+      translation_cli_tool: "opencode",
+      translation_cli_command: "opencode",
+      translation_cli_model: "",
+      translation_cli_args: "",
     },
     created_at: 1,
     updated_at: 1,
@@ -89,5 +94,41 @@ describe("operation readiness", () => {
 
     expect(operationRequirementIssues(ready, "export", { environmentReady: false, hasApiCredential: false })).toEqual([]);
     expect(canRunOperation(ready, "export", { environmentReady: false, hasApiCredential: false })).toBe(true);
+  });
+
+  it("blocks CLI translation until command and model are configured", () => {
+    const pending = task({
+      source_srt_path: "/tmp/video.srt",
+      settings: {
+        ...task().settings,
+        translation_provider: "cli",
+        translation_cli_tool: "opencode",
+        translation_cli_command: "",
+        translation_cli_model: "",
+      },
+    });
+
+    expect(operationRequirementIssues(pending, "translate", { environmentReady: true, hasApiCredential: false })).toEqual([
+      "missingCliCommand",
+      "missingCliModel",
+    ]);
+  });
+
+  it("allows CLI translation without API credentials", () => {
+    const ready = task({
+      source_srt_path: "/tmp/video.srt",
+      settings: {
+        ...task().settings,
+        base_url: "",
+        model: "",
+        translation_provider: "cli",
+        translation_cli_tool: "opencode",
+        translation_cli_command: "opencode",
+        translation_cli_model: "opencode/muse-spark-1.3-contributor-free",
+      },
+    });
+
+    expect(operationRequirementIssues(ready, "translate", { environmentReady: true, hasApiCredential: false })).toEqual([]);
+    expect(canRunOperation(ready, "translate", { environmentReady: true, hasApiCredential: false })).toBe(true);
   });
 });
