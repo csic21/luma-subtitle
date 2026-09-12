@@ -1,4 +1,5 @@
 use std::{
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -56,6 +57,120 @@ pub(super) fn validate_cli_config(config: &TranslationConfig) -> JobResult<()> {
     Ok(())
 }
 
+/// Resolve a user-configured CLI command to an executable path.
+///
+/// Bare names are looked up on `PATH` first, then in well-known install
+/// directories per OS. GUI apps (launched from Finder/Dock on macOS, or with
+/// a minimal environment on Windows/Linux) don't inherit the shell `PATH`,
+/// so e.g. Homebrew installs would otherwise fail with
+/// "No such file or directory".
+///
+/// Note: on Windows only real executables (`.exe`) are considered. npm
+/// `.cmd` shims can't be spawned directly via `CreateProcess` and would need
+/// `cmd /C` wrapping, so prefer a WinGet/Scoop/installer based install.
+pub(crate) fn resolve_cli_path(command: &str) -> Option<PathBuf> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
+    }
+    if command.contains('/') || command.contains('\\') {
+        let path = PathBuf::from(command);
+        return path.exists().then_some(path);
+    }
+    if let Ok(path) = which::which(command) {
+        return Some(path);
+    }
+    for dir in cli_search_dirs() {
+        for name in cli_candidate_names(command) {
+            let path = dir.join(&name);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// File names to try inside each search directory. Windows needs the explicit
+/// `.exe` variant because a bare name on disk has no extension.
+fn cli_candidate_names(command: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        if command.contains('.') {
+            vec![command.to_string()]
+        } else {
+            vec![command.to_string(), format!("{command}.exe")]
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        vec![command.to_string()]
+    }
+}
+
+fn cli_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(target_os = "macos")]
+    dirs.extend(
+        [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/opt/local/bin",
+        ]
+        .iter()
+        .map(Path::new)
+        .map(Path::to_path_buf),
+    );
+    #[cfg(target_os = "linux")]
+    dirs.extend(
+        [
+            "/usr/local/bin",
+            "/home/linuxbrew/.linuxbrew/bin",
+            "/snap/bin",
+        ]
+        .iter()
+        .map(Path::new)
+        .map(Path::to_path_buf),
+    );
+    #[cfg(unix)]
+    if let Some(home) = home::home_dir() {
+        dirs.push(home.join(".local").join("bin"));
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(home.join(".cargo").join("bin"));
+    }
+    #[cfg(windows)]
+    {
+        if let Some(home) = home::home_dir() {
+            // Scoop shims, Cargo installs, WinGet links.
+            dirs.push(home.join("scoop").join("shims"));
+            dirs.push(home.join(".cargo").join("bin"));
+            dirs.push(
+                home.join("AppData")
+                    .join("Local")
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links"),
+            );
+        }
+        // Global npm installs (`npm i -g`).
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            dirs.push(PathBuf::from(appdata).join("npm"));
+        }
+        // Chocolatey.
+        dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
+    }
+    dirs
+}
+
+fn cli_not_found_message(command: &str) -> String {
+    format!(
+        "找不到 CLI 命令 `{}`，请检查该命令是否已安装，或填写它的绝对路径",
+        command.trim()
+    )
+}
+
 pub(super) async fn translate_shard_via_cli(
     config: &TranslationConfig,
     shard: &[SubtitleSegment],
@@ -103,7 +218,9 @@ async fn run_opencode_cli(
 ) -> JobResult<String> {
     let command = config.cli_command.trim();
     let model = config.cli_model.trim();
-    let mut cmd = tokio::process::Command::new(command);
+    let resolved =
+        resolve_cli_path(command).ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
+    let mut cmd = tokio::process::Command::new(resolved);
     hide_tokio_command_window(&mut cmd);
     cmd.args(["run", "-m", model, "--format", "json", full_prompt]);
     let output = run_cli_command(&mut cmd, cancel)
@@ -137,7 +254,9 @@ async fn run_custom_cli(
 ) -> JobResult<String> {
     let command = config.cli_command.trim();
     let args = build_custom_args(config, full_prompt);
-    let mut cmd = tokio::process::Command::new(command);
+    let resolved =
+        resolve_cli_path(command).ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
+    let mut cmd = tokio::process::Command::new(resolved);
     hide_tokio_command_window(&mut cmd);
     cmd.args(&args);
     let output = run_cli_command(&mut cmd, cancel)
@@ -374,15 +493,21 @@ pub(crate) async fn check_translation_cli(
 }
 
 fn check_cli_blocking(command: &str, tool: &str) -> Result<TranslationCliStatus, String> {
-    let path = which::which(command)
-        .ok()
-        .map(|p| p.to_string_lossy().to_string());
+    let Some(resolved) = resolve_cli_path(command) else {
+        return Ok(TranslationCliStatus {
+            available: false,
+            path: None,
+            version: None,
+            error: Some(cli_not_found_message(command)),
+        });
+    };
+    let path = Some(resolved.to_string_lossy().to_string());
     let version_args: Vec<&str> = if normalize_translation_cli_tool(tool) == "custom" {
         vec!["--version"]
     } else {
         vec!["--version"]
     };
-    let mut cmd = std::process::Command::new(command);
+    let mut cmd = std::process::Command::new(&resolved);
     #[cfg(not(target_os = "macos"))]
     crate::process_utils::hide_std_command_window(&mut cmd);
     let output = cmd.args(&version_args).output();
@@ -408,7 +533,7 @@ fn check_cli_blocking(command: &str, tool: &str) -> Result<TranslationCliStatus,
         }
         Ok(output) => {
             // Custom CLIs may not support --version; fall back to --help.
-            let mut help_cmd = std::process::Command::new(command);
+            let mut help_cmd = std::process::Command::new(&resolved);
             #[cfg(not(target_os = "macos"))]
             crate::process_utils::hide_std_command_window(&mut help_cmd);
             let help = help_cmd.arg("--help").output();
@@ -453,7 +578,10 @@ pub(crate) async fn list_translation_cli_models(command: String) -> Result<Vec<S
 }
 
 fn list_opencode_models_blocking(command: &str) -> Result<Vec<String>, String> {
-    let mut cmd = std::process::Command::new(command);
+    let Some(resolved) = resolve_cli_path(command) else {
+        return Err(cli_not_found_message(command));
+    };
+    let mut cmd = std::process::Command::new(&resolved);
     #[cfg(not(target_os = "macos"))]
     crate::process_utils::hide_std_command_window(&mut cmd);
     let output = cmd
@@ -482,7 +610,10 @@ fn list_opencode_models_blocking(command: &str) -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_custom_args, extract_opencode_text_output, split_cli_args};
+    use super::{
+        build_custom_args, cli_candidate_names, extract_opencode_text_output, resolve_cli_path,
+        split_cli_args,
+    };
     use crate::translation::TranslationConfig;
 
     fn test_config(tool: &str, args: &str) -> TranslationConfig {
@@ -498,6 +629,46 @@ mod tests {
             cli_command: "opencode".to_string(),
             cli_model: "provider/model".to_string(),
             cli_args: args.to_string(),
+        }
+    }
+
+    #[test]
+    fn resolves_existing_path_command_as_is() {
+        let exe = std::env::current_exe().expect("test binary should exist");
+        assert_eq!(
+            resolve_cli_path(&exe.to_string_lossy()),
+            Some(exe)
+        );
+    }
+
+    #[test]
+    fn returns_none_for_blank_or_missing_commands() {
+        assert_eq!(resolve_cli_path("   "), None);
+        assert_eq!(
+            resolve_cli_path("definitely-not-a-real-luma-cli-binary"),
+            None
+        );
+        assert_eq!(resolve_cli_path("/definitely/not/here/luma-cli"), None);
+    }
+
+    #[test]
+    fn candidate_names_always_include_bare_command() {
+        let names = cli_candidate_names("opencode");
+        assert!(names.contains(&"opencode".to_string()));
+        #[cfg(windows)]
+        assert!(names.contains(&"opencode.exe".to_string()));
+        #[cfg(not(windows))]
+        assert_eq!(names, vec!["opencode".to_string()]);
+    }
+
+    #[test]
+    fn resolves_bare_command_found_on_search_dirs() {
+        // `opencode` itself may not exist on CI; exercise the lookup with a
+        // binary that is virtually always on PATH instead.
+        #[cfg(unix)]
+        {
+            let expected = which::which("sh").expect("sh should be on PATH");
+            assert_eq!(resolve_cli_path("sh"), Some(expected));
         }
     }
 
