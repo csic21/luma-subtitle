@@ -244,9 +244,10 @@ async fn run_cli_command(
     cmd: &mut tokio::process::Command,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<String> {
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let child = cmd
         .spawn()
         .map_err(|error| JobError::failed(format!("启动 CLI 失败: {error}")))?;
     let output = timeout(
@@ -254,14 +255,7 @@ async fn run_cli_command(
         child.wait_with_output(),
     )
     .await
-    .map_err(|_| {
-        let _ = child.start_kill();
-        JobError::failed(format!("CLI 调用超时（{CLI_SHARD_TIMEOUT_SECS}s）"))
-    })
-    .map_err(|error| match error {
-        JobError::Cancelled => JobError::Cancelled,
-        other => other,
-    })?
+    .map_err(|_| JobError::failed(format!("CLI 调用超时（{CLI_SHARD_TIMEOUT_SECS}s）")))?
     .map_err(|error| JobError::failed(format!("等待 CLI 结束失败: {error}")))?;
     if cancel.load(Ordering::SeqCst) {
         return Err(JobError::Cancelled);
@@ -376,7 +370,7 @@ pub(crate) async fn check_translation_cli(
     let tool = tool.unwrap_or_else(|| "opencode".to_string());
     tauri::async_runtime::spawn_blocking(move || check_cli_blocking(&command, &tool))
         .await
-        .map_err(|error| format!("检测 CLI 失败: {error}"))
+        .map_err(|error| format!("检测 CLI 失败: {error}"))?
 }
 
 fn check_cli_blocking(command: &str, tool: &str) -> Result<TranslationCliStatus, String> {

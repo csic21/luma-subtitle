@@ -10,12 +10,11 @@ use crate::{
     subtitles::{SubtitleSegment, TranslatedSegment},
 };
 
-mod cli;
+pub(crate) mod cli;
 mod client;
 mod parser;
 mod prompt;
 
-pub(crate) use cli::{check_translation_cli, list_translation_cli_models};
 #[cfg(test)]
 pub(crate) use cli::{extract_opencode_text_output, split_cli_args};
 #[cfg(test)]
