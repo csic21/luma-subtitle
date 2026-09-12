@@ -1,5 +1,6 @@
+import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { FolderOpen, RefreshCw, Save, Settings } from "lucide-react";
+import { FolderOpen, Loader2, RefreshCw, Save, Settings } from "lucide-react";
 
 import { FieldBlock, IconAction, SectionTitle } from "@/components/app/shared";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { defaultSettings, languageOptions, whisperLanguageOptions } from "@/config";
 import type { useI18n } from "@/i18n";
-import { taskBusy } from "@/lib/app-utils";
+import { errorText, hasTauriRuntime, taskBusy } from "@/lib/app-utils";
+import { listTranslationCliModels } from "@/lib/tauri-api";
 import { normalizeTaskSettings } from "@/lib/task-data";
 import type { TaskRecord, TaskSettingsSnapshot } from "@/types";
 
@@ -49,6 +51,30 @@ export function TaskConfigCard({
       ? normalizedBaseUrl
       : `${normalizedBaseUrl.replace(/\/+$/, "")}/v1/chat/completions`
     : "-";
+  const [cliModels, setCliModels] = useState<string[]>([]);
+  const [cliModelsLoading, setCliModelsLoading] = useState(false);
+  const [cliNotice, setCliNotice] = useState("");
+
+  const handleLoadCliModels = async () => {
+    if (!hasTauriRuntime()) {
+      setCliNotice(t("notice.requireTauriConfig"));
+      return;
+    }
+    setCliModelsLoading(true);
+    setCliNotice("");
+    try {
+      const models = await listTranslationCliModels(
+        taskConfig.translation_cli_command || defaultSettings.translation_cli_command,
+      );
+      setCliModels(models);
+      if (models.length === 0) setCliNotice(t("settings.cliModelsEmpty"));
+    } catch (error) {
+      setCliModels([]);
+      setCliNotice(errorText(error));
+    } finally {
+      setCliModelsLoading(false);
+    }
+  };
 
   return (
     <Card>
@@ -260,17 +286,51 @@ export function TaskConfigCard({
                 invalid={missingCliModel}
                 description={missingCliModel ? t("settings.requiredForTranslate") : undefined}
               >
-                <Input
-                  value={taskConfig.translation_cli_model ?? ""}
-                  placeholder={t("settings.cliModelPlaceholder")}
-                  onChange={(event) =>
-                    setSettingsDraft((current) =>
-                      current ? { ...current, translation_cli_model: event.target.value } : current,
-                    )
-                  }
-                  disabled={taskBusy(task)}
-                  aria-invalid={missingCliModel}
-                />
+                <div className="input-action">
+                  <Input
+                    value={taskConfig.translation_cli_model ?? ""}
+                    placeholder={t("settings.cliModelPlaceholder")}
+                    onChange={(event) =>
+                      setSettingsDraft((current) =>
+                        current ? { ...current, translation_cli_model: event.target.value } : current,
+                      )
+                    }
+                    disabled={taskBusy(task)}
+                    aria-invalid={missingCliModel}
+                  />
+                  <IconAction
+                    label={t("settings.cliLoadModels")}
+                    onClick={handleLoadCliModels}
+                    disabled={taskBusy(task) || cliModelsLoading}
+                  >
+                    {cliModelsLoading ? <Loader2 className="spin" /> : <RefreshCw />}
+                  </IconAction>
+                </div>
+                {cliModels.length > 0 && (
+                  <Select
+                    value={taskConfig.translation_cli_model ?? ""}
+                    onValueChange={(value) =>
+                      setSettingsDraft((current) =>
+                        current ? { ...current, translation_cli_model: value } : current,
+                      )
+                    }
+                    disabled={taskBusy(task)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder={t("settings.cliModelPlaceholder")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {cliModels.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                )}
+                {cliNotice && <p className="field-hint">{cliNotice}</p>}
               </FieldBlock>
             )}
             {isCustomCli && (
