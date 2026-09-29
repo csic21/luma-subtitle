@@ -17,11 +17,14 @@ export type SettingsState = {
   translation_cli_command: string;
   translation_cli_model: string;
   translation_cli_args: string;
+  translation_local_model_path: string;
 };
 
 export type EnvironmentState = {
   ffmpeg_path: string | null;
   whisper_path: string | null;
+  llama_path?: string | null;
+  llama_backend?: string | null;
   gpu_name: string | null;
   cuda_driver: string | null;
   resource_dir: string;
@@ -29,6 +32,7 @@ export type EnvironmentState = {
   sidecar_dir: string;
   model_dir: string;
   downloaded_model_files?: string[];
+  downloaded_translation_model_files?: string[];
 };
 
 export type JobOutputs = {
@@ -109,6 +113,7 @@ export type TaskSettingsSnapshot = {
   translation_cli_command: string;
   translation_cli_model: string;
   translation_cli_args: string;
+  translation_local_model_path: string;
 };
 
 export type TaskRecord = {

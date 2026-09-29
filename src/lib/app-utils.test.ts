@@ -28,6 +28,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
       translation_cli_command: "opencode",
       translation_cli_model: "",
       translation_cli_args: "",
+      translation_local_model_path: "",
     },
     created_at: 1,
     updated_at: 1,
@@ -44,11 +45,11 @@ describe("operation readiness", () => {
       },
     });
 
-    expect(operationRequirementIssues(pending, "transcribe", { environmentReady: false, hasApiCredential: false })).toEqual([
+    expect(operationRequirementIssues(pending, "transcribe", { environmentReady: false, hasApiCredential: false, llamaReady: false })).toEqual([
       "missingWhisperModel",
       "missingEnvironment",
     ]);
-    expect(canRunOperation(pending, "transcribe", { environmentReady: false, hasApiCredential: false })).toBe(false);
+    expect(canRunOperation(pending, "transcribe", { environmentReady: false, hasApiCredential: false, llamaReady: false })).toBe(false);
   });
 
   it("allows audio tasks to be transcribed with the same local prerequisites", () => {
@@ -59,8 +60,8 @@ describe("operation readiness", () => {
       file_name: "interview.m4a",
     });
 
-    expect(operationRequirementIssues(ready, "transcribe", { environmentReady: true, hasApiCredential: false })).toEqual([]);
-    expect(canRunOperation(ready, "transcribe", { environmentReady: true, hasApiCredential: false })).toBe(true);
+    expect(operationRequirementIssues(ready, "transcribe", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toEqual([]);
+    expect(canRunOperation(ready, "transcribe", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toBe(true);
   });
 
   it("blocks translation until source subtitles and translation API configuration are ready", () => {
@@ -73,13 +74,13 @@ describe("operation readiness", () => {
       },
     });
 
-    expect(operationRequirementIssues(pending, "translate", { environmentReady: true, hasApiCredential: false })).toEqual([
+    expect(operationRequirementIssues(pending, "translate", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toEqual([
       "missingSourceSubtitles",
       "missingBaseUrl",
       "missingTranslationModel",
       "missingApiKey",
     ]);
-    expect(canRunOperation(pending, "translate", { environmentReady: true, hasApiCredential: false })).toBe(false);
+    expect(canRunOperation(pending, "translate", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toBe(false);
   });
 
   it("allows export with source subtitles even when translation configuration is missing", () => {
@@ -92,8 +93,8 @@ describe("operation readiness", () => {
       },
     });
 
-    expect(operationRequirementIssues(ready, "export", { environmentReady: false, hasApiCredential: false })).toEqual([]);
-    expect(canRunOperation(ready, "export", { environmentReady: false, hasApiCredential: false })).toBe(true);
+    expect(operationRequirementIssues(ready, "export", { environmentReady: false, hasApiCredential: false, llamaReady: false })).toEqual([]);
+    expect(canRunOperation(ready, "export", { environmentReady: false, hasApiCredential: false, llamaReady: false })).toBe(true);
   });
 
   it("blocks CLI translation until command and model are configured", () => {
@@ -108,7 +109,7 @@ describe("operation readiness", () => {
       },
     });
 
-    expect(operationRequirementIssues(pending, "translate", { environmentReady: true, hasApiCredential: false })).toEqual([
+    expect(operationRequirementIssues(pending, "translate", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toEqual([
       "missingCliCommand",
       "missingCliModel",
     ]);
@@ -128,7 +129,54 @@ describe("operation readiness", () => {
       },
     });
 
-    expect(operationRequirementIssues(ready, "translate", { environmentReady: true, hasApiCredential: false })).toEqual([]);
-    expect(canRunOperation(ready, "translate", { environmentReady: true, hasApiCredential: false })).toBe(true);
+    expect(operationRequirementIssues(ready, "translate", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toEqual([]);
+    expect(canRunOperation(ready, "translate", { environmentReady: true, hasApiCredential: false, llamaReady: false })).toBe(true);
+  });
+
+  it("blocks local translation until the engine and GGUF model are ready", () => {
+    const pending = task({
+      source_srt_path: "/tmp/video.srt",
+      settings: {
+        ...task().settings,
+        translation_provider: "local",
+        translation_local_model_path: "",
+      },
+    });
+
+    expect(
+      operationRequirementIssues(pending, "translate", {
+        environmentReady: true,
+        hasApiCredential: false,
+        llamaReady: false,
+      }),
+    ).toEqual(["missingLocalTranslationModel", "missingLocalTranslationEngine"]);
+  });
+
+  it("allows local translation without API credentials", () => {
+    const ready = task({
+      source_srt_path: "/tmp/video.srt",
+      settings: {
+        ...task().settings,
+        base_url: "",
+        model: "",
+        translation_provider: "local",
+        translation_local_model_path: "/models/Hy-MT2-1.8B-Q4_K_M.gguf",
+      },
+    });
+
+    expect(
+      operationRequirementIssues(ready, "translate", {
+        environmentReady: false,
+        hasApiCredential: false,
+        llamaReady: true,
+      }),
+    ).toEqual([]);
+    expect(
+      canRunOperation(ready, "translate", {
+        environmentReady: false,
+        hasApiCredential: false,
+        llamaReady: true,
+      }),
+    ).toBe(true);
   });
 });

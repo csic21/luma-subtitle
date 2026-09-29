@@ -590,6 +590,7 @@ mod tests {
             translation_cli_command: "opencode".to_string(),
             translation_cli_model: String::new(),
             translation_cli_args: String::new(),
+            translation_local_model_path: String::new(),
         };
         conn.execute(
             "INSERT INTO tasks (
@@ -678,6 +679,7 @@ mod tests {
                 translation_cli_command: "opencode".to_string(),
                 translation_cli_model: String::new(),
                 translation_cli_args: String::new(),
+                translation_local_model_path: String::new(),
             },
             source_srt_path: Some("app-data/tasks/task-1/clip.source.srt".to_string()),
             translated_srt_path: Some("app-data/tasks/task-1/clip.zh.srt".to_string()),
@@ -736,6 +738,7 @@ mod tests {
                 translation_cli_command: "opencode".to_string(),
                 translation_cli_model: String::new(),
                 translation_cli_args: String::new(),
+                translation_local_model_path: String::new(),
             },
             source_srt_path: None,
             translated_srt_path: None,

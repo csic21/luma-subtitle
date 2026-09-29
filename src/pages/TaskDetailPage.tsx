@@ -30,6 +30,7 @@ export function TaskDetailPage() {
     notice,
     openOutputDir,
     operationContext,
+    pickTaskTranslationModel,
     pickTaskWhisperModel,
     refreshPreview,
     runOperation,
@@ -89,6 +90,7 @@ export function TaskDetailPage() {
             taskSettingsDirty={taskSettingsDirty}
             t={t}
             onApplyCurrentSettings={applyCurrentSettings}
+            onPickTranslationModel={pickTaskTranslationModel}
             onPickWhisperModel={pickTaskWhisperModel}
             onSaveTaskSettings={saveTaskSettings}
             setSettingsDraft={setSettingsDraft}

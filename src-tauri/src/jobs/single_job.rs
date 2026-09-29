@@ -11,8 +11,9 @@ use crate::{
     state::{ensure_not_cancelled, AppState, JobError, JobResult},
     subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition, SubtitleSegment},
     translation::{
-        is_cli_provider, normalize_translation_cli_args, normalize_translation_cli_command,
-        normalize_translation_cli_model, normalize_translation_cli_tool,
+        is_api_provider, normalize_translation_cli_args,
+        normalize_translation_cli_command, normalize_translation_cli_model,
+        normalize_translation_cli_tool, normalize_translation_local_model_path,
         normalize_translation_provider, normalize_translation_shard_size,
         translate_with_single_request, TranslationConfig, DEFAULT_TRANSLATION_CLI_COMMAND,
         DEFAULT_TRANSLATION_CLI_TOOL, DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
@@ -70,8 +71,14 @@ pub(super) async fn run_translation(
         cli_args: normalize_translation_cli_args(
             request.translation_cli_args.as_deref().unwrap_or(""),
         ),
+        local_model_path: normalize_translation_local_model_path(
+            request
+                .translation_local_model_path
+                .as_deref()
+                .unwrap_or(""),
+        ),
     };
-    if !is_cli_provider(&config.provider) {
+    if is_api_provider(&config.provider) {
         let key = api_key.map(str::trim).filter(|key| !key.is_empty());
         if key.is_none() {
             return Err(JobError::failed("请先保存 OpenAI 兼容接口的 API Key"));

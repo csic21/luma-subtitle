@@ -28,6 +28,8 @@ pub(crate) struct TaskSettingsSnapshot {
     pub(crate) translation_cli_model: String,
     #[serde(default)]
     pub(crate) translation_cli_args: String,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: String,
 }
 
 #[derive(Clone, Serialize)]

@@ -4,7 +4,9 @@ use tauri::{AppHandle, Manager};
 #[cfg(not(target_os = "macos"))]
 use crate::process_utils::hide_std_command_window;
 use crate::{
-    dependencies::downloaded_whisper_model_files,
+    dependencies::{
+        downloaded_translation_model_files, downloaded_whisper_model_files, llama_backend_label,
+    },
     paths::{display_path_to_string, locate_binary, managed_dir},
 };
 
@@ -12,6 +14,8 @@ use crate::{
 pub(crate) struct EnvironmentResponse {
     ffmpeg_path: Option<String>,
     whisper_path: Option<String>,
+    llama_path: Option<String>,
+    llama_backend: Option<String>,
     gpu_name: Option<String>,
     cuda_driver: Option<String>,
     resource_dir: String,
@@ -19,6 +23,7 @@ pub(crate) struct EnvironmentResponse {
     sidecar_dir: String,
     model_dir: String,
     downloaded_model_files: Vec<String>,
+    downloaded_translation_model_files: Vec<String>,
 }
 
 #[tauri::command]
@@ -30,9 +35,13 @@ pub(crate) async fn check_environment(app: AppHandle) -> Result<EnvironmentRespo
 
 fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
     let (gpu_name, cuda_driver) = gpu_info();
+    let llama_path = locate_binary(&app, "llama-server");
+    let llama_backend = llama_path.as_ref().and_then(|path| llama_backend_label(path));
     EnvironmentResponse {
         ffmpeg_path: locate_binary(&app, "ffmpeg").map(display_path_to_string),
         whisper_path: locate_binary(&app, "whisper-cli").map(display_path_to_string),
+        llama_path: llama_path.map(display_path_to_string),
+        llama_backend,
         gpu_name,
         cuda_driver,
         resource_dir: app
@@ -52,6 +61,7 @@ fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
             .map(display_path_to_string)
             .unwrap_or_else(|_| "模型目录不可用".to_string()),
         downloaded_model_files: downloaded_whisper_model_files(&app),
+        downloaded_translation_model_files: downloaded_translation_model_files(&app),
     }
 }
 

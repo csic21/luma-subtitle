@@ -89,6 +89,7 @@ async fn run_transcribe_task(
         translation_cli_command: Some(task.settings.translation_cli_command.clone()),
         translation_cli_model: Some(task.settings.translation_cli_model.clone()),
         translation_cli_args: Some(task.settings.translation_cli_args.clone()),
+        translation_local_model_path: Some(task.settings.translation_local_model_path.clone()),
     };
     validate_start_request(&request).map_err(JobError::failed)?;
 
@@ -174,6 +175,7 @@ async fn run_translate_task(
         translation_cli_command: Some(task.settings.translation_cli_command.clone()),
         translation_cli_model: Some(task.settings.translation_cli_model.clone()),
         translation_cli_args: Some(task.settings.translation_cli_args.clone()),
+        translation_local_model_path: Some(task.settings.translation_local_model_path.clone()),
     };
     validate_translate_request(&request).map_err(JobError::failed)?;
     let api_key = task_db::load_api_key(&app).map_err(JobError::failed)?;

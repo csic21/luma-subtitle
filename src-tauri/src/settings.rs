@@ -7,7 +7,8 @@ use crate::{
     translation::{
         normalize_translation_cli_args, normalize_translation_cli_command,
         normalize_translation_cli_model, normalize_translation_cli_tool,
-        normalize_translation_provider, normalize_translation_shard_size,
+        normalize_translation_local_model_path, normalize_translation_provider,
+        normalize_translation_shard_size,
         DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
         DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
     },
@@ -37,6 +38,8 @@ struct PersistedSettings {
     translation_cli_model: String,
     #[serde(default)]
     translation_cli_args: String,
+    #[serde(default)]
+    translation_local_model_path: String,
 }
 impl Default for PersistedSettings {
     fn default() -> Self {
@@ -55,6 +58,7 @@ impl Default for PersistedSettings {
             translation_cli_command: DEFAULT_TRANSLATION_CLI_COMMAND.to_string(),
             translation_cli_model: String::new(),
             translation_cli_args: String::new(),
+            translation_local_model_path: String::new(),
         }
     }
 }
@@ -81,6 +85,8 @@ pub(crate) struct SettingsPayload {
     translation_cli_model: Option<String>,
     #[serde(default)]
     translation_cli_args: Option<String>,
+    #[serde(default)]
+    translation_local_model_path: Option<String>,
 }
 #[derive(Serialize)]
 pub(crate) struct SettingsResponse {
@@ -98,6 +104,7 @@ pub(crate) struct SettingsResponse {
     translation_cli_command: String,
     translation_cli_model: String,
     translation_cli_args: String,
+    translation_local_model_path: String,
 }
 
 #[tauri::command]
@@ -161,6 +168,12 @@ pub(crate) fn save_settings(
                 .translation_cli_args
                 .as_deref()
                 .unwrap_or(&read_previous.translation_cli_args),
+        ),
+        translation_local_model_path: normalize_translation_local_model_path(
+            payload
+                .translation_local_model_path
+                .as_deref()
+                .unwrap_or(&read_previous.translation_local_model_path),
         ),
     };
     if let Some(api_key) = payload.api_key {
@@ -232,6 +245,9 @@ pub(crate) fn task_settings_from_current(
         ),
         translation_cli_model: normalize_translation_cli_model(&settings.translation_cli_model),
         translation_cli_args: normalize_translation_cli_args(&settings.translation_cli_args),
+        translation_local_model_path: normalize_translation_local_model_path(
+            &settings.translation_local_model_path,
+        ),
     })
 }
 
@@ -282,6 +298,9 @@ impl PersistedSettings {
             ),
             translation_cli_model: normalize_translation_cli_model(&self.translation_cli_model),
             translation_cli_args: normalize_translation_cli_args(&self.translation_cli_args),
+            translation_local_model_path: normalize_translation_local_model_path(
+                &self.translation_local_model_path,
+            ),
         }
     }
 }

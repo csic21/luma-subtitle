@@ -629,6 +629,7 @@ mod tests {
             cli_command: "opencode".to_string(),
             cli_model: "provider/model".to_string(),
             cli_args: args.to_string(),
+            local_model_path: String::new(),
         }
     }
 

@@ -220,6 +220,7 @@ mod tests {
                 translation_cli_command: "opencode".to_string(),
                 translation_cli_model: String::new(),
                 translation_cli_args: String::new(),
+                translation_local_model_path: String::new(),
             })
             .unwrap();
             conn.execute(

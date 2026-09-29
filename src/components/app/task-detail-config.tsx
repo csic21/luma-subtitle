@@ -10,7 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { defaultSettings, languageOptions, whisperLanguageOptions } from "@/config";
 import type { useI18n } from "@/i18n";
-import { errorText, hasTauriRuntime, taskBusy } from "@/lib/app-utils";
+import {
+  errorText,
+  fileName,
+  hasTauriRuntime,
+  isCliTranslationProvider,
+  isLocalTranslationProvider,
+  taskBusy,
+} from "@/lib/app-utils";
 import { listTranslationCliModels } from "@/lib/tauri-api";
 import { normalizeTaskSettings } from "@/lib/task-data";
 import type { TaskRecord, TaskSettingsSnapshot } from "@/types";
@@ -23,6 +30,7 @@ export function TaskConfigCard({
   taskSettingsDirty,
   t,
   onApplyCurrentSettings,
+  onPickTranslationModel,
   onPickWhisperModel,
   onSaveTaskSettings,
   setSettingsDraft,
@@ -32,6 +40,7 @@ export function TaskConfigCard({
   taskSettingsDirty: boolean;
   t: Translate;
   onApplyCurrentSettings: () => void | Promise<void>;
+  onPickTranslationModel: () => void | Promise<void>;
   onPickWhisperModel: () => void | Promise<void>;
   onSaveTaskSettings: () => void | Promise<void>;
   setSettingsDraft: Dispatch<SetStateAction<TaskSettingsSnapshot | null>>;
@@ -40,7 +49,9 @@ export function TaskConfigCard({
   const missingBaseUrl = !taskConfig.base_url.trim();
   const missingTranslationModel = !taskConfig.model.trim();
   const normalizedProvider = taskConfig.translation_provider ?? defaultSettings.translation_provider;
-  const isCli = normalizedProvider === "cli";
+  const isCli = isCliTranslationProvider(normalizedProvider);
+  const isLocal = isLocalTranslationProvider(normalizedProvider);
+  const missingLocalModel = !(taskConfig.translation_local_model_path ?? "").trim();
   const cliTool = taskConfig.translation_cli_tool ?? defaultSettings.translation_cli_tool;
   const isCustomCli = cliTool === "custom";
   const missingCliCommand = !(taskConfig.translation_cli_command ?? "").trim();
@@ -170,9 +181,20 @@ export function TaskConfigCard({
           description={t("settings.translationProviderDescription")}
         >
           <Select
-            value={isCli ? "cli" : "api"}
+            value={isCli ? "cli" : isLocal ? "local" : "api"}
             onValueChange={(value) =>
-              setSettingsDraft((current) => (current ? { ...current, translation_provider: value } : current))
+              setSettingsDraft((current) =>
+                current
+                  ? {
+                      ...current,
+                      translation_provider: value,
+                      translation_shard_size:
+                        value === "local" && current.translation_shard_size > 16
+                          ? 12
+                          : current.translation_shard_size,
+                    }
+                  : current,
+              )
             }
             disabled={taskBusy(task)}
           >
@@ -182,13 +204,41 @@ export function TaskConfigCard({
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="api">{t("settings.translationProviderApi")}</SelectItem>
+                <SelectItem value="local">{t("settings.translationProviderLocal")}</SelectItem>
                 <SelectItem value="cli">{t("settings.translationProviderCli")}</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
         </FieldBlock>
 
-        {!isCli && (
+        {isLocal && (
+          <FieldBlock
+            label={t("settings.localTranslationModel")}
+            invalid={missingLocalModel}
+            description={missingLocalModel ? t("settings.requiredForTranslate") : undefined}
+          >
+            <div className="input-action">
+              <Input
+                value={taskConfig.translation_local_model_path ? fileName(taskConfig.translation_local_model_path) : ""}
+                readOnly
+                placeholder={t("settings.notSet")}
+                onClick={onPickTranslationModel}
+                disabled={taskBusy(task)}
+                title={taskConfig.translation_local_model_path || t("settings.selectTranslationModel")}
+                aria-invalid={missingLocalModel}
+              />
+              <IconAction
+                label={t("settings.selectTranslationModel")}
+                onClick={onPickTranslationModel}
+                disabled={taskBusy(task)}
+              >
+                <FolderOpen />
+              </IconAction>
+            </div>
+          </FieldBlock>
+        )}
+
+        {!isCli && !isLocal && (
           <div className="grid-two">
             <FieldBlock
               label="Base URL"

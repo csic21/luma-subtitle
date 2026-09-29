@@ -18,7 +18,7 @@ The macOS build targets Apple Silicon. Automatic FFmpeg and whisper.cpp builds r
 - Local transcription: run whisper.cpp on your machine and select local Whisper model files.
 - Source subtitle editing: correct individual cues from the preview without changing IDs or timing. Saving invalidates old translations; existing exported files are preserved.
 - Repeated filler cleanup: within each subtitle cue, recognized filler runs of six or more repetitions are shortened to three plus an ellipsis before translation, preserving dialogue and timestamps.
-- Subtitle translation: use any OpenAI-compatible Chat Completions API with configurable Base URL, model name, and API key.
+- Subtitle translation: use an OpenAI-compatible Chat Completions API, a local Hy-MT2 GGUF model through llama.cpp, or a local CLI such as opencode.
 - SRT export: generate source and translated subtitle files for editors, players, and subtitle tooling.
 - Task queue: batch transcribe, translate, and export; optionally enable automatic chaining from transcription to translation to export.
 - Environment panel: check FFmpeg, whisper.cpp, model folders, dependency folders, and download supported presets.
@@ -27,7 +27,7 @@ The macOS build targets Apple Silicon. Automatic FFmpeg and whisper.cpp builds r
 ## Privacy And Credentials
 
 - Video processing, audio extraction, and whisper.cpp transcription run locally.
-- Translation sends subtitle text to the OpenAI-compatible API endpoint configured by the user.
+- API translation sends subtitle text to the OpenAI-compatible endpoint configured by the user. Local-model translation runs llama.cpp and Hy-MT2 GGUF files on the same machine.
 - API keys are stored in the local SQLite database under the app user data directory.
 - Do not commit local models, FFmpeg/whisper binaries, task artifacts, development logs, personal settings, or API keys.
 
@@ -39,12 +39,13 @@ The macOS build targets Apple Silicon. Automatic FFmpeg and whisper.cpp builds r
 - Vite
 - Rust
 - whisper.cpp
+- llama.cpp
 - FFmpeg
 
 ## Supported Platforms
 
-- Windows x64: the app selects a CUDA whisper.cpp package when an NVIDIA GPU is available, otherwise it uses a BLAS/CPU package.
-- macOS Apple Silicon: the app first uses installed or bundled arm64 `ffmpeg` and `whisper-cli`; if missing, it can build FFmpeg and Metal-enabled whisper.cpp from official source archives.
+- Windows x64: the app selects a CUDA whisper.cpp package when an NVIDIA GPU is available, otherwise it uses a BLAS/CPU package. Local translation installs official llama.cpp builds: CUDA 12 when NVIDIA is present, otherwise Vulkan, then CPU.
+- macOS Apple Silicon: the app first uses installed or bundled arm64 `ffmpeg` and `whisper-cli`; if missing, it can build FFmpeg and Metal-enabled whisper.cpp from official source archives. Local translation downloads the official Metal llama.cpp macOS arm64 build.
 
 Intel Mac is not currently supported.
 
@@ -99,6 +100,15 @@ chmod +x src-tauri/resources/bin/macos-arm64/whisper-cli
 Lookup order: app data directory, bundled resources, common macOS executable paths, then system PATH.
 
 Whisper models can live anywhere. Select the model file in the app. On Apple Silicon, `large-v3-turbo-q5_0` or `small` are good starting points depending on memory and speed requirements.
+
+Local translation models are downloaded the same way into the app `models` folder. They are not bundled in the installer.
+
+| Preset | File | Size | Download |
+| --- | --- | --- | --- |
+| Hy-MT2 1.8B Q4 | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1.1 GB | https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf |
+| Hy-MT2 7B Q4 | `Hy-MT2-7B-Q4_K_M.gguf` | 4.3 GB | https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf |
+
+In Settings, choose Translation provider → Local model, then Install local translation. That installs `llama-server` into the dependency folder and downloads the 1.8B preset if no GGUF is selected.
 
 ## Whisper Model Presets
 

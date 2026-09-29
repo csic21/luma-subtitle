@@ -7,8 +7,8 @@ use crate::subtitles::{
     SubtitleSegment,
 };
 use crate::translation::{
-    attach_model_output, chat_endpoint, is_cli_provider, normalize_translation_cli_tool,
-    normalize_translation_provider, parse_translation_content,
+    attach_model_output, chat_endpoint, is_cli_provider, is_local_provider,
+    normalize_translation_cli_tool, normalize_translation_provider, parse_translation_content,
 };
 use std::{fs, process};
 
@@ -392,8 +392,12 @@ fn normalizes_translation_provider_choices() {
     assert_eq!(normalize_translation_provider("cli"), "cli");
     assert_eq!(normalize_translation_provider("opencode"), "cli");
     assert_eq!(normalize_translation_provider("custom"), "cli");
+    assert_eq!(normalize_translation_provider("local"), "local");
+    assert_eq!(normalize_translation_provider("llama.cpp"), "local");
     assert!(is_cli_provider("cli"));
+    assert!(is_local_provider("gguf"));
     assert!(!is_cli_provider("api"));
+    assert!(!is_local_provider("api"));
 }
 
 #[test]

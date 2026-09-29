@@ -27,6 +27,8 @@ pub(crate) struct JobRequest {
     pub(crate) translation_cli_model: Option<String>,
     #[serde(default)]
     pub(crate) translation_cli_args: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +51,8 @@ pub(crate) struct TranslateSubtitlesRequest {
     pub(crate) translation_cli_model: Option<String>,
     #[serde(default)]
     pub(crate) translation_cli_args: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -74,6 +78,8 @@ pub(crate) struct CreateVideoTaskRequest {
     pub(crate) translation_cli_model: Option<String>,
     #[serde(default)]
     pub(crate) translation_cli_args: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -99,6 +105,8 @@ pub(crate) struct CreateAudioTaskRequest {
     pub(crate) translation_cli_model: Option<String>,
     #[serde(default)]
     pub(crate) translation_cli_args: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -124,6 +132,8 @@ pub(crate) struct CreateSrtTaskRequest {
     pub(crate) translation_cli_model: Option<String>,
     #[serde(default)]
     pub(crate) translation_cli_args: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -147,6 +157,8 @@ pub(crate) struct UpdateTaskSettingsRequest {
     pub(crate) translation_cli_model: Option<String>,
     #[serde(default)]
     pub(crate) translation_cli_args: Option<String>,
+    #[serde(default)]
+    pub(crate) translation_local_model_path: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

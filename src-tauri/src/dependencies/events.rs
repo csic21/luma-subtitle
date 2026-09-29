@@ -3,7 +3,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppState;
 
-use super::WhisperModelPreset;
+
 
 #[derive(Clone, Serialize)]
 pub(crate) struct DependencyInstallEvent {
@@ -105,7 +105,8 @@ pub(super) fn emit_dependency_install_with_metrics(
 
 pub(super) fn emit_model_download(
     app: &AppHandle,
-    preset: WhisperModelPreset,
+    preset_id: &str,
+    file_name: &str,
     status: impl Into<String>,
     message: impl Into<String>,
     progress: f32,
@@ -114,7 +115,8 @@ pub(super) fn emit_model_download(
 ) {
     emit_model_download_with_metrics(
         app,
-        preset,
+        preset_id,
+        file_name,
         status,
         message,
         progress,
@@ -126,7 +128,8 @@ pub(super) fn emit_model_download(
 
 pub(super) fn emit_model_download_with_metrics(
     app: &AppHandle,
-    preset: WhisperModelPreset,
+    preset_id: &str,
+    file_name: &str,
     status: impl Into<String>,
     message: impl Into<String>,
     progress: f32,
@@ -135,8 +138,8 @@ pub(super) fn emit_model_download_with_metrics(
     metrics: DownloadMetrics,
 ) {
     let event = ModelDownloadEvent {
-        preset_id: preset.id.to_string(),
-        file_name: preset.file_name.to_string(),
+        preset_id: preset_id.to_string(),
+        file_name: file_name.to_string(),
         status: status.into(),
         message: message.into(),
         progress,

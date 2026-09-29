@@ -17,6 +17,7 @@ use crate::{
 mod download;
 mod events;
 mod install;
+mod llama;
 #[cfg(target_os = "macos")]
 mod source_build;
 
@@ -27,6 +28,7 @@ use events::{
     DownloadMetrics,
 };
 pub(crate) use events::{DependencyInstallEvent, DownloadStatus, ModelDownloadEvent};
+pub(crate) use llama::llama_backend_label;
 #[cfg(not(target_os = "macos"))]
 use install::extract_dependency_archive;
 #[cfg(target_os = "macos")]
@@ -58,6 +60,18 @@ const WHISPER_CPP_CUDA_ASSET_CANDIDATES: &[&str] = &[
 #[cfg(any(not(target_os = "macos"), test))]
 const WHISPER_CPP_CPU_ASSET_CANDIDATES: &[&str] =
     &["whisper-blas-bin-x64.zip", "whisper-bin-x64.zip"];
+const TRANSLATION_MODEL_PRESETS: &[TranslationModelPreset] = &[
+    TranslationModelPreset {
+        id: "hy-mt2-1.8b-q4",
+        file_name: "Hy-MT2-1.8B-Q4_K_M.gguf",
+        url: "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf",
+    },
+    TranslationModelPreset {
+        id: "hy-mt2-7b-q4",
+        file_name: "Hy-MT2-7B-Q4_K_M.gguf",
+        url: "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf",
+    },
+];
 const WHISPER_MODEL_PRESETS: &[WhisperModelPreset] = &[
     WhisperModelPreset {
         id: "tiny",
@@ -88,8 +102,20 @@ struct WhisperModelPreset {
     url: &'static str,
 }
 
+#[derive(Clone, Copy)]
+struct TranslationModelPreset {
+    id: &'static str,
+    file_name: &'static str,
+    url: &'static str,
+}
+
 #[derive(Deserialize)]
 pub(crate) struct DownloadWhisperModelRequest {
+    preset_id: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DownloadTranslationModelRequest {
     preset_id: String,
 }
 #[cfg(not(target_os = "macos"))]
@@ -111,6 +137,11 @@ pub(crate) fn download_status(state: State<'_, AppState>) -> DownloadStatus {
         dependency: state.dependency_install.lock().clone(),
     }
 }
+#[tauri::command]
+pub(crate) async fn install_llama_cpp(app: AppHandle) -> Result<String, String> {
+    llama::install_llama_cpp(app).await
+}
+
 #[tauri::command]
 pub(crate) async fn install_dependencies(app: AppHandle) -> Result<Vec<String>, String> {
     let mut installed = Vec::new();
@@ -173,6 +204,17 @@ pub(crate) fn downloaded_whisper_model_files(app: &AppHandle) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn downloaded_translation_model_files(app: &AppHandle) -> Vec<String> {
+    let Ok(models_dir) = whisper_models_dir(app) else {
+        return Vec::new();
+    };
+    TRANSLATION_MODEL_PRESETS
+        .iter()
+        .filter(|preset| is_existing_file(&models_dir.join(preset.file_name)))
+        .map(|preset| preset.file_name.to_string())
+        .collect()
+}
+
 #[tauri::command]
 pub(crate) async fn download_whisper_model(
     app: AppHandle,
@@ -189,7 +231,8 @@ pub(crate) async fn download_whisper_model(
         let path = path_to_string(model_path);
         emit_model_download(
             &app,
-            preset,
+            preset.id,
+            preset.file_name,
             "completed",
             "模型已存在",
             1.0,
@@ -200,7 +243,16 @@ pub(crate) async fn download_whisper_model(
     }
     let partial_path = models_dir.join(format!("{}.part", preset.file_name));
     let _ = tokio::fs::remove_file(&partial_path).await;
-    emit_model_download(&app, preset, "running", "开始下载模型", 0.0, None, None);
+    emit_model_download(
+        &app,
+        preset.id,
+        preset.file_name,
+        "running",
+        "开始下载模型",
+        0.0,
+        None,
+        None,
+    );
     let result = download_whisper_model_to_path(&app, preset, &partial_path).await;
     match result {
         Ok(()) => {
@@ -215,7 +267,8 @@ pub(crate) async fn download_whisper_model(
             let path = path_to_string(model_path);
             emit_model_download(
                 &app,
-                preset,
+                preset.id,
+                preset.file_name,
                 "completed",
                 "模型已下载",
                 1.0,
@@ -227,7 +280,8 @@ pub(crate) async fn download_whisper_model(
         Err(message) => {
             emit_model_download(
                 &app,
-                preset,
+                preset.id,
+                preset.file_name,
                 "failed",
                 "模型下载失败",
                 0.0,
@@ -259,7 +313,8 @@ async fn download_whisper_model_to_path(
             let message = download_message("模型", update);
             emit_model_download_with_metrics(
                 app,
-                preset,
+                preset.id,
+                preset.file_name,
                 "running",
                 message,
                 update.progress,
@@ -271,7 +326,153 @@ async fn download_whisper_model_to_path(
         |attempt, error, downloaded| {
             emit_model_download_with_metrics(
                 app,
-                preset,
+                preset.id,
+                preset.file_name,
+                "running",
+                format!(
+                    "下载中断，保留 {}，正在重试 {}/{}: {}",
+                    format_bytes(downloaded),
+                    attempt,
+                    DOWNLOAD_MAX_ATTEMPTS,
+                    error
+                ),
+                0.0,
+                None,
+                None,
+                DownloadMetrics {
+                    downloaded_bytes: Some(downloaded),
+                    ..DownloadMetrics::default()
+                },
+            );
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn download_translation_model(
+    app: AppHandle,
+    request: DownloadTranslationModelRequest,
+) -> Result<String, String> {
+    let preset = find_translation_model_preset(&request.preset_id)
+        .ok_or_else(|| "未知本地翻译模型预设".to_string())?;
+    let models_dir = whisper_models_dir(&app)?;
+    tokio::fs::create_dir_all(&models_dir)
+        .await
+        .map_err(|error| format!("创建模型目录失败: {error}"))?;
+    let model_path = models_dir.join(preset.file_name);
+    if is_existing_file(&model_path) {
+        let path = path_to_string(model_path);
+        emit_model_download(
+            &app,
+            preset.id,
+            preset.file_name,
+            "completed",
+            "模型已存在",
+            1.0,
+            Some(path.clone()),
+            None,
+        );
+        return Ok(path);
+    }
+    let partial_path = models_dir.join(format!("{}.part", preset.file_name));
+    let _ = tokio::fs::remove_file(&partial_path).await;
+    emit_model_download(
+        &app,
+        preset.id,
+        preset.file_name,
+        "running",
+        "开始下载翻译模型",
+        0.0,
+        None,
+        None,
+    );
+    let result = download_named_model_to_path(
+        &app,
+        preset.id,
+        preset.file_name,
+        preset.url,
+        "翻译模型",
+        &partial_path,
+    )
+    .await;
+    match result {
+        Ok(()) => {
+            if model_path.exists() {
+                tokio::fs::remove_file(&model_path)
+                    .await
+                    .map_err(|error| format!("替换旧模型失败: {error}"))?;
+            }
+            tokio::fs::rename(&partial_path, &model_path)
+                .await
+                .map_err(|error| format!("保存模型失败: {error}"))?;
+            let path = path_to_string(model_path);
+            emit_model_download(
+                &app,
+                preset.id,
+                preset.file_name,
+                "completed",
+                "翻译模型已下载",
+                1.0,
+                Some(path.clone()),
+                None,
+            );
+            Ok(path)
+        }
+        Err(message) => {
+            emit_model_download(
+                &app,
+                preset.id,
+                preset.file_name,
+                "failed",
+                "翻译模型下载失败",
+                0.0,
+                None,
+                Some(message.clone()),
+            );
+            Err(message)
+        }
+    }
+}
+
+async fn download_named_model_to_path(
+    app: &AppHandle,
+    preset_id: &str,
+    file_name: &str,
+    url: &str,
+    label: &str,
+    partial_path: &Path,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30 * 60))
+        .user_agent(HTTP_USER_AGENT)
+        .build()
+        .map_err(|error| format!("创建下载客户端失败: {error}"))?;
+    download_file_with_resume(
+        &client,
+        url,
+        partial_path,
+        1.0,
+        |update| {
+            let metrics = update.metrics;
+            let message = download_message(label, update);
+            emit_model_download_with_metrics(
+                app,
+                preset_id,
+                file_name,
+                "running",
+                message,
+                update.progress,
+                None,
+                None,
+                metrics,
+            );
+        },
+        |attempt, error, downloaded| {
+            emit_model_download_with_metrics(
+                app,
+                preset_id,
+                file_name,
                 "running",
                 format!(
                     "下载中断，保留 {}，正在重试 {}/{}: {}",
@@ -461,6 +662,17 @@ fn select_whisper_cpp_asset_name(
         .find(|name| available_assets.iter().any(|asset| asset == name))
 }
 
+pub(super) fn has_nvidia_gpu_hint() -> bool {
+    #[cfg(not(target_os = "macos"))]
+    {
+        has_nvidia_gpu()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        false
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn has_nvidia_gpu() -> bool {
     let mut command = std::process::Command::new("nvidia-smi");
@@ -480,6 +692,13 @@ fn has_nvidia_gpu() -> bool {
 
 fn find_whisper_model_preset(id: &str) -> Option<WhisperModelPreset> {
     WHISPER_MODEL_PRESETS
+        .iter()
+        .copied()
+        .find(|preset| preset.id == id)
+}
+
+fn find_translation_model_preset(id: &str) -> Option<TranslationModelPreset> {
+    TRANSLATION_MODEL_PRESETS
         .iter()
         .copied()
         .find(|preset| preset.id == id)

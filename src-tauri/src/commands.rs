@@ -49,6 +49,18 @@ pub(crate) async fn select_whisper_model() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+pub(crate) async fn select_translation_model() -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(|| {
+        rfd::FileDialog::new()
+            .add_filter("Local translation model", &["gguf"])
+            .pick_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(picked.map(path_to_string))
+}
+
+#[tauri::command]
 pub(crate) async fn select_srt() -> Result<Option<String>, String> {
     let picked = tauri::async_runtime::spawn_blocking(|| {
         rfd::FileDialog::new()

@@ -61,6 +61,8 @@ export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSetti
       settings.translation_cli_command ?? defaultSettings.translation_cli_command,
     translation_cli_model: settings.translation_cli_model ?? defaultSettings.translation_cli_model,
     translation_cli_args: settings.translation_cli_args ?? defaultSettings.translation_cli_args,
+    translation_local_model_path:
+      settings.translation_local_model_path ?? defaultSettings.translation_local_model_path,
   };
 }
 
@@ -82,7 +84,8 @@ export function taskSettingsEqual(left: TaskSettingsSnapshot, right: TaskSetting
     normalizedLeft.translation_cli_tool === normalizedRight.translation_cli_tool &&
     normalizedLeft.translation_cli_command === normalizedRight.translation_cli_command &&
     normalizedLeft.translation_cli_model === normalizedRight.translation_cli_model &&
-    normalizedLeft.translation_cli_args === normalizedRight.translation_cli_args
+    normalizedLeft.translation_cli_args === normalizedRight.translation_cli_args &&
+    normalizedLeft.translation_local_model_path === normalizedRight.translation_local_model_path
   );
 }
 
@@ -111,6 +114,8 @@ export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {
       settings.translation_cli_command ?? defaultSettings.translation_cli_command,
     translation_cli_model: settings.translation_cli_model ?? defaultSettings.translation_cli_model,
     translation_cli_args: settings.translation_cli_args ?? defaultSettings.translation_cli_args,
+    translation_local_model_path:
+      settings.translation_local_model_path ?? defaultSettings.translation_local_model_path,
   };
 }
 
@@ -142,5 +147,7 @@ export function taskCreatePayload(
       settings.translation_cli_command ?? defaultSettings.translation_cli_command,
     translation_cli_model: settings.translation_cli_model ?? defaultSettings.translation_cli_model,
     translation_cli_args: settings.translation_cli_args ?? defaultSettings.translation_cli_args,
+    translation_local_model_path:
+      settings.translation_local_model_path ?? defaultSettings.translation_local_model_path,
   };
 }

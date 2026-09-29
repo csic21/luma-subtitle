@@ -6,8 +6,9 @@ use crate::{
     state::JobError,
     task_db::TaskSettingsSnapshot,
     translation::{
-        is_cli_provider, normalize_translation_cli_args, normalize_translation_cli_command,
-        normalize_translation_cli_model, normalize_translation_cli_tool,
+        is_cli_provider, is_local_provider, normalize_translation_cli_args,
+        normalize_translation_cli_command, normalize_translation_cli_model,
+        normalize_translation_cli_tool, normalize_translation_local_model_path,
         normalize_translation_provider, normalize_translation_shard_size,
         DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
         DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
@@ -64,6 +65,12 @@ pub(super) fn task_settings_from_video_request(
         translation_cli_args: normalize_translation_cli_args(
             request.translation_cli_args.as_deref().unwrap_or(""),
         ),
+        translation_local_model_path: normalize_translation_local_model_path(
+            request
+                .translation_local_model_path
+                .as_deref()
+                .unwrap_or(""),
+        ),
     }
 }
 
@@ -111,6 +118,12 @@ pub(super) fn task_settings_from_srt_request(
         ),
         translation_cli_args: normalize_translation_cli_args(
             request.translation_cli_args.as_deref().unwrap_or(""),
+        ),
+        translation_local_model_path: normalize_translation_local_model_path(
+            request
+                .translation_local_model_path
+                .as_deref()
+                .unwrap_or(""),
         ),
     }
 }
@@ -160,6 +173,12 @@ pub(super) fn task_settings_from_audio_request(
         translation_cli_args: normalize_translation_cli_args(
             request.translation_cli_args.as_deref().unwrap_or(""),
         ),
+        translation_local_model_path: normalize_translation_local_model_path(
+            request
+                .translation_local_model_path
+                .as_deref()
+                .unwrap_or(""),
+        ),
     }
 }
 
@@ -204,6 +223,12 @@ pub(super) fn task_settings_from_update_request(
         ),
         translation_cli_args: normalize_translation_cli_args(
             request.translation_cli_args.as_deref().unwrap_or(""),
+        ),
+        translation_local_model_path: normalize_translation_local_model_path(
+            request
+                .translation_local_model_path
+                .as_deref()
+                .unwrap_or(""),
         ),
     }
 }
@@ -278,6 +303,18 @@ pub(super) fn validate_translate_request(
     }
     let provider =
         normalize_translation_provider(request.translation_provider.as_deref().unwrap_or("api"));
+    if is_local_provider(&provider) {
+        if request
+            .translation_local_model_path
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            return Err("本地翻译缺少模型文件".to_string());
+        }
+        return Ok(());
+    }
     if is_cli_provider(&provider) {
         let tool = normalize_translation_cli_tool(
             request

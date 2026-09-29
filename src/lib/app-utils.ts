@@ -11,12 +11,25 @@ export type OperationRequirementIssue =
   | "missingTranslationModel"
   | "missingApiKey"
   | "missingCliCommand"
-  | "missingCliModel";
+  | "missingCliModel"
+  | "missingLocalTranslationModel"
+  | "missingLocalTranslationEngine";
 
 export type OperationReadinessContext = {
   environmentReady: boolean;
   hasApiCredential: boolean;
+  llamaReady: boolean;
 };
+
+export function isLocalTranslationProvider(provider?: string | null) {
+  const value = (provider ?? "api").trim().toLowerCase();
+  return value === "local" || value === "llama" || value === "llamacpp" || value === "llama.cpp" || value === "gguf";
+}
+
+export function isCliTranslationProvider(provider?: string | null) {
+  const value = (provider ?? "api").trim().toLowerCase();
+  return value === "cli" || value === "opencode" || value === "custom";
+}
 
 export function fileName(path?: string | null) {
   if (!path) return "";
@@ -152,14 +165,18 @@ export function operationRequirementIssues(
 
   if (operation === "translate") {
     if (!hasConfiguredText(task.source_srt_path)) issues.push("missingSourceSubtitles");
-    const provider = (task.settings.translation_provider ?? "api").trim().toLowerCase();
-    const isCli = provider === "cli" || provider === "opencode" || provider === "custom";
-    if (isCli) {
+    const provider = task.settings.translation_provider ?? "api";
+    if (isCliTranslationProvider(provider)) {
       if (!hasConfiguredText(task.settings.translation_cli_command)) issues.push("missingCliCommand");
       const tool = (task.settings.translation_cli_tool ?? "opencode").trim().toLowerCase();
       if (tool !== "custom" && !hasConfiguredText(task.settings.translation_cli_model)) {
         issues.push("missingCliModel");
       }
+      return issues;
+    }
+    if (isLocalTranslationProvider(provider)) {
+      if (!hasConfiguredText(task.settings.translation_local_model_path)) issues.push("missingLocalTranslationModel");
+      if (!context.llamaReady) issues.push("missingLocalTranslationEngine");
       return issues;
     }
     if (!hasConfiguredText(task.settings.base_url)) issues.push("missingBaseUrl");
@@ -188,6 +205,8 @@ export function operationRequirementIssueLabel(issue: OperationRequirementIssue,
     missingApiKey: t("requirement.missingApiKey"),
     missingCliCommand: t("requirement.missingCliCommand"),
     missingCliModel: t("requirement.missingCliModel"),
+    missingLocalTranslationModel: t("requirement.missingLocalTranslationModel"),
+    missingLocalTranslationEngine: t("requirement.missingLocalTranslationEngine"),
   };
   return labels[issue];
 }

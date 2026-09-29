@@ -31,6 +31,7 @@ type TaskCreatePayload = {
   translation_cli_command: string;
   translation_cli_model: string;
   translation_cli_args: string;
+  translation_local_model_path: string;
 };
 
 type TaskSettingsUpdatePayload = {
@@ -47,6 +48,7 @@ type TaskSettingsUpdatePayload = {
   translation_cli_command: string;
   translation_cli_model: string;
   translation_cli_args: string;
+  translation_local_model_path: string;
 };
 
 const videoExtensions = ["mp4", "mkv", "mov", "avi", "webm", "m4v"];
@@ -123,6 +125,10 @@ export function selectWhisperModel() {
   return invoke<string | null>("select_whisper_model");
 }
 
+export function selectTranslationModel() {
+  return invoke<string | null>("select_translation_model");
+}
+
 export function createVideoTask(request: TaskCreatePayload) {
   return invoke<TaskRecord>("create_video_task", { request });
 }
@@ -185,8 +191,18 @@ export function downloadWhisperModel(presetId: string) {
   });
 }
 
+export function downloadTranslationModel(presetId: string) {
+  return invoke<string>("download_translation_model", {
+    request: { preset_id: presetId },
+  });
+}
+
 export function installDependencies() {
   return invoke<string[]>("install_dependencies");
+}
+
+export function installLlamaCpp() {
+  return invoke<string>("install_llama_cpp");
 }
 
 export function checkTranslationCli(command: string, tool: string) {

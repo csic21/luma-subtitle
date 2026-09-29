@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { defaultSettings, whisperModelPresets } from "@/config";
+import { defaultSettings, translationLocalModelPresets, whisperModelPresets } from "@/config";
 import { errorText, fileName, hasTauriRuntime } from "@/lib/app-utils";
 import {
   checkAppUpdate,
@@ -13,11 +13,14 @@ import {
 import {
   checkEnvironment,
   downloadStatus,
+  downloadTranslationModel,
   downloadWhisperModel,
   installDependencies as installDependenciesCommand,
+  installLlamaCpp as installLlamaCppCommand,
   loadSettings,
   openPath,
   saveSettings as saveSettingsCommand,
+  selectTranslationModel,
   selectWhisperModel,
 } from "@/lib/tauri-api";
 import type {
@@ -40,6 +43,7 @@ export function useSettingsPageState(t: TFunction) {
   const [env, setEnv] = useState<EnvironmentState | null>(null);
   const [notice, setNotice] = useState("");
   const [whisperPresetId, setWhisperPresetId] = useState(whisperModelPresets[1].id);
+  const [translationPresetId, setTranslationPresetId] = useState(translationLocalModelPresets[0].id);
   const [modelDownload, setModelDownload] = useState<ModelDownloadEvent | null>(null);
   const [dependencyInstall, setDependencyInstall] = useState<DependencyInstallEvent | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
@@ -55,14 +59,25 @@ export function useSettingsPageState(t: TFunction) {
     () => whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0],
     [whisperPresetId],
   );
+  const selectedTranslationPreset = useMemo(
+    () =>
+      translationLocalModelPresets.find((preset) => preset.id === translationPresetId) ??
+      translationLocalModelPresets[0],
+    [translationPresetId],
+  );
   const downloadedWhisperModelFiles = useMemo(
     () => new Set(env?.downloaded_model_files ?? []),
     [env?.downloaded_model_files],
+  );
+  const downloadedTranslationModelFiles = useMemo(
+    () => new Set(env?.downloaded_translation_model_files ?? []),
+    [env?.downloaded_translation_model_files],
   );
   const modelDownloading = modelDownload?.status === "running";
   const dependencyInstalling = dependencyInstall?.status === "running";
   const hasApiCredential = settings.has_api_key || apiKey.trim().length > 0;
   const environmentReady = Boolean(env?.ffmpeg_path && env?.whisper_path);
+  const llamaReady = Boolean(env?.llama_path);
   const tauriReady = hasTauriRuntime();
   const appUpdating = appUpdate.status === "checking" || appUpdate.status === "downloading";
 
@@ -71,6 +86,12 @@ export function useSettingsPageState(t: TFunction) {
     return [
       ["FFmpeg", env.ffmpeg_path ?? t("env.missing")],
       ["whisper.cpp", env.whisper_path ?? t("env.missing")],
+      [
+        "llama.cpp",
+        env.llama_path
+          ? `${env.llama_path}${env.llama_backend ? ` / ${env.llama_backend}` : ""}`
+          : t("env.missing"),
+      ],
       ["GPU", env.gpu_name ? `${env.gpu_name}${env.cuda_driver ? ` / ${env.cuda_driver}` : ""}` : t("env.gpuMissing")],
       [t("env.dependencyDir"), env.sidecar_dir],
       [t("env.modelDir"), env.model_dir],
@@ -286,6 +307,15 @@ export function useSettingsPageState(t: TFunction) {
     }
   }, [t]);
 
+  const pickTranslationModel = useCallback(async () => {
+    try {
+      const picked = await selectTranslationModel();
+      if (picked) setSettings((current) => ({ ...current, translation_local_model_path: picked }));
+    } catch (error) {
+      setNotice(t("error.pickTranslationModel", { error: errorText(error) }));
+    }
+  }, [t]);
+
   const downloadWhisperPreset = useCallback(async () => {
     setNotice("");
     setModelDownload({
@@ -333,6 +363,110 @@ export function useSettingsPageState(t: TFunction) {
       setNotice(String(error));
     }
   }, [apiKey, refreshEnvironment, selectedWhisperPreset, settings, startDownloadStatusPolling, t]);
+
+  const downloadTranslationPreset = useCallback(async () => {
+    setNotice("");
+    setModelDownload({
+      preset_id: selectedTranslationPreset.id,
+      file_name: selectedTranslationPreset.fileName,
+      status: "running",
+      message: t("download.modelPreparing"),
+      progress: 0,
+    });
+    startDownloadStatusPolling();
+
+    try {
+      const modelPath = await downloadTranslationModel(selectedTranslationPreset.id);
+      const nextSettings = {
+        ...settings,
+        translation_provider: "local",
+        translation_local_model_path: modelPath,
+        translation_shard_size: settings.translation_shard_size > 16 ? 12 : settings.translation_shard_size,
+      };
+      setSettings(nextSettings);
+      const saved = await saveSettingsCommand({
+        ...nextSettings,
+        api_key: apiKey,
+      });
+      setSettings(saved);
+      setModelDownload((current) => ({
+        ...(current ?? {}),
+        preset_id: selectedTranslationPreset.id,
+        file_name: selectedTranslationPreset.fileName,
+        status: "completed",
+        message: t("download.completed"),
+        progress: 1,
+        path: modelPath,
+        error: null,
+      }));
+      await refreshEnvironment();
+      setNotice(t("notice.downloadedAndSelected", { fileName: fileName(modelPath) }));
+    } catch (error) {
+      setModelDownload((current) =>
+        current
+          ? {
+              ...current,
+              status: "failed",
+              message: t("download.failed"),
+              progress: 0,
+              error: String(error),
+            }
+          : null,
+      );
+      setNotice(String(error));
+    }
+  }, [apiKey, refreshEnvironment, selectedTranslationPreset, settings, startDownloadStatusPolling, t]);
+
+  const installLocalTranslation = useCallback(async () => {
+    setNotice("");
+    setDependencyInstall({
+      item: "llama.cpp",
+      status: "running",
+      message: t("download.dependencyPreparing"),
+      progress: 0,
+    });
+    startDownloadStatusPolling();
+    try {
+      await installLlamaCppCommand();
+      await refreshEnvironment();
+      setDependencyInstall((current) => ({
+        item: current?.item ?? "llama.cpp",
+        ...(current ?? {}),
+        status: "completed",
+        message: t("download.dependencyCompleted"),
+        progress: 1,
+        error: null,
+      }));
+      if (!settings.translation_local_model_path.trim()) {
+        await downloadTranslationPreset();
+      } else {
+        const nextSettings = {
+          ...settings,
+          translation_provider: "local",
+          translation_shard_size: settings.translation_shard_size > 16 ? 12 : settings.translation_shard_size,
+        };
+        const saved = await saveSettingsCommand({
+          ...nextSettings,
+          api_key: apiKey,
+        });
+        setSettings(saved);
+        setNotice(t("notice.llamaInstalled"));
+      }
+    } catch (error) {
+      setDependencyInstall((current) =>
+        current
+          ? {
+              ...current,
+              status: "failed",
+              message: t("download.dependencyFailed"),
+              progress: 0,
+              error: String(error),
+            }
+          : null,
+      );
+      setNotice(String(error));
+    }
+  }, [apiKey, downloadTranslationPreset, refreshEnvironment, settings, startDownloadStatusPolling, t]);
 
   const installDependencies = useCallback(async () => {
     setNotice("");
@@ -426,7 +560,9 @@ export function useSettingsPageState(t: TFunction) {
     checkForUpdates,
     dependencyInstall,
     dependencyInstalling,
+    downloadedTranslationModelFiles,
     downloadedWhisperModelFiles,
+    downloadTranslationPreset,
     downloadWhisperPreset,
     env,
     environmentReady,
@@ -434,18 +570,24 @@ export function useSettingsPageState(t: TFunction) {
     hasApiCredential,
     installUpdate,
     installDependencies,
+    installLocalTranslation,
+    llamaReady,
     modelDownload,
     modelDownloading,
     notice,
     openManagedDir,
+    pickTranslationModel,
     pickWhisperModel,
     refreshEnvironment,
     saveSettings,
     selectedWhisperPreset,
     setApiKey,
+    selectedTranslationPreset,
     setSettings,
+    setTranslationPresetId,
     setWhisperPresetId,
     settings,
+    translationPresetId,
     whisperPresetId,
   };
 }

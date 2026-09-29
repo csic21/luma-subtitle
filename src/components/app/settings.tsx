@@ -23,9 +23,24 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { defaultSettings, languageOptions, whisperLanguageOptions, whisperModelPresets } from "@/config";
+import {
+  defaultSettings,
+  languageOptions,
+  translationLocalModelPresets,
+  whisperLanguageOptions,
+  whisperModelPresets,
+} from "@/config";
 import type { useI18n } from "@/i18n";
-import { bytesLabel, errorText, fileName, hasTauriRuntime, progressLabel, progressValue } from "@/lib/app-utils";
+import {
+  bytesLabel,
+  errorText,
+  fileName,
+  hasTauriRuntime,
+  isCliTranslationProvider,
+  isLocalTranslationProvider,
+  progressLabel,
+  progressValue,
+} from "@/lib/app-utils";
 import { checkTranslationCli, listTranslationCliModels } from "@/lib/tauri-api";
 import { cn } from "@/lib/utils";
 import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDownloadEvent, SettingsState, TranslationCliStatus } from "@/types";
@@ -34,41 +49,63 @@ type Translate = ReturnType<typeof useI18n>["t"];
 
 export function ModelApiSettingsCard({
   apiKey,
+  downloadedTranslationModelFiles,
   downloadedWhisperModelFiles,
   hasApiCredential,
+  llamaBackend,
+  llamaInstalling,
+  llamaReady,
   modelDownload,
   modelDownloading,
+  selectedTranslationPreset,
   selectedWhisperPreset,
   settings,
   t,
+  translationPresetId,
   whisperPresetId,
+  onDownloadTranslationPreset,
   onDownloadWhisperPreset,
+  onInstallLocalTranslation,
+  onPickTranslationModel,
   onPickWhisperModel,
   onSaveSettings,
   setApiKey,
   setSettings,
+  setTranslationPresetId,
   setWhisperPresetId,
 }: {
   apiKey: string;
+  downloadedTranslationModelFiles: Set<string>;
   downloadedWhisperModelFiles: Set<string>;
   hasApiCredential: boolean;
+  llamaBackend?: string | null;
+  llamaInstalling: boolean;
+  llamaReady: boolean;
   modelDownload: ModelDownloadEvent | null;
   modelDownloading: boolean;
+  selectedTranslationPreset: (typeof translationLocalModelPresets)[number];
   selectedWhisperPreset: (typeof whisperModelPresets)[number];
   settings: SettingsState;
   t: Translate;
+  translationPresetId: string;
   whisperPresetId: string;
+  onDownloadTranslationPreset: () => void | Promise<void>;
   onDownloadWhisperPreset: () => void | Promise<void>;
+  onInstallLocalTranslation: () => void | Promise<void>;
+  onPickTranslationModel: () => void | Promise<void>;
   onPickWhisperModel: () => void | Promise<void>;
   onSaveSettings: () => void | Promise<void>;
   setApiKey: Dispatch<SetStateAction<string>>;
   setSettings: Dispatch<SetStateAction<SettingsState>>;
+  setTranslationPresetId: Dispatch<SetStateAction<string>>;
   setWhisperPresetId: Dispatch<SetStateAction<string>>;
 }) {
   const selectedPresetDownloaded = downloadedWhisperModelFiles.has(selectedWhisperPreset.fileName);
+  const selectedTranslationDownloaded = downloadedTranslationModelFiles.has(selectedTranslationPreset.fileName);
   const missingWhisperModel = !settings.whisper_model_path.trim();
   const translationProvider = settings.translation_provider ?? defaultSettings.translation_provider;
-  const isCliProvider = translationProvider === "cli";
+  const isCliProvider = isCliTranslationProvider(translationProvider);
+  const isLocalProvider = isLocalTranslationProvider(translationProvider);
   const cliTool = settings.translation_cli_tool ?? defaultSettings.translation_cli_tool;
   const isCustomCli = cliTool === "custom";
   const missingBaseUrl = !settings.base_url.trim();
@@ -76,6 +113,8 @@ export function ModelApiSettingsCard({
   const missingApiKey = !hasApiCredential;
   const missingCliCommand = !(settings.translation_cli_command ?? "").trim();
   const missingCliModel = !isCustomCli && !(settings.translation_cli_model ?? "").trim();
+  const missingLocalModel = !(settings.translation_local_model_path ?? "").trim();
+  const missingLlama = !llamaReady;
   const [cliStatus, setCliStatus] = useState<TranslationCliStatus | null>(null);
   const [cliChecking, setCliChecking] = useState(false);
   const [cliModels, setCliModels] = useState<string[]>([]);
@@ -94,11 +133,16 @@ export function ModelApiSettingsCard({
           missingCliCommand ? t("requirement.missingCliCommand") : "",
           missingCliModel ? t("requirement.missingCliModel") : "",
         ]
-      : [
-          missingBaseUrl ? t("requirement.missingBaseUrl") : "",
-          missingTranslationModel ? t("requirement.missingTranslationModel") : "",
-          missingApiKey ? t("requirement.missingApiKey") : "",
-        ]),
+      : isLocalProvider
+        ? [
+            missingLocalModel ? t("requirement.missingLocalTranslationModel") : "",
+            missingLlama ? t("requirement.missingLocalTranslationEngine") : "",
+          ]
+        : [
+            missingBaseUrl ? t("requirement.missingBaseUrl") : "",
+            missingTranslationModel ? t("requirement.missingTranslationModel") : "",
+            missingApiKey ? t("requirement.missingApiKey") : "",
+          ]),
   ].filter(Boolean);
 
   const handleCheckCli = async () => {
@@ -275,9 +319,16 @@ export function ModelApiSettingsCard({
           description={t("settings.translationProviderDescription")}
         >
           <Select
-            value={isCliProvider ? "cli" : "api"}
+            value={isCliProvider ? "cli" : isLocalProvider ? "local" : "api"}
             onValueChange={(value) =>
-              setSettings((current) => ({ ...current, translation_provider: value }))
+              setSettings((current) => ({
+                ...current,
+                translation_provider: value,
+                translation_shard_size:
+                  value === "local" && current.translation_shard_size > 16
+                    ? 12
+                    : current.translation_shard_size,
+              }))
             }
           >
             <SelectTrigger className="w-full">
@@ -286,13 +337,104 @@ export function ModelApiSettingsCard({
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="api">{t("settings.translationProviderApi")}</SelectItem>
+                <SelectItem value="local">{t("settings.translationProviderLocal")}</SelectItem>
                 <SelectItem value="cli">{t("settings.translationProviderCli")}</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
         </FieldBlock>
 
-        {!isCliProvider && (
+        {isLocalProvider && (
+          <>
+            <FieldBlock
+              label={t("settings.localTranslationModel")}
+              invalid={missingLocalModel}
+              description={missingLocalModel ? t("settings.requiredForTranslate") : undefined}
+            >
+              <div className="input-action">
+                <Input
+                  value={settings.translation_local_model_path ? fileName(settings.translation_local_model_path) : ""}
+                  readOnly
+                  placeholder={selectedTranslationPreset.fileName}
+                  onClick={onPickTranslationModel}
+                  title={settings.translation_local_model_path || t("settings.selectTranslationModel")}
+                  aria-invalid={missingLocalModel}
+                />
+                <IconAction label={t("settings.selectTranslationModel")} onClick={onPickTranslationModel}>
+                  <FolderOpen />
+                </IconAction>
+              </div>
+            </FieldBlock>
+
+            <FieldBlock label={t("model.translationPreset")}>
+              <div className="preset-control">
+                <div className="input-action">
+                  <Select value={translationPresetId} onValueChange={setTranslationPresetId}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {translationLocalModelPresets.map((preset) => {
+                          const downloaded = downloadedTranslationModelFiles.has(preset.fileName);
+                          return (
+                            <SelectItem key={preset.id} value={preset.id}>
+                              <span className="preset-option">
+                                <span>{t(preset.labelKey)}</span>
+                                {downloaded && (
+                                  <Badge variant="secondary" className="downloaded-badge">
+                                    <CheckCircle2 />
+                                    {t("model.downloaded")}
+                                  </Badge>
+                                )}
+                              </span>
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <IconAction
+                    label={t("download.pickPreset", { fileName: selectedTranslationPreset.fileName })}
+                    onClick={onDownloadTranslationPreset}
+                    disabled={modelDownloading}
+                  >
+                    {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+                  </IconAction>
+                </div>
+                {selectedTranslationDownloaded && (
+                  <div className="preset-status">
+                    <CheckCircle2 />
+                    <span>{t("model.downloaded")}</span>
+                  </div>
+                )}
+              </div>
+            </FieldBlock>
+
+            <div className="action-row">
+              <Button variant="secondary" onClick={onInstallLocalTranslation} disabled={llamaInstalling || modelDownloading}>
+                {llamaInstalling || modelDownloading ? (
+                  <Loader2 data-icon="inline-start" className="spin" />
+                ) : (
+                  <Download data-icon="inline-start" />
+                )}
+                {t("settings.installLocalTranslation")}
+              </Button>
+            </div>
+            <p className="field-hint">
+              {llamaReady
+                ? `${t("settings.llamaReady")}${llamaBackend ? ` · ${t("settings.llamaBackend", { backend: llamaBackend })}` : ""}`
+                : t("settings.llamaMissing")}
+            </p>
+            <Alert className="credential-alert warn">
+              <AlertCircle />
+              <AlertTitle>{t("settings.translationProviderLocal")}</AlertTitle>
+              <AlertDescription>{t("settings.localNote")}</AlertDescription>
+            </Alert>
+          </>
+        )}
+
+        {!isCliProvider && !isLocalProvider && (
           <>
             <div className="grid-two">
               <FieldBlock
@@ -497,11 +639,14 @@ export function ModelApiSettingsCard({
           </>
         )}
 
-        <FieldBlock label={t("settings.shardSize")}>
+        <FieldBlock
+          label={t("settings.shardSize")}
+          description={isLocalProvider ? t("settings.localShardHint") : undefined}
+        >
           <Input
             type="number"
             min="1"
-            max="1000"
+            max={isLocalProvider ? 16 : 1000}
             step="1"
             value={settings.translation_shard_size}
             onChange={(event) =>
@@ -514,7 +659,7 @@ export function ModelApiSettingsCard({
           />
         </FieldBlock>
 
-        {!isCliProvider && (
+        {!isCliProvider && !isLocalProvider && (
           <Alert className={cn("credential-alert", hasApiCredential ? "ready" : "warn")}>
             {hasApiCredential ? <CheckCircle2 /> : <AlertCircle />}
             <AlertTitle>{hasApiCredential ? t("settings.apiReady") : t("settings.apiWarn")}</AlertTitle>

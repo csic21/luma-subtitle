@@ -18,6 +18,7 @@ const settings: TaskSettingsSnapshot = {
   translation_cli_command: "opencode",
   translation_cli_model: "",
   translation_cli_args: "",
+  translation_local_model_path: "",
 };
 
 describe("shouldReplaceTaskSettingsDraft", () => {

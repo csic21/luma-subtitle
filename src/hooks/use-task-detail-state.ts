@@ -20,6 +20,7 @@ import {
   loadSettings,
   openPath,
   runTaskOperation,
+  selectTranslationModel,
   selectWhisperModel,
   subtitlePreview as loadSubtitlePreview,
   updateTaskSettings,
@@ -92,8 +93,9 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     () => ({
       environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
       hasApiCredential: Boolean(globalSettings?.has_api_key),
+      llamaReady: Boolean(env?.llama_path),
     }),
-    [env?.ffmpeg_path, env?.whisper_path, globalSettings?.has_api_key],
+    [env?.ffmpeg_path, env?.llama_path, env?.whisper_path, globalSettings?.has_api_key],
   );
 
   const refreshLogs = useCallback(async () => {
@@ -273,6 +275,17 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     }
   }, [t]);
 
+  const pickTaskTranslationModel = useCallback(async () => {
+    try {
+      const picked = await selectTranslationModel();
+      if (picked) {
+        setSettingsDraft((current) => (current ? { ...current, translation_local_model_path: picked } : current));
+      }
+    } catch (error) {
+      setNotice(t("error.pickTranslationModel", { error: errorText(error) }));
+    }
+  }, [t]);
+
   const openOutputDir = useCallback(async () => {
     const target = task?.exported_output_dir || task?.output_dir || task?.settings.output_dir;
     if (!target) return;
@@ -338,6 +351,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     notice,
     openOutputDir,
     operationContext,
+    pickTaskTranslationModel,
     pickTaskWhisperModel,
     refreshPreview,
     runOperation,

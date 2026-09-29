@@ -15,6 +15,7 @@ export const defaultSettings: SettingsState = {
   translation_cli_command: "opencode",
   translation_cli_model: "",
   translation_cli_args: "",
+  translation_local_model_path: "",
 };
 
 export const languageOptions: TargetLanguageOption[] = [
@@ -40,6 +41,19 @@ export const whisperLanguageOptions: WhisperLanguageOption[] = [
   { value: "it", labelKey: "language.it" },
   { value: "pt", labelKey: "language.pt" },
   { value: "ru", labelKey: "language.ru" },
+];
+
+export const translationLocalModelPresets: ModelPresetView[] = [
+  {
+    id: "hy-mt2-1.8b-q4",
+    labelKey: "model.hyMt218b",
+    fileName: "Hy-MT2-1.8B-Q4_K_M.gguf",
+  },
+  {
+    id: "hy-mt2-7b-q4",
+    labelKey: "model.hyMt27b",
+    fileName: "Hy-MT2-7B-Q4_K_M.gguf",
+  },
 ];
 
 export const whisperModelPresets: ModelPresetView[] = [

@@ -189,6 +189,8 @@ fn managed_package_dirs(root: &Path, exe_name: &str) -> Vec<PathBuf> {
         dirs.push(root.join("ffmpeg"));
     } else if lower == "whisper-cli" || lower == "whisper-cli.exe" {
         dirs.push(root.join("whisper.cpp"));
+    } else if lower == "llama-server" || lower == "llama-server.exe" {
+        dirs.push(root.join("llama.cpp"));
     }
     if let Some(stem) = Path::new(exe_name)
         .file_stem()

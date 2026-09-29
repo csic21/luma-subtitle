@@ -12,6 +12,7 @@ use crate::{
 
 pub(crate) mod cli;
 mod client;
+pub(crate) mod local;
 mod parser;
 mod prompt;
 
@@ -36,6 +37,7 @@ pub(crate) struct TranslationConfig {
     pub(crate) cli_command: String,
     pub(crate) cli_model: String,
     pub(crate) cli_args: String,
+    pub(crate) local_model_path: String,
 }
 
 pub(crate) const DEFAULT_TRANSLATION_SHARD_SIZE: usize = 200;
@@ -47,16 +49,31 @@ const MAX_CONCURRENT_CLI_SHARDS: usize = 2;
 pub(crate) const DEFAULT_TRANSLATION_PROVIDER: &str = "api";
 pub(crate) const DEFAULT_TRANSLATION_CLI_TOOL: &str = "opencode";
 pub(crate) const DEFAULT_TRANSLATION_CLI_COMMAND: &str = "opencode";
+pub(crate) const DEFAULT_LOCAL_TRANSLATION_SHARD_SIZE: usize = 12;
+pub(crate) const MAX_LOCAL_TRANSLATION_SHARD_SIZE: usize = 16;
 
 pub(crate) fn normalize_translation_provider(provider: &str) -> String {
     match provider.trim().to_lowercase().as_str() {
         "cli" | "opencode" | "opencode-cli" | "command" | "custom" => "cli".to_string(),
+        "local" | "llama" | "llamacpp" | "llama.cpp" | "gguf" | "hy-mt2" => "local".to_string(),
         _ => "api".to_string(),
     }
 }
 
 pub(crate) fn is_cli_provider(provider: &str) -> bool {
     normalize_translation_provider(provider) == "cli"
+}
+
+pub(crate) fn is_local_provider(provider: &str) -> bool {
+    normalize_translation_provider(provider) == "local"
+}
+
+pub(crate) fn is_api_provider(provider: &str) -> bool {
+    normalize_translation_provider(provider) == "api"
+}
+
+pub(crate) fn normalize_translation_local_model_path(path: &str) -> String {
+    path.trim().to_string()
 }
 
 pub(crate) fn normalize_translation_cli_tool(tool: &str) -> String {
@@ -95,6 +112,21 @@ pub(crate) async fn translate_with_single_request(
     ensure_not_cancelled(&cancel)?;
 
     let shard_size = normalize_translation_shard_size(config.shard_size);
+    if is_local_provider(&config.provider) {
+        publish_job_event(
+            app,
+            JobEventDraft::running(
+                job_id,
+                "translate-shards",
+                format!(
+                    "正在用本地 Hy-MT2 模型按每片 {} 条字幕翻译",
+                    local::normalize_local_shard_size(shard_size)
+                ),
+                0.58,
+            ),
+        );
+        return local::translate_shards_via_local(app, job_id, config, segments, cancel).await;
+    }
     if is_cli_provider(&config.provider) {
         cli::validate_cli_config(config)?;
         publish_job_event(

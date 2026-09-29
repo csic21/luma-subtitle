@@ -22,7 +22,9 @@ export function SettingsPage() {
     checkForUpdates,
     dependencyInstall,
     dependencyInstalling,
+    downloadedTranslationModelFiles,
     downloadedWhisperModelFiles,
+    downloadTranslationPreset,
     downloadWhisperPreset,
     env,
     environmentReady,
@@ -30,18 +32,24 @@ export function SettingsPage() {
     hasApiCredential,
     installUpdate,
     installDependencies,
+    installLocalTranslation,
+    llamaReady,
     modelDownload,
     modelDownloading,
     notice,
     openManagedDir,
+    pickTranslationModel,
     pickWhisperModel,
     refreshEnvironment,
     saveSettings,
+    selectedTranslationPreset,
     selectedWhisperPreset,
     setApiKey,
     setSettings,
+    setTranslationPresetId,
     setWhisperPresetId,
     settings,
+    translationPresetId,
     whisperPresetId,
   } = useSettingsPageState(t);
 
@@ -67,16 +75,26 @@ export function SettingsPage() {
             hasApiCredential={hasApiCredential}
             modelDownload={modelDownload}
             modelDownloading={modelDownloading}
+            downloadedTranslationModelFiles={downloadedTranslationModelFiles}
             downloadedWhisperModelFiles={downloadedWhisperModelFiles}
+            llamaBackend={env?.llama_backend}
+            llamaInstalling={dependencyInstalling}
+            llamaReady={llamaReady}
+            selectedTranslationPreset={selectedTranslationPreset}
             selectedWhisperPreset={selectedWhisperPreset}
             settings={settings}
             t={t}
+            translationPresetId={translationPresetId}
             whisperPresetId={whisperPresetId}
+            onDownloadTranslationPreset={downloadTranslationPreset}
             onDownloadWhisperPreset={downloadWhisperPreset}
+            onInstallLocalTranslation={installLocalTranslation}
+            onPickTranslationModel={pickTranslationModel}
             onPickWhisperModel={pickWhisperModel}
             onSaveSettings={() => saveSettings()}
             setApiKey={setApiKey}
             setSettings={setSettings}
+            setTranslationPresetId={setTranslationPresetId}
             setWhisperPresetId={setWhisperPresetId}
           />
 

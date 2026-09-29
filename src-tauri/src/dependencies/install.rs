@@ -13,6 +13,11 @@ use tokio::process::Command;
 #[cfg(not(target_os = "macos"))]
 use crate::paths::{find_file_recursive, path_to_string};
 
+#[cfg(not(target_os = "macos"))]
+pub(super) fn extract_zip_into_dir(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
+    extract_zip_archive(archive_path, output_dir)
+}
+
 use super::events::emit_dependency_install;
 
 #[cfg(not(target_os = "macos"))]

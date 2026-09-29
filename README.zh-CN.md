@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Luma Subtitle 是一款桌面端视频字幕生成与翻译工具。导入视频后，应用会通过 FFmpeg 抽取音频，调用本地 whisper.cpp 生成原文字幕，再使用 OpenAI 兼容的 `/v1/chat/completions` 接口完成翻译并输出标准 SRT 文件。
+Luma Subtitle 是一款桌面端视频字幕生成与翻译工具。导入视频后，应用会通过 FFmpeg 抽取音频，调用本地 whisper.cpp 生成原文字幕，再通过 OpenAI 兼容接口、本机 Hy-MT2 模型或 CLI 完成翻译并输出标准 SRT 文件。
 
 项目面向个人创作者、课程剪辑、访谈整理和跨语言内容制作场景，将视频转写、字幕翻译、模型准备、依赖检查、任务队列和任务输出集中在同一个本地工作台中完成。
 
@@ -18,7 +18,7 @@ macOS 版本面向 Apple Silicon 设备。自动编译 FFmpeg 和 whisper.cpp �
 - 本地转写：使用 whisper.cpp 在本机完成语音识别，支持选择本地 Whisper 模型文件。
 - 原文字幕编辑：从字幕预览逐条校对原文，保留序号和时间轴。保存后需重新翻译，已导出的文件会保留。
 - 重复语气词清理：每条字幕内识别到的语气词连续重复 6 次及以上时，在翻译前缩成 3 次加省略号，保留正常台词和时间轴。
-- 字幕翻译：兼容 OpenAI 风格 Chat Completions API，可配置 Base URL、模型名和 API Key。
+- 字幕翻译：支持 OpenAI 兼容 API、本机 Hy-MT2 GGUF（llama.cpp）或本地 CLI（如 opencode）。
 - SRT 输出：每次任务生成原文字幕和目标语言字幕，便于直接导入剪辑软件或播放器。
 - 任务队列：支持批量转写、翻译和导出，也可以开启从转写到翻译再到导出的自动链路。
 - 环境面板：检查 FFmpeg、whisper.cpp、模型目录和依赖目录，支持下载运行依赖与模型预设。
@@ -27,7 +27,7 @@ macOS 版本面向 Apple Silicon 设备。自动编译 FFmpeg 和 whisper.cpp �
 ## 隐私与凭据
 
 - 视频、音频抽取和 whisper.cpp 转写在本机执行。
-- 翻译阶段会将待翻译的字幕文本发送到用户配置的 OpenAI 兼容接口。
+- API 翻译会把字幕文本发到用户配置的 OpenAI 兼容接口。本地模型翻译在本机运行 llama.cpp 和 Hy-MT2 GGUF。
 - API Key 保存在应用用户数据目录的本地 SQLite 数据库中。
 - 仓库不应提交本地模型、FFmpeg/whisper 二进制、任务中间文件、开发日志、个人配置或 API Key。
 
@@ -39,12 +39,13 @@ macOS 版本面向 Apple Silicon 设备。自动编译 FFmpeg 和 whisper.cpp �
 - Vite
 - Rust
 - whisper.cpp
+- llama.cpp
 - FFmpeg
 
 ## 支持平台
 
-- Windows x64：检测到 NVIDIA GPU 时使用 CUDA 版 whisper.cpp，否则使用 BLAS/CPU 版。
-- macOS Apple Silicon：优先使用本机已安装或随应用内置的 arm64 `ffmpeg` 与 `whisper-cli`；缺失时可从官方源码自动编译 FFmpeg 与 Metal 版 whisper.cpp。
+- Windows x64：检测到 NVIDIA GPU 时使用 CUDA 版 whisper.cpp，否则使用 BLAS/CPU 版。本地翻译会安装官方 llama.cpp：有 NVIDIA 用 CUDA 12，否则优先 Vulkan，再退回 CPU。
+- macOS Apple Silicon：优先使用本机已安装或随应用内置的 arm64 `ffmpeg` 与 `whisper-cli`；缺失时可从官方源码自动编译 FFmpeg 与 Metal 版 whisper.cpp。本地翻译下载官方 Metal 版 llama.cpp macOS arm64 包。
 
 暂不适配 Intel Mac。
 
@@ -99,6 +100,15 @@ chmod +x src-tauri/resources/bin/macos-arm64/whisper-cli
 应用查找顺序：应用数据目录、内置资源、常见 macOS 可执行路径、系统 PATH。
 
 Whisper 模型可以放在任意位置，在应用内选择模型文件即可。Apple Silicon 推荐优先使用 `large-v3-turbo-q5_0` 或 `small`，根据内存和转写速度取舍。
+
+本地翻译模型同样下载到应用 `models` 目录，不打进安装包。
+
+| 预设 | 文件 | 大小 | 下载 |
+| --- | --- | --- | --- |
+| Hy-MT2 1.8B Q4 | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1.1 GB | https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf |
+| Hy-MT2 7B Q4 | `Hy-MT2-7B-Q4_K_M.gguf` | 4.3 GB | https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf |
+
+在设置里把翻译方式选成「本地模型」，再点「安装本地翻译」。应用会把 `llama-server` 装进依赖目录；如果还没选 GGUF，会接着下载 1.8B 预设。
 
 ## Whisper 模型预设
 

@@ -53,6 +53,56 @@ fn preview_model_output(content: &str) -> String {
     )
 }
 
+pub(crate) const LOCAL_CUE_DELIMITER: &str = "<<<CUE>>>";
+
+pub(crate) fn parse_delimited_translation_content(
+    content: &str,
+    segments: &[SubtitleSegment],
+) -> JobResult<Vec<TranslatedSegment>> {
+    let cleaned = strip_code_fences(content);
+    if segments.len() == 1 {
+        return Ok(vec![TranslatedSegment {
+            id: segments[0].id,
+            text: summarize_repeated_vocalization(&cleaned),
+        }]);
+    }
+    let mut parts = cleaned
+        .split(LOCAL_CUE_DELIMITER)
+        .map(|part| summarize_repeated_vocalization(part.trim()))
+        .collect::<Vec<_>>();
+    if parts.len() == segments.len() + 1 && parts.last().is_some_and(|part| part.is_empty()) {
+        parts.pop();
+    }
+    if parts.len() == segments.len() + 1 && parts.first().is_some_and(|part| part.is_empty()) {
+        parts.remove(0);
+    }
+    if parts.len() != segments.len() {
+        return Err(JobError::failed(format!(
+            "本地翻译返回的字幕数量与请求不一致：请求 {} 条，返回 {} 条",
+            segments.len(),
+            parts.len()
+        )));
+    }
+    Ok(segments
+        .iter()
+        .zip(parts)
+        .map(|(segment, text)| TranslatedSegment {
+            id: segment.id,
+            text,
+        })
+        .collect())
+}
+
+fn strip_code_fences(content: &str) -> String {
+    let trimmed = content.trim();
+    let without_fences = trimmed
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    without_fences.to_string()
+}
+
 pub(crate) fn parse_translation_content(
     content: &str,
     segments: &[SubtitleSegment],
@@ -165,4 +215,38 @@ fn extract_json_value(content: &str) -> Option<String> {
 fn is_wrapped_json_value(value: &str) -> bool {
     (value.starts_with('{') && value.ends_with('}'))
         || (value.starts_with('[') && value.ends_with(']'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_delimited_translation_content;
+    use crate::subtitles::SubtitleSegment;
+
+    fn segment(id: usize, text: &str) -> SubtitleSegment {
+        SubtitleSegment {
+            id,
+            start_ms: 0,
+            end_ms: 1000,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn splits_delimited_local_translations_in_order() {
+        let segments = [segment(7, "a"), segment(8, "b"), segment(9, "c")];
+        let parsed = parse_delimited_translation_content("Hello<<<CUE>>>World<<<CUE>>>!", &segments)
+            .expect("delimited output should parse");
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].id, 7);
+        assert_eq!(parsed[0].text, "Hello");
+        assert_eq!(parsed[1].text, "World");
+        assert_eq!(parsed[2].text, "!");
+    }
+
+    #[test]
+    fn uses_the_whole_output_for_a_single_cue() {
+        let segments = [segment(1, "hello")];
+        let parsed = parse_delimited_translation_content("  你好  ", &segments).expect("single cue");
+        assert_eq!(parsed[0].text, "你好");
+    }
 }
