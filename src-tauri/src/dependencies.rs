@@ -43,8 +43,8 @@ const FFMPEG_SOURCE_URL: &str = "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz
 const FFMPEG_SOURCE_ARCHIVE_NAME: &str = "ffmpeg-8.1.1.tar.xz";
 #[cfg(target_os = "macos")]
 const MACOS_ARM64_DEPLOYMENT_TARGET: &str = "11.0";
-const WHISPER_RELEASE_API_URL: &str =
-    "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
+const WHISPER_RELEASES_API_URL: &str =
+    "https://api.github.com/repos/ggml-org/whisper.cpp/releases";
 const WHISPER_VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
 const WHISPER_VAD_MODEL_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
@@ -118,13 +118,13 @@ pub(crate) struct DownloadWhisperModelRequest {
 pub(crate) struct DownloadTranslationModelRequest {
     preset_id: String,
 }
-#[cfg(not(target_os = "macos"))]
-#[derive(Deserialize)]
+#[cfg(any(not(target_os = "macos"), test))]
+#[derive(Clone, Deserialize)]
 struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
-#[cfg(not(target_os = "macos"))]
-#[derive(Deserialize)]
+#[cfg(any(not(target_os = "macos"), test))]
+#[derive(Clone, Deserialize)]
 struct GithubAsset {
     name: String,
     browser_download_url: String,
@@ -613,37 +613,40 @@ async fn latest_whisper_cpp_asset() -> Result<GithubAsset, String> {
         .user_agent(HTTP_USER_AGENT)
         .build()
         .map_err(|error| format!("创建 GitHub 客户端失败: {error}"))?;
-    let release = client
-        .get(WHISPER_RELEASE_API_URL)
+    let releases = client
+        .get(WHISPER_RELEASES_API_URL)
+        .query(&[("per_page", "20")])
         .send()
         .await
         .map_err(|error| format!("查询 whisper.cpp 发布包失败: {error}"))?
         .error_for_status()
         .map_err(|error| format!("查询 whisper.cpp 发布包失败: {error}"))?
-        .json::<GithubRelease>()
+        .json::<Vec<GithubRelease>>()
         .await
         .map_err(|error| format!("解析 whisper.cpp 发布包失败: {error}"))?;
-    let available_assets = release
-        .assets
-        .iter()
-        .map(|asset| asset.name.as_str())
-        .collect::<Vec<_>>();
-    let selected_name = select_whisper_cpp_asset_name(&available_assets, has_nvidia_gpu())
-        .ok_or_else(|| "未找到可用的 whisper.cpp Windows x64 发布包".to_string())?;
-    release
-        .assets
-        .iter()
-        .find_map(|asset| {
-            if asset.name == selected_name {
-                Some(GithubAsset {
-                    name: asset.name.clone(),
-                    browser_download_url: asset.browser_download_url.clone(),
-                })
-            } else {
-                None
-            }
-        })
+    select_whisper_cpp_asset_from_releases(&releases, has_nvidia_gpu())
         .ok_or_else(|| "未找到可用的 whisper.cpp Windows x64 发布包".to_string())
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn select_whisper_cpp_asset_from_releases(
+    releases: &[GithubRelease],
+    has_nvidia_gpu: bool,
+) -> Option<GithubAsset> {
+    releases.iter().find_map(|release| {
+        let available_assets = release
+            .assets
+            .iter()
+            .map(|asset| asset.name.as_str())
+            .collect::<Vec<_>>();
+        let selected_name = select_whisper_cpp_asset_name(&available_assets, has_nvidia_gpu)?;
+        release.assets.iter().find_map(|asset| {
+            (asset.name == selected_name).then(|| GithubAsset {
+                name: asset.name.clone(),
+                browser_download_url: asset.browser_download_url.clone(),
+            })
+        })
+    })
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
@@ -706,7 +709,10 @@ fn find_translation_model_preset(id: &str) -> Option<TranslationModelPreset> {
 
 #[cfg(test)]
 mod tests {
-    use super::select_whisper_cpp_asset_name;
+    use super::{
+        select_whisper_cpp_asset_from_releases, select_whisper_cpp_asset_name, GithubAsset,
+        GithubRelease,
+    };
 
     #[test]
     fn selects_cuda_package_for_nvidia_windows() {
@@ -748,5 +754,33 @@ mod tests {
             select_whisper_cpp_asset_name(&assets, true),
             Some("whisper-bin-x64.zip")
         );
+    }
+
+    #[test]
+    fn skips_latest_release_without_windows_assets() {
+        let releases = [
+            GithubRelease { assets: vec![] },
+            GithubRelease {
+                assets: vec![
+                    GithubAsset {
+                        name: "whisper-blas-bin-x64.zip".into(),
+                        browser_download_url: "https://example.test/blas".into(),
+                    },
+                    GithubAsset {
+                        name: "whisper-cublas-12.4.0-bin-x64.zip".into(),
+                        browser_download_url: "https://example.test/cuda".into(),
+                    },
+                ],
+            },
+        ];
+
+        let selected = select_whisper_cpp_asset_from_releases(&releases, false)
+            .expect("should pick first release that still ships Windows packages");
+        assert_eq!(selected.name, "whisper-blas-bin-x64.zip");
+        assert_eq!(selected.browser_download_url, "https://example.test/blas");
+
+        let selected_cuda = select_whisper_cpp_asset_from_releases(&releases, true)
+            .expect("cuda should also skip empty latest");
+        assert_eq!(selected_cuda.name, "whisper-cublas-12.4.0-bin-x64.zip");
     }
 }
