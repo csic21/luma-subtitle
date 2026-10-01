@@ -15,8 +15,9 @@ use crate::{
         normalize_translation_cli_command, normalize_translation_cli_model,
         normalize_translation_cli_tool, normalize_translation_local_model_path,
         normalize_translation_provider, normalize_translation_shard_size,
-        translate_with_single_request, TranslationConfig, DEFAULT_TRANSLATION_CLI_COMMAND,
-        DEFAULT_TRANSLATION_CLI_TOOL, DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
+        translate_with_single_request, TranslationConfig, TranslationResume,
+        DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
+        DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
     },
 };
 
@@ -32,6 +33,7 @@ pub(super) async fn run_translation(
     mut stored: StoredSubtitleResult,
     api_key: Option<&str>,
     cancel: Arc<AtomicBool>,
+    resume: Option<TranslationResume>,
 ) -> JobResult<(StoredSubtitleResult, JobOutputs)> {
     let config = TranslationConfig {
         target_language: request.target_language.trim().to_string(),
@@ -93,6 +95,7 @@ pub(super) async fn run_translation(
         &stored.source_srt,
         &stored.source_file_name,
         cancel,
+        resume,
     )
     .await?;
     publish_job_event(

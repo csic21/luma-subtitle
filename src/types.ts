@@ -1,6 +1,6 @@
 export type TFunction = (key: string, values?: Record<string, string | number>) => string;
 
-export type TaskOperation = "transcribe" | "translate" | "export";
+export type TaskOperation = "transcribe" | "translate" | "resume_translate" | "export";
 
 export type SettingsState = {
   base_url: string;
@@ -137,6 +137,7 @@ export type TaskRecord = {
   exported_source_srt?: string | null;
   exported_translated_srt?: string | null;
   exported_output_dir?: string | null;
+  translation_completed_count?: number | null;
   error?: string | null;
   created_at: number;
   updated_at: number;

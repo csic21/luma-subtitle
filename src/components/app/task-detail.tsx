@@ -30,6 +30,7 @@ import type { Locale, useI18n } from "@/i18n";
 import {
   canRunOperation,
   formattedTime,
+  hasPartialTranslationProgress,
   operationRequirementIssues,
   operationRequirementSummary,
   type OperationReadinessContext,
@@ -89,7 +90,9 @@ export function TaskSummaryCard({
 }) {
   const transcribeIssues = operationRequirementIssues(task, "transcribe", operationContext);
   const translateIssues = operationRequirementIssues(task, "translate", operationContext);
+  const resumeTranslateIssues = operationRequirementIssues(task, "resume_translate", operationContext);
   const exportIssues = operationRequirementIssues(task, "export", operationContext);
+  const showResumeTranslate = hasPartialTranslationProgress(task);
   const materialIcon =
     task.source_type === "audio" ? (
       <FileAudio />
@@ -141,6 +144,24 @@ export function TaskSummaryCard({
             <Languages data-icon="inline-start" />
             {t("common.translate")}
           </Button>
+          {showResumeTranslate && (
+            <Button
+              variant="secondary"
+              onClick={() => onRunOperation("resume_translate")}
+              disabled={!canRunOperation(task, "resume_translate", operationContext)}
+              title={
+                resumeTranslateIssues.length
+                  ? operationRequirementSummary(resumeTranslateIssues, t)
+                  : t("common.resumeTranslate")
+              }
+            >
+              <RefreshCw data-icon="inline-start" />
+              {t("common.resumeTranslate")}
+              {typeof task.translation_completed_count === "number" && task.segment_count
+                ? ` (${task.translation_completed_count}/${task.segment_count})`
+                : ""}
+            </Button>
+          )}
           <Button
             onClick={() => onRunOperation("export")}
             disabled={!canRunOperation(task, "export", operationContext)}

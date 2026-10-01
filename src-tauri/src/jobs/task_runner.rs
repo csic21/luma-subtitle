@@ -13,6 +13,12 @@ use crate::{
     state::{ensure_not_cancelled, AppState, JobError, JobResult, QueuedTaskOperation},
     subtitles::{parse_srt_file, write_srt_text},
     task_db::{self, TaskRecord},
+    translation::{
+        checkpoint::{
+            checkpoint_path, clear_checkpoint, load_compatible_checkpoint, source_fingerprint,
+        },
+        TranslationProgressHook, TranslationResume,
+    },
 };
 
 use super::{
@@ -31,7 +37,8 @@ pub(super) async fn execute_task_operation(
 ) -> bool {
     let result = match queued.operation.as_str() {
         "transcribe" => run_transcribe_task(app.clone(), &queued.task_id, cancel).await,
-        "translate" => run_translate_task(app.clone(), &queued.task_id, cancel).await,
+        "translate" => run_translate_task(app.clone(), &queued.task_id, cancel, false).await,
+        "resume_translate" => run_translate_task(app.clone(), &queued.task_id, cancel, true).await,
         "export" => run_export_task(app.clone(), &queued.task_id, cancel).await,
         _ => Err(JobError::failed("未知任务操作")),
     };
@@ -143,6 +150,7 @@ async fn run_translate_task(
     app: AppHandle,
     task_id: &str,
     cancel: Arc<AtomicBool>,
+    resume: bool,
 ) -> JobResult<()> {
     let task = task_db::require_task(&app, task_id).map_err(JobError::failed)?;
     let source_srt_path = task
@@ -179,6 +187,40 @@ async fn run_translate_task(
     };
     validate_translate_request(&request).map_err(JobError::failed)?;
     let api_key = task_db::load_api_key(&app).map_err(JobError::failed)?;
+    let work_dir = task_db::task_work_dir(&app, task_id).map_err(JobError::failed)?;
+    let checkpoint_file = checkpoint_path(&work_dir);
+    let fingerprint = source_fingerprint(&segments);
+    let target_language = task.settings.target_language.clone();
+
+    let resume_state = if resume {
+        let completed =
+            load_compatible_checkpoint(&checkpoint_file, &target_language, &fingerprint)?;
+        if completed.is_empty() {
+            return Err(JobError::failed(
+                "没有可续翻的进度。请使用「翻译」重新开始，或确认原文与目标语言未变更",
+            ));
+        }
+        task_db::set_translation_progress(&app, task_id, completed.len())
+            .map_err(JobError::failed)?;
+        Some(build_resume_state(
+            &app,
+            task_id,
+            checkpoint_file.clone(),
+            fingerprint.clone(),
+            completed,
+        ))
+    } else {
+        clear_checkpoint(&checkpoint_file)?;
+        task_db::clear_translation_progress(&app, task_id).map_err(JobError::failed)?;
+        Some(build_resume_state(
+            &app,
+            task_id,
+            checkpoint_file.clone(),
+            fingerprint.clone(),
+            Vec::new(),
+        ))
+    };
+
     let stored = StoredSubtitleResult {
         source_srt,
         translated_srt: None,
@@ -190,10 +232,19 @@ async fn run_translate_task(
 
     publish_job_event(
         &app,
-        JobEventDraft::running(task_id, "preparing-translation", "正在读取翻译配置", 0.54),
+        JobEventDraft::running(
+            task_id,
+            "preparing-translation",
+            if resume {
+                "正在读取续翻断点"
+            } else {
+                "正在读取翻译配置"
+            },
+            0.54,
+        ),
     );
     let (stored, outputs) =
-        run_translation(&app, &request, stored, api_key.as_deref(), cancel).await?;
+        run_translation(&app, &request, stored, api_key.as_deref(), cancel, resume_state).await?;
     let translated_srt = stored
         .translated_srt
         .clone()
@@ -202,10 +253,9 @@ async fn run_translate_task(
         .translated_file_name
         .clone()
         .ok_or_else(|| JobError::failed("翻译文件名为空"))?;
-    let translated_srt_path = task_db::task_work_dir(&app, task_id)
-        .map_err(JobError::failed)?
-        .join(&translated_file_name);
+    let translated_srt_path = work_dir.join(&translated_file_name);
     write_srt_text(&translated_srt_path, &translated_srt).await?;
+    clear_checkpoint(&checkpoint_file)?;
     app.state::<AppState>()
         .subtitle_results
         .lock()
@@ -222,6 +272,28 @@ async fn run_translate_task(
         JobEventDraft::completed(task_id, "completed", "译文字幕已生成").with_outputs(outputs),
     );
     Ok(())
+}
+
+fn build_resume_state(
+    app: &AppHandle,
+    task_id: &str,
+    checkpoint_file: PathBuf,
+    fingerprint: String,
+    completed: Vec<crate::subtitles::TranslatedSegment>,
+) -> TranslationResume {
+    let app_handle = app.clone();
+    let task_id = task_id.to_string();
+    let on_progress: TranslationProgressHook = std::sync::Arc::new(move |items| {
+        task_db::set_translation_progress(&app_handle, &task_id, items.len())
+            .map_err(JobError::failed)?;
+        Ok(())
+    });
+    TranslationResume {
+        completed,
+        checkpoint_path: checkpoint_file,
+        source_fingerprint: fingerprint,
+        on_progress: Some(on_progress),
+    }
 }
 
 async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>) -> JobResult<()> {

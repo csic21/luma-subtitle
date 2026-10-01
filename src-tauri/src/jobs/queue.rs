@@ -130,9 +130,15 @@ fn validate_task_operation(task: &TaskRecord, operation: &str) -> Result<(), Str
                 return Err("请先在设置页选择 Whisper 模型".to_string());
             }
         }
-        "translate" => {
+        "translate" | "resume_translate" => {
             if task.source_srt_path.is_none() {
                 return Err("请先完成转写或导入 SRT".to_string());
+            }
+            if operation == "resume_translate" {
+                let completed = task.translation_completed_count.unwrap_or(0);
+                if completed == 0 {
+                    return Err("没有可续翻的进度".to_string());
+                }
             }
         }
         "export" => {
@@ -147,7 +153,9 @@ fn validate_task_operation(task: &TaskRecord, operation: &str) -> Result<(), Str
 
 fn normalize_operation(operation: &str) -> Result<String, String> {
     match operation.trim() {
-        "transcribe" | "translate" | "export" => Ok(operation.trim().to_string()),
+        "transcribe" | "translate" | "resume_translate" | "export" => {
+            Ok(operation.trim().to_string())
+        }
         _ => Err("未知任务操作".to_string()),
     }
 }
@@ -198,7 +206,7 @@ fn enqueue_next_link(app: &AppHandle, completed: &QueuedTaskOperation) {
 fn next_operation(operation: &str) -> Option<&'static str> {
     match operation {
         "transcribe" => Some("translate"),
-        "translate" => Some("export"),
+        "translate" | "resume_translate" => Some("export"),
         _ => None,
     }
 }
@@ -213,15 +221,19 @@ fn next_runnable_operation_index(
 }
 
 fn resource_available(running: &HashMap<String, String>, operation: &str) -> bool {
-    let running_count = running
-        .values()
-        .filter(|running_operation| running_operation.as_str() == operation)
-        .count();
+    let matching = |candidates: &[&str]| {
+        running
+            .values()
+            .filter(|running_operation| candidates.contains(&running_operation.as_str()))
+            .count()
+    };
 
     match operation {
-        "transcribe" => running_count < MAX_CONCURRENT_TRANSCRIPTIONS,
-        "translate" => running_count < MAX_CONCURRENT_TRANSLATIONS,
-        "export" => running_count < MAX_CONCURRENT_EXPORTS,
+        "transcribe" => matching(&["transcribe"]) < MAX_CONCURRENT_TRANSCRIPTIONS,
+        "translate" | "resume_translate" => {
+            matching(&["translate", "resume_translate"]) < MAX_CONCURRENT_TRANSLATIONS
+        }
+        "export" => matching(&["export"]) < MAX_CONCURRENT_EXPORTS,
         _ => true,
     }
 }

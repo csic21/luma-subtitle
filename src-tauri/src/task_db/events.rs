@@ -77,9 +77,47 @@ pub(crate) fn set_translation_result(
         "UPDATE tasks SET
             translated_srt_path = ?1,
             translated_file_name = ?2,
+            translation_completed_count = NULL,
             updated_at = ?3
         WHERE id = ?4",
         params![translated_srt_path, translated_file_name, now, task_id],
+    )
+    .map_err(|error| error.to_string())?;
+    emit_task(app, task_id);
+    require_task(app, task_id)
+}
+
+pub(crate) fn set_translation_progress(
+    app: &AppHandle,
+    task_id: &str,
+    completed_count: usize,
+) -> Result<TaskRecord, String> {
+    let conn = connection(app)?;
+    let now = super::now_ts();
+    conn.execute(
+        "UPDATE tasks SET
+            translation_completed_count = ?1,
+            updated_at = ?2
+        WHERE id = ?3",
+        params![completed_count as i64, now, task_id],
+    )
+    .map_err(|error| error.to_string())?;
+    emit_task(app, task_id);
+    require_task(app, task_id)
+}
+
+pub(crate) fn clear_translation_progress(
+    app: &AppHandle,
+    task_id: &str,
+) -> Result<TaskRecord, String> {
+    let conn = connection(app)?;
+    let now = super::now_ts();
+    conn.execute(
+        "UPDATE tasks SET
+            translation_completed_count = NULL,
+            updated_at = ?1
+        WHERE id = ?2",
+        params![now, task_id],
     )
     .map_err(|error| error.to_string())?;
     emit_task(app, task_id);
@@ -270,6 +308,7 @@ fn operation_message(operation: &str, suffix: &str) -> String {
     let label = match operation {
         "transcribe" => "转写",
         "translate" => "翻译",
+        "resume_translate" => "续翻",
         "export" => "导出",
         _ => "任务",
     };

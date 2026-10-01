@@ -40,6 +40,9 @@ pub(super) fn task_from_row(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
         exported_source_srt: row.get("exported_source_srt")?,
         exported_translated_srt: row.get("exported_translated_srt")?,
         exported_output_dir: row.get("exported_output_dir")?,
+        translation_completed_count: row
+            .get::<_, Option<i64>>("translation_completed_count")?
+            .map(|value| value.max(0) as usize),
         error: row.get("error")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -131,6 +134,7 @@ pub(super) fn migrate(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| error.to_string())?;
     ensure_column(conn, "tasks", "audio_path", "TEXT")?;
+    ensure_column(conn, "tasks", "translation_completed_count", "INTEGER")?;
     Ok(())
 }
 

@@ -243,7 +243,7 @@ pub(super) fn display_file_name(path: &Path) -> String {
 pub(super) fn operation_failed_message(operation: &str) -> &'static str {
     match operation {
         "transcribe" => "转写失败",
-        "translate" => "翻译失败",
+        "translate" | "resume_translate" => "翻译失败",
         "export" => "导出失败",
         _ => "任务失败",
     }
@@ -252,7 +252,7 @@ pub(super) fn operation_failed_message(operation: &str) -> &'static str {
 pub(super) fn operation_cancelled_message(operation: &str) -> &'static str {
     match operation {
         "transcribe" => "转写已取消",
-        "translate" => "翻译已取消",
+        "translate" | "resume_translate" => "翻译已取消",
         "export" => "导出已取消",
         _ => "任务已取消",
     }

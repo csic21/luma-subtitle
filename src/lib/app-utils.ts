@@ -5,6 +5,7 @@ export type OperationRequirementIssue =
   | "taskBusy"
   | "unsupportedSource"
   | "missingSourceSubtitles"
+  | "missingTranslationProgress"
   | "missingWhisperModel"
   | "missingEnvironment"
   | "missingBaseUrl"
@@ -143,6 +144,11 @@ export function taskBusy(task: TaskRecord) {
   return task.status === "queued" || task.status === "running";
 }
 
+export function hasPartialTranslationProgress(task: TaskRecord) {
+  const completed = task.translation_completed_count ?? 0;
+  return completed > 0;
+}
+
 function hasConfiguredText(value?: string | null) {
   return Boolean(value?.trim());
 }
@@ -163,8 +169,11 @@ export function operationRequirementIssues(
     return issues;
   }
 
-  if (operation === "translate") {
+  if (operation === "translate" || operation === "resume_translate") {
     if (!hasConfiguredText(task.source_srt_path)) issues.push("missingSourceSubtitles");
+    if (operation === "resume_translate" && !hasPartialTranslationProgress(task)) {
+      issues.push("missingTranslationProgress");
+    }
     const provider = task.settings.translation_provider ?? "api";
     if (isCliTranslationProvider(provider)) {
       if (!hasConfiguredText(task.settings.translation_cli_command)) issues.push("missingCliCommand");
@@ -198,6 +207,7 @@ export function operationRequirementIssueLabel(issue: OperationRequirementIssue,
     taskBusy: t("requirement.taskBusy"),
     unsupportedSource: t("requirement.unsupportedSource"),
     missingSourceSubtitles: t("requirement.missingSourceSubtitles"),
+    missingTranslationProgress: t("requirement.missingTranslationProgress"),
     missingWhisperModel: t("requirement.missingWhisperModel"),
     missingEnvironment: t("requirement.missingEnvironment"),
     missingBaseUrl: t("requirement.missingBaseUrl"),
@@ -220,8 +230,9 @@ export function formattedTime(seconds: number, locale: Locale) {
   return new Date(seconds * 1000).toLocaleString(locale);
 }
 
-export function operationLabel(operation: "transcribe" | "translate" | "export", t: TFunction) {
+export function operationLabel(operation: TaskOperation, t: TFunction) {
   if (operation === "transcribe") return t("operation.transcribe");
   if (operation === "translate") return t("operation.translate");
+  if (operation === "resume_translate") return t("operation.resumeTranslate");
   return t("operation.export");
 }

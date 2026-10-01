@@ -179,4 +179,25 @@ describe("operation readiness", () => {
       }),
     ).toBe(true);
   });
+
+  it("allows resume translation only when partial progress exists", () => {
+    const withoutProgress = task({
+      source_srt_path: "/tmp/source.srt",
+      translation_completed_count: 0,
+    });
+    const withProgress = task({
+      source_srt_path: "/tmp/source.srt",
+      translation_completed_count: 64,
+      segment_count: 95,
+    });
+    const context = { environmentReady: true, hasApiCredential: true, llamaReady: false };
+
+    expect(operationRequirementIssues(withoutProgress, "resume_translate", context)).toContain(
+      "missingTranslationProgress",
+    );
+    expect(canRunOperation(withoutProgress, "resume_translate", context)).toBe(false);
+    expect(operationRequirementIssues(withProgress, "resume_translate", context)).toEqual([]);
+    expect(canRunOperation(withProgress, "resume_translate", context)).toBe(true);
+  });
 });
+

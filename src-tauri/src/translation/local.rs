@@ -43,9 +43,15 @@ pub(super) async fn translate_shards_via_local(
     app: &AppHandle,
     job_id: &str,
     config: &TranslationConfig,
-    segments: &[SubtitleSegment],
+    all_segments: &[SubtitleSegment],
     cancel: Arc<AtomicBool>,
+    progress: super::TranslationProgress,
 ) -> JobResult<Vec<TranslatedSegment>> {
+    let remaining = progress.remaining_owned();
+    if remaining.is_empty() {
+        return Ok(progress.into_completed());
+    }
+
     let model_path = validate_local_model_path(&config.local_model_path)?;
     let llama_server = locate_binary(app, "llama-server").ok_or_else(|| {
         JobError::failed("未找到 llama-server。请在设置里安装翻译引擎（llama.cpp）")
@@ -56,10 +62,8 @@ pub(super) async fn translate_shards_via_local(
         JobEventDraft::running(
             job_id,
             "translate-shards",
-            format!(
-                "正在启动本地翻译引擎（每片 {shard_size} 条字幕，顺序翻译）"
-            ),
-            0.56,
+            format!("正在启动本地翻译引擎（每片 {shard_size} 条字幕，顺序翻译）"),
+            super::cue_progress(progress.completed_count(), all_segments.len()),
         ),
     );
 
@@ -69,12 +73,12 @@ pub(super) async fn translate_shards_via_local(
         .build()
         .map_err(|error| JobError::failed(format!("创建本地翻译客户端失败: {error}")))?;
 
-    let shards = segments
+    let shards = remaining
         .chunks(shard_size)
         .map(|chunk| chunk.to_vec())
         .collect::<Vec<_>>();
     let total_shards = shards.len().max(1);
-    let mut translated = Vec::with_capacity(segments.len());
+    let total_cues = all_segments.len();
 
     for (index, shard) in shards.iter().enumerate() {
         ensure_not_cancelled(&cancel)?;
@@ -88,10 +92,10 @@ pub(super) async fn translate_shards_via_local(
                     "本地分片 {shard_index}/{total_shards} 翻译中（{} 条字幕）",
                     shard.len()
                 ),
-                shard_progress(index, total_shards),
+                super::cue_progress(progress.completed_count(), total_cues),
             ),
         );
-        let mut items = translate_shard_via_local(
+        let items = translate_shard_via_local(
             &client,
             &server.base_url,
             config,
@@ -102,21 +106,23 @@ pub(super) async fn translate_shards_via_local(
         )
         .await
         .map_err(|error| prefix_shard_error(error, shard_index, total_shards))?;
-        translated.append(&mut items);
+        progress.append_and_persist(items)?;
         publish_job_event(
             app,
             JobEventDraft::running(
                 job_id,
                 "translate-shard",
-                format!("本地分片 {shard_index}/{total_shards} 已完成"),
-                shard_progress(shard_index, total_shards),
+                format!(
+                    "本地分片 {shard_index}/{total_shards} 已完成（累计 {}/{total_cues}）",
+                    progress.completed_count()
+                ),
+                super::cue_progress(progress.completed_count(), total_cues),
             ),
         );
     }
 
     let _ = server.child.start_kill();
-    translated.sort_by_key(|item| item.id);
-    Ok(translated)
+    Ok(progress.into_completed())
 }
 
 pub(crate) fn normalize_local_shard_size(size: usize) -> usize {
@@ -388,9 +394,6 @@ fn prefix_shard_error(error: JobError, shard_index: usize, total_shards: usize) 
     }
 }
 
-fn shard_progress(completed_shards: usize, total_shards: usize) -> f32 {
-    0.58 + (completed_shards as f32 / total_shards.max(1) as f32) * 0.36
-}
 
 fn trim_error_body(body: &str) -> String {
     const MAX_ERROR_BODY: usize = 1_500;

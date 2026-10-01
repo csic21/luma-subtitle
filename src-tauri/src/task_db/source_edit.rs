@@ -11,6 +11,7 @@ use crate::{
     subtitles::{
         normalize_subtitle_text, parse_srt_text, render_srt, write_srt_text, SubtitleSegment,
     },
+    translation::checkpoint::{checkpoint_path, clear_checkpoint},
 };
 
 use super::{
@@ -31,6 +32,7 @@ pub(crate) fn save_source_subtitles(
     let mut conn = connection(app)?;
     let work_dir = task_work_dir(app, task_id)?;
     let task = save_in_connection(&mut conn, &work_dir, task_id, original_source_srt, edits)?;
+    let _ = clear_checkpoint(&checkpoint_path(&work_dir));
     emit_task(app, task_id);
     Ok(task)
 }
@@ -86,6 +88,7 @@ fn save_in_connection(
                 segment_count = ?2,
                 translated_srt_path = NULL,
                 translated_file_name = NULL,
+                translation_completed_count = NULL,
                 exported_source_srt = NULL,
                 exported_translated_srt = NULL,
                 exported_output_dir = NULL,

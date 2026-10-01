@@ -18,8 +18,8 @@ mod source_edit;
 use crate::translation::DEFAULT_TRANSLATION_SHARD_SIZE;
 use events::{append_log, emit_task, mark_interrupted_tasks};
 pub(crate) use events::{
-    record_job_event, set_exported, set_interrupted, set_queued, set_subtitle_result,
-    set_translation_result,
+    clear_translation_progress, record_job_event, set_exported, set_interrupted, set_queued,
+    set_subtitle_result, set_translation_progress, set_translation_result,
 };
 pub(crate) use models::{QueueSettings, TaskRecord, TaskSettingsSnapshot};
 pub(crate) use preferences::{
@@ -690,6 +690,7 @@ mod tests {
             exported_source_srt: Some("exports/clip.source.srt".to_string()),
             exported_translated_srt: Some("exports/clip.zh.srt".to_string()),
             exported_output_dir: Some("exports".to_string()),
+            translation_completed_count: None,
             error: None,
             created_at: 1,
             updated_at: 1,
@@ -749,6 +750,7 @@ mod tests {
             exported_source_srt: None,
             exported_translated_srt: None,
             exported_output_dir: None,
+            translation_completed_count: None,
             error: None,
             created_at: 1,
             updated_at: 1,

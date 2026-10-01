@@ -98,6 +98,9 @@ export function useTasksPageState(t: TFunction) {
     () => ({
       transcribe: tasks.some((task) => selectedIds.has(task.id) && canRunOperation(task, "transcribe", operationContext)),
       translate: tasks.some((task) => selectedIds.has(task.id) && canRunOperation(task, "translate", operationContext)),
+      resume_translate: tasks.some(
+        (task) => selectedIds.has(task.id) && canRunOperation(task, "resume_translate", operationContext),
+      ),
       export: tasks.some((task) => selectedIds.has(task.id) && canRunOperation(task, "export", operationContext)),
     }),
     [operationContext, selectedIds, tasks],
