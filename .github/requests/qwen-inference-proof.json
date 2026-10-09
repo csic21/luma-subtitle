@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "purpose": "one-time-feature-branch-qwen-inference-proof",
+  "repository": "csic21/luma-subtitle",
+  "feature_branch": "feat/optional-asr-engines",
+  "source_sha": "479a08cb4322ec8f147529981c93f9124350ae6e",
+  "pack_id": "qwen3-asr-cpu-windows-x64",
+  "prior_native_evidence": {
+    "run_id": 37989887165,
+    "run_attempt": 1,
+    "job_id": 114021045205,
+    "proof_json_sha256": "00390c40a3d5b68018701f9950513fcc5bbd6e5345ae7036094e2a71f3793dd1"
+  },
+  "model_revisions": {
+    "qwen3-asr-0-6b": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    "qwen3-forced-aligner-0-6b": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7"
+  },
+  "model_download_bytes": 3720689099,
+  "audio_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "minimum_available_ram_bytes": 13958643712,
+  "minimum_free_disk_bytes": 12884901888,
+  "inference_timeout_seconds": 900,
+  "download_deadline_seconds": 600,
+  "metadata_only": true
+}
