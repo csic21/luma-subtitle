@@ -39,6 +39,19 @@ class WindowsProofTests(unittest.TestCase):
         for gpu in ('cudnn64_9.dll', 'cufft64_11.dll', 'curand64_10.dll', 'cusolver64_11.dll', 'cusparse64_12.dll', 'nvJitLink_120_0.dll', 'torch_cuda.dll', 'c10_cuda.dll'):
             self.assertFalse(closure(files + [image(gpu)])['passed'], gpu)
 
+    def test_private_pyd_imports_do_not_expand_windows_api_exemptions(self):
+        def image(path, imports=()):
+            return {'path': path, 'normal': list(imports), 'delay': []}
+        for name in ('libtorchaudio.pyd', 'api-ms-win-example.pyd', 'ext-ms-win-example.pyd'):
+            importer = image('torchaudio/_torchaudio.pyd', [name])
+            missing = closure([importer]); self.assertFalse(missing['passed'])
+            self.assertEqual(missing['blocked_dependencies'][0]['resolution'], 'unresolved')
+            self.assertTrue(closure([importer, image('torchaudio/' + name)])['passed'])
+        for name in ('api-ms-win-core-synch-l1-2-0.dll', 'ext-ms-win-ntuser-window-l1-1-0.dll'):
+            result = closure([image('extension.pyd', [name])])
+            self.assertTrue(result['passed'])
+            self.assertEqual(result['dependencies'][0]['resolution'], 'windows_api_set')
+
     def test_crt_copy_preserves_companions_and_never_overwrites(self):
         with temporary_root() as tmp:
             base = tmp; runtime = base / 'runtime'; runtime.mkdir(); source = base / 'source'; source.mkdir()

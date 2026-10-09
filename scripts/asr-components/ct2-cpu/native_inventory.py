@@ -75,7 +75,9 @@ def pe_imports(path):
             name = raw_name.decode('ascii').lower()
         except UnicodeDecodeError:
             raise ValueError(f'Non-ASCII PE import name at RVA 0x{rva:x}: {diagnostic}') from None
-        if not re.fullmatch(r'[a-z0-9_.+-]+\.(dll|drv)', name):
+        # A PYD is also a PE shared library: official torchaudio links its
+        # _torchaudio.pyd extension to the private libtorchaudio.pyd target.
+        if not re.fullmatch(r'[a-z0-9_.+-]+\.(dll|drv|pyd)', name):
             raise ValueError(f'Unsafe PE import name at RVA 0x{rva:x}: {diagnostic}')
         return name
     def directory(index, size, delayed):
@@ -133,7 +135,7 @@ def classify(name, by_name):
         return 'private'
     if CRT.search(name):
         return 'missing_private_crt'
-    if name.startswith(('api-ms-win-', 'ext-ms-win-')):
+    if name.endswith('.dll') and name.startswith(('api-ms-win-', 'ext-ms-win-')):
         return 'windows_api_set'
     if name in OS_DLLS:
         return 'windows_os'
