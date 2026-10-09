@@ -50,11 +50,30 @@ If the operating system blocks a component, Luma reports the original error;
 it does not remove quarantine attributes or bypass a warning. Updater integrity
 signatures are distinct from Apple Developer ID signing/notarization.
 
-Windows managed setup requires absolute local-drive paths and limits private
-runtime launch paths to fewer than 260 UTF-16 units. Network shares, device paths
-and ambiguous names are unsupported. Overlong or unsupported paths produce a
-clear setup error; existing components remain unchanged. Luma does not move user
-files or change Windows settings to bypass this limit.
+Windows managed components use the app's local data directory,
+`%LOCALAPPDATA%\com.luma.subtitle\asr`, rather than roaming multi-gigabyte
+runtimes. The new store does not scan, migrate or delete older roaming stores,
+legacy models or manually selected runtimes. Its two managed Windows runtime
+keys are `.r\qw` and `.r\fw`; `v\<32-hex UUID>` version directories keep the
+complete UUID, while receipts retain the full component ID, logical version and
+catalog fingerprint. Staging uses `.s\<32-hex UUID>\payload`.
+
+Managed Windows Python requires ordinary absolute local-drive spellings that
+resolve to the exact verified files. Both planned staging and final runtime
+roots must fit **112 UTF-16 units**, checked before package downloads. Actual
+native `.pyd`, `.dll` and `.exe` member paths must fit **127 relative units** and
+**240 full units**, including the joining separator. These conservative supported
+bounds leave room for native-loader probing; even a 251-unit native module path
+failed in the relocation test, so a launch path below 260 alone is insufficient.
+Network shares, device paths, ambiguous names and deeper app-data locations are
+unsupported and fail explicitly. Luma does not move user files, create short-name
+aliases or change Windows settings to bypass these limits.
+
+Runtime setup tests and revalidates the receipt at the final version path before
+publishing the activation journal. A failed or cancelled check leaves the prior
+activation intact. Candidate files, staging and the setup lease stay owned until
+the final child has been reaped, including asynchronous aborts. Uncertain crash
+orphans are preserved rather than swept as if they were ordinary staging.
 
 Windows components obtain the exact Microsoft runtime package directly from
 Microsoft after its English and Chinese terms are displayed for acceptance.

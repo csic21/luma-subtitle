@@ -21,15 +21,6 @@ on:
         description: Exact reviewed source commit
         required: true
         type: string
-      publication:
-        description: Export candidates only for the validated request-only publisher
-        required: false
-        type: boolean
-        default: false
-    outputs:
-      candidate_artifact_id:
-        description: Exact same-run candidate artifact created after all proof gates
-        value: ${{ jobs.windows-cpu-proof.outputs.candidate_artifact_id }}
   workflow_dispatch:
     inputs:
       source_sha:
@@ -66,13 +57,14 @@ jobs:
 
   request:
     name: Validate request-only CPU proof
-    if: github.event_name == 'push' && !inputs.source_sha
+    if: github.event_name == 'push' && !inputs.source_sha && github.workflow == 'CPU-only CTranslate2 proof' && github.workflow_ref == 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines'
     needs: source-tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       source_sha: ${{ steps.request.outputs.source_sha }}
       diagnostic_artifact: ${{ steps.request.outputs.diagnostic_artifact }}
+      success_artifact: ${{ steps.request.outputs.success_artifact }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -85,26 +77,18 @@ jobs:
             await prepareCpuProof({ github, context, core });
 
   windows-cpu-proof:
-    needs: [source-tests, request]
-    if: always() && !cancelled() && needs.source-tests.result == 'success' && (needs.request.result == 'success' || inputs.source_sha || github.event_name == 'workflow_dispatch')
+    # Fail before compilation if the independent original CRT identity proof fails.
+    needs: [source-tests, request, windows-direct-crt-signatures]
+    if: always() && !cancelled() && needs.source-tests.result == 'success' && needs.windows-direct-crt-signatures.result == 'success' && (needs.request.result == 'success' || inputs.source_sha || github.event_name == 'workflow_dispatch')
     runs-on: windows-2022
     timeout-minutes: 120
-    outputs:
-      candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}
     env:
       SOURCE_SHA: ${{ inputs.source_sha || needs.request.outputs.source_sha || github.sha }}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
-      CPU_PUBLICATION_REQUESTED: ${{ inputs.publication || false }}
-      CPU_DIAGNOSTIC_EXPORT: ${{ needs.request.outputs.diagnostic_artifact == 'cpu-wheel-source-notices-1-day' && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && !inputs.source_sha && !inputs.publication }}
-      CPU_CANDIDATE_EXPORT: ${{ inputs.publication && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && github.workflow == 'Publish reviewed CPU wheel' && startsWith(github.workflow_ref, 'csic21/luma-subtitle/.github/workflows/asr-cpu-wheel-publish.yml@') }}
+      CPU_DIAGNOSTIC_EXPORT: ${{ needs.request.outputs.diagnostic_artifact == 'cpu-wheel-source-notices-1-day' && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && !inputs.source_sha && github.workflow == 'CPU-only CTranslate2 proof' && github.workflow_ref == 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines' }}
+      CPU_CANDIDATE_EXPORT: ${{ needs.request.result == 'success' && needs.request.outputs.success_artifact == 'cpu-wheel-source-notices-proof-14-days' && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && !inputs.source_sha && github.workflow == 'CPU-only CTranslate2 proof' && github.workflow_ref == 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines' }}
     steps:
-      - name: Restrict candidate export to the reviewed publisher caller
-        shell: pwsh
-        run: |
-          if ($env:CPU_PUBLICATION_REQUESTED -eq 'true' -and $env:CPU_CANDIDATE_EXPORT -ne 'true') {
-            throw 'Candidate exports require the dedicated validated request-only publisher.'
-          }
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -143,16 +127,17 @@ jobs:
             --reports "$reports" `
             --worker 'src-tauri/src/asr/worker.py' @publicationArgs @diagnosticArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Ordinary reports contain metadata only; no runtime/CRT/model upload.
-      # Explicit diagnostic requests may retain only the reviewed own CPU wheel
-      # and its source/notices in the separate one-day failure artifact below.
+      # Ordinary/manual/reusable/PR routes remain metadata-only. The mutually
+      # exclusive explicit request scopes retain either failed diagnostics for
+      # one day or the exact successful four-file candidate for fourteen days.
+      # Neither route contains runtime, CRT or model payloads.
       # The independent provenance, CRT license, hash and native inference review
       # must finish before a separate immutable non-app component release exists.
       - name: Upload test reports only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ct2-cpu-proof-${{ env.SOURCE_SHA }}${{ inputs.publication && format('-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+          name: ct2-cpu-proof-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -177,12 +162,13 @@ jobs:
 
       - name: Export the three reviewed candidate assets and proof only
         id: candidate-upload
-        if: success() && env.CPU_CANDIDATE_EXPORT == 'true'
+        if: success() && !cancelled() && env.CPU_CANDIDATE_EXPORT == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ct2-cpu-candidate-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 14
+          overwrite: false
           path: |
             dist/ct2-cpu-candidate/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl
             dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-sources.zip
@@ -230,7 +216,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: direct-crt-proof-${{ env.SOURCE_SHA }}${{ inputs.publication && format('-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+          name: direct-crt-proof-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 14
           path: dist/direct-crt-reports/*.json

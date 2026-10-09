@@ -178,10 +178,15 @@ function transportError(stage, summary) {
   if (summary.status !== null) error.status = summary.status;
   return error;
 }
-async function downloadExactArchive({ github, repo, destination, fetchImpl = fetch, core }) {
+// Shared transport only: callers must independently validate their bounded
+// source/run/job/artifact policy. This helper never executes or publishes bytes.
+async function downloadPinnedArchive({ github, repo, destination, artifact, fetchImpl = fetch, core }) {
   if (`${repo.owner}/${repo.repo}` !== REPOSITORY) throw new Error('Diagnostic downloads are restricted to the exact repository');
+  if (!artifact || !Number.isSafeInteger(artifact.id) || artifact.id <= 0
+      || !Number.isSafeInteger(artifact.bytes) || artifact.bytes <= 0 || artifact.bytes > 304000000
+      || !/^[a-f0-9]{64}$/.test(artifact.sha256 || '')) throw new Error('Invalid bounded artifact transport pin');
   if (fs.existsSync(destination)) throw new Error('Replay download destination must be fresh');
-  const apiUrl = `https://api.github.com/repos/${REPOSITORY}/actions/artifacts/${ARTIFACT.id}/zip`;
+  const apiUrl = `https://api.github.com/repos/${REPOSITORY}/actions/artifacts/${artifact.id}/zip`;
   // github-script v7.0.1 bundles @octokit/request 8.1.1, which does not forward
   // request.redirect. Its supported fetch hook must enforce it at the boundary:
   // https://github.com/octokit/request.js/blob/v8.1.1/src/fetch-wrapper.ts
@@ -191,7 +196,7 @@ async function downloadExactArchive({ github, repo, destination, fetchImpl = fet
   let apiSummary, response;
   try {
     response = await github.request('GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}', {
-      ...repo, artifact_id: ARTIFACT.id, archive_format: 'zip',
+      ...repo, artifact_id: artifact.id, archive_format: 'zip',
       request: { parseSuccessResponseBody: false, retries: 0, signal: AbortSignal.timeout(90000),
         fetch: async (url, options) => {
           if (url !== apiUrl || options?.method !== 'GET' || options.body != null) throw new Error('Unexpected artifact API request');
@@ -222,14 +227,18 @@ async function downloadExactArchive({ github, repo, destination, fetchImpl = fet
       if (fetched.body) await fetched.body.cancel();
       throw transportError('storage response', transportSummary(fetched));
     }
-    bytes = await readPinnedArchive(fetched, ARTIFACT);
+    bytes = await readPinnedArchive(fetched, artifact);
   } catch {
     if (fetched?.body && !fetched.body.locked) await fetched.body.cancel().catch(() => {});
     throw transportError('storage verification', transportSummary(fetched));
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, bytes, { flag: 'wx', mode: 0o600 });
-  return ARTIFACT;
+  return artifact;
+}
+async function downloadExactArchive(options) {
+  // The old diagnostic route remains pinned to its one reviewed failed proof.
+  return downloadPinnedArchive({ ...options, artifact: ARTIFACT });
 }
 async function retrieveReplayArtifact({ github, context, core, destination, receiptPath, fetchImpl = fetch }) {
   const approved = await prepareReplayRequest({ github, context });
@@ -257,4 +266,4 @@ async function retrieveReplayArtifact({ github, context, core, destination, rece
 }
 module.exports = { REPOSITORY, REPOSITORY_ID, BRANCH, REQUEST_PATH, PURPOSE, PRODUCER, ARTIFACT, ARTIFACT_NAME,
   FILES, MANIFEST, parseRequest, assertReplayTree, prepareReplayRequest, validateProducer, validateArtifact,
-  artifactLocation, readPinnedArchive, transportSummary, downloadExactArchive, retrieveReplayArtifact, hash, equal };
+  artifactLocation, readPinnedArchive, transportSummary, downloadPinnedArchive, downloadExactArchive, retrieveReplayArtifact, hash, equal };

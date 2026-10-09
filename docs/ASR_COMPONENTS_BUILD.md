@@ -234,7 +234,7 @@ proof, including clean process ownership and shutdown, before publication review
 
 `.github/workflows/asr-ct2-cpu.yml` runs cheap source guards on PRs. Native work
 requires an explicit validated request-only push, manual proof or pinned reusable
-publication invocation. A proof request under `.github/requests/ct2-cpu-proof.json`
+metadata-only invocation. A proof request under `.github/requests/ct2-cpu-proof.json`
 must be the only change in a single non-forced feature-branch push, name its sole
 parent and preserve the exact tree elsewhere. The request commit itself is built;
 run, jobs, checkout and report source identities must agree. A cheap PR guard is
@@ -280,9 +280,12 @@ does not excuse a repeat-build mismatch.
 
 Ordinary CPU proofs upload JSON/log/CMake-cache evidence only. Successful proof
 constructs local wheel/source/notices candidates and `publication-proof.json`,
-with `publication_authorized:false`. Only the dedicated validated publisher may
-export those exact four files as a candidate artifact. No private runtime,
-Microsoft DLL, model or download cache is uploaded.
+with `publication_authorized:false`. A separately reviewed direct proof request
+may opt into `success_artifact: "cpu-wheel-source-notices-proof-14-days"` to retain
+exactly those four files after both native jobs and all functional gates pass.
+It is mutually exclusive with failed diagnostic retention; ordinary, manual,
+reusable and PR routes remain metadata-only. No private runtime, Microsoft DLL,
+model or download cache is uploaded.
 
 The dormant `.github/workflows/asr-cpu-wheel-publish.yml` requires separate
 maintainer approval and a request-only commit at `.github/asr-cpu-wheel-request.json`.
@@ -290,8 +293,18 @@ Its sole parent must be the exact tested source. The request binds repository,
 feature branch, source, successful run/attempt, lock identities and expected
 wheel/source/notices/proof sizes and hashes. Historical checks use immutable
 `run.head_sha` and each `job.head_sha`, not a PR's mutable current head.
-A same-source rebuild must match the approved native proof and asset pins.
-Only the validated final publish job receives `contents:write`.
+The request also pins the exact successful CPU job ID and candidate artifact
+ID/name/ZIP size/SHA-256. A read-only `contents:read`/`actions:read` job promotes
+that exact twice-built and tested artifact, without another compilation. It
+validates the immutable run attempt and source, successful job/export steps,
+creation interval, repository identity and expiration; rechecks metadata after
+the restricted authenticated download; and extracts only four bounded regular
+files after archive/member hash verification. Every proof/source/lock/asset gate
+is reapplied before a same-run artifact-ID handoff. Only the separate validated
+final publish job receives `contents:write`. Diagnostic, failed, expired, manual
+or PR artifacts cannot qualify. Exact completed retries remain read-only even
+after temporary artifact expiration; incomplete publication cannot substitute a
+new build for missing reviewed bytes.
 
 The separate tag is `asr-ct2-cpu-4.8.2-1`, a prerelease with explicit
 `make_latest:false`, outside application `v*` releases. Existing tags/assets are

@@ -18,6 +18,7 @@ pub(crate) use setup_process::private_python_launch_path;
 mod wheel_preflight;
 mod store;
 #[cfg(test)] mod tests;
+#[cfg(test)] mod candidate_tests;
 use catalog::Component;
 const POLL: Duration = Duration::from_millis(100);
 static MANAGED_ROOT: OnceLock<PathBuf> = OnceLock::new();
@@ -109,11 +110,13 @@ pub(crate) fn asr_component_catalog() -> Result<catalog::Catalog, String> { cata
 fn root_path(app: &AppHandle, create: bool) -> Result<PathBuf, String> {
     // Only this app-owned sibling is touched. Never use python_path/model_path,
     // the legacy sidecars directory, settings, results, or user model folders.
-    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    #[cfg(windows)] let base = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    #[cfg(not(windows))] let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let name = if cfg!(windows) { "asr" } else { "asr-components" };
     if create { std::fs::create_dir_all(&base).map_err(|e| e.to_string())?; }
-    if !base.exists() { return Ok(base.join("asr-components")); }
+    if !base.exists() { return Ok(base.join(name)); }
     let base = std::fs::canonicalize(base).map_err(|e| e.to_string())?;
-    let root = base.join("asr-components");
+    let root = base.join(name);
     if create { store::prepare_root(&root)?; }
     Ok(root)
 }
@@ -190,7 +193,12 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
     let available = fs2::available_space(&root).map_err(|e| format!("Cannot check free space for private components: {e}"))?;
     if available < needed { return Err(format!("Not enough free disk space for a safe staged install. Need {needed} bytes free; {available} bytes are available. Existing components and models were preserved.")); }
     let staging = store::Staging::create(&root)?;
+    let candidate = if matches!(component, Component::Runtime(_)) { Some(store::VersionCandidate::plan(&root, component, &_lease)?) } else { None };
     let lifetime = setup_process::SetupLifetime::new(&staging, &_lease);
+    let lifetime = if let Some(candidate) = &candidate {
+        setup_process::preflight_runtime_paths(&root, &staging.payload(), candidate.path())?;
+        lifetime.with_candidate(candidate)
+    } else { lifetime };
     let files = match component {
         Component::Runtime(runtime) => {
             if let Some(recipe) = &runtime.recipe {
@@ -227,15 +235,14 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
         }
     };
     archive::cancelled(&cancel)?;
+    if let Some(candidate) = &candidate {
+        setup_process::validate_native_paths(&staging.payload(), &files)?;
+        setup_process::validate_native_paths(candidate.path(), &files)?;
+    }
     // Serialize against optional inference and warm loaded models only now,
     // after network I/O. The worker slot remains locked through activation.
     let runtime = app.state::<crate::asr::AsrRuntime>();
     let _maintenance = runtime.begin_component_maintenance().await?;
-    archive::cancelled(&cancel)?;
-    if let Component::Runtime(runtime) = component {
-        manager.report(app, "testing", component.download_bytes(), "Checking the private engine before activation");
-        self_test(&staging.payload(), runtime, &cancel, &lifetime).await?;
-    }
     archive::cancelled(&cancel)?;
     store::write_receipt(&staging.payload(), component, files)?;
     let payload = staging.payload(); let check_component = component.clone(); let cancellation = cancel.clone();
@@ -244,6 +251,23 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
         let _lifetime = retained;
         store::validate_files(&payload, &check_component, &cancellation)
     }).await.map_err(|e| e.to_string())??;
+    if let (Component::Runtime(runtime), Some(candidate)) = (component, &candidate) {
+        archive::cancelled(&cancel)?;
+        let placing = candidate.clone(); let source = staging.clone(); let retained = lifetime.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _lifetime = retained;
+            let source = source; let placing = placing;
+            placing.place(&source)
+        }).await.map_err(|e| e.to_string())??;
+        manager.report(app, "testing", component.download_bytes(), "Checking the private engine at its final path before activation");
+        self_test(candidate.path(), runtime, &cancel, &lifetime).await?;
+        let final_path = candidate.path().to_path_buf(); let check_component = component.clone();
+        let cancellation = cancel.clone(); let retained = lifetime.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _lifetime = retained;
+            store::validate_files(&final_path, &check_component, &cancellation)
+        }).await.map_err(|e| e.to_string())??;
+    }
     let _store_write = cancellable(manager.store_gate.write(), &cancel).await?;
     manager.commit_boundary()?;
     manager.report(app, "activating", component.download_bytes(), "Activating the verified component; keeping the previous version");
@@ -253,7 +277,7 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
         // Drop this extra staging owner before the retained setup lock, also on
         // unwinding, so last-owner cleanup remains inside the lease lifetime.
         let staging = staging;
-        store::commit(&root, &check_component, &staging)
+        if let Some(candidate) = candidate { candidate.activate() } else { store::commit(&root, &check_component, &staging) }
     }).await.map_err(|e| e.to_string())??;
     if status.state != "installed" { return Err(status.error.unwrap_or_else(|| "Component activation could not be verified.".into())); }
     Ok(status)

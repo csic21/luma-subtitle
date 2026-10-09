@@ -14,7 +14,8 @@ class DiagnosticWorkflowTests(unittest.TestCase):
         line = next(line for line in self.text.splitlines() if 'CPU_DIAGNOSTIC_EXPORT:' in line)
         for gate in ("needs.request.outputs.diagnostic_artifact == 'cpu-wheel-source-notices-1-day'",
                      "github.repository == 'csic21/luma-subtitle'", "github.event_name == 'push'",
-                     "github.ref == 'refs/heads/feat/optional-asr-engines'", '!inputs.source_sha', '!inputs.publication'):
+                     "github.ref == 'refs/heads/feat/optional-asr-engines'", '!inputs.source_sha', "github.workflow == 'CPU-only CTranslate2 proof'",
+                     "github.workflow_ref == 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines'"):
             self.assertIn(gate, line)
         header = self.text.split('permissions:', 1)[0]
         self.assertNotIn('diagnostic_artifact:', header, 'No manual/reusable diagnostic input')

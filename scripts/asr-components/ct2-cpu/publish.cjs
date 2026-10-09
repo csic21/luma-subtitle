@@ -7,9 +7,10 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { Readable } = require('node:stream');
 const { SHA, assertRequestOnlyTree, tagCommit } = require('../../prepare-release.cjs');
-const { publicApi } = require('../../recover-release.cjs');
-const { validateProofCommit, PROOF_JOB } = require('./proof_request.cjs');
+const { validateProofCommit, PROOF_JOB, SUCCESS_ARTIFACT } = require('./proof_request.cjs');
+const { downloadPinnedArchive } = require('./diagnostic_replay.cjs');
 const REPOSITORY = 'csic21/luma-subtitle';
+const REPOSITORY_ID = 1241316830;
 const BRANCH = 'feat/optional-asr-engines';
 const REQUEST_PATH = '.github/asr-cpu-wheel-request.json';
 const TAG = 'asr-ct2-cpu-4.8.2-1';
@@ -72,6 +73,7 @@ const CT2_SOURCE_EXPORT = {
 };
 const MAX_ASSET = 100_000_000;
 const MAX_JSON = 4_000_000;
+const MAX_ARCHIVE = 304_000_000;
 const CHECKS = ['wheel_reproduced', 'whole_runtime_closure', 'native_inference', 'cold_and_warm',
   'isolated', 'private_crt', 'cpu_only', 'compiler_probe'];
 const positive = n => Number.isSafeInteger(n) && n > 0;
@@ -104,13 +106,20 @@ function parseRequest(text, commit) {
       || r.schema_version !== 1 || r.repository !== REPOSITORY || r.branch !== BRANCH
       || r.tag !== TAG || !SHA.test(r.source_sha || '')
       || commit.parents?.length !== 1 || commit.parents[0].sha !== r.source_sha
-      || !keys(r.proof, 'run_id,run_attempt,summary') || !positive(r.proof.run_id) || !positive(r.proof.run_attempt)
+      || !keys(r.proof, 'run_id,run_attempt,job_id,artifact,summary')
+      || !positive(r.proof.run_id) || !positive(r.proof.run_attempt) || !positive(r.proof.job_id)
       || !keys(r.review, 'scope,approved') || r.review.scope !== 'cpu-wheel-source-notices-only'
       || r.review.approved !== true) throw new Error('Invalid narrow publication request or sole tested-source parent');
   assertPin(r.proof.summary, NAMES.proof, MAX_JSON);
   assertAssets(r.assets); assertLockPins(r.locks);
+  const a = r.proof.artifact;
+  if (!keys(a, 'id,name,bytes,sha256') || !positive(a.id) || a.name !== candidateName(r)
+      || !positive(a.bytes) || a.bytes > MAX_ARCHIVE
+      || a.bytes > [...r.assets, r.proof.summary].reduce((n, item) => n + item.bytes, 1_000_000)
+      || !/^[a-f0-9]{64}$/.test(a.sha256 || '')) throw new Error('Invalid exact successful-proof artifact pin');
   return r;
 }
+const candidateName = r => `ct2-cpu-candidate-${r.source_sha}-${r.proof.run_id}-${r.proof.run_attempt}`;
 function assertContext(context) {
   if (`${context.repo.owner}/${context.repo.repo}` !== REPOSITORY || context.eventName !== 'push'
       || context.ref !== `refs/heads/${BRANCH}` || context.payload.deleted
@@ -125,28 +134,74 @@ async function readSource(github, repo, file, ref) {
   if (!positive(bytes.length) || bytes.length >= MAX_JSON) throw new Error('Source file exceeds bounds');
   return bytes;
 }
+// Only immutable-attempt and exact-artifact public metadata are needed here.
+// No token, redirects, arbitrary repository, endpoint or unbounded JSON body.
+async function publicProofMetadata(repo, suffix, fetchImpl = fetch) {
+  if (`${repo.owner}/${repo.repo}` !== REPOSITORY
+      || !/^actions\/(?:runs\/[1-9]\d*\/attempts\/[1-9]\d*(?:\/jobs\?per_page=100)?|artifacts\/[1-9]\d*)$/.test(suffix)) {
+    throw new Error('Invalid exact public proof metadata path');
+  }
+  const url = `https://api.github.com/repos/${REPOSITORY}/${suffix}`;
+  const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(15000),
+    headers: { accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+  if (response.status !== 200 || response.redirected !== false || response.url !== url || !response.body) {
+    if (response.body) await response.body.cancel();
+    throw new Error(`Cannot verify public build provenance: HTTP ${response.status}`);
+  }
+  const chunks = []; let bytes = 0;
+  for await (const chunk of response.body) {
+    bytes += chunk.length;
+    if (bytes >= MAX_JSON) throw new Error('Public proof metadata exceeds bounds');
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
 function validateProvenance(run, jobs, r, proofCommit = null) {
   if (run.id !== r.proof.run_id || run.run_attempt !== r.proof.run_attempt
       || run.repository?.full_name !== REPOSITORY || run.head_repository?.full_name !== REPOSITORY
-      || !['pull_request', 'workflow_dispatch', 'push'].includes(run.event) || run.head_branch !== BRANCH
+      || run.repository.id !== REPOSITORY_ID || run.head_repository.id !== REPOSITORY_ID
+      || run.event !== 'push' || run.head_branch !== BRANCH
       || run.head_sha !== r.source_sha || run.path !== '.github/workflows/asr-ct2-cpu.yml'
       || run.status !== 'completed' || run.conclusion !== 'success') throw new Error('Historical native proof identity/status mismatch');
-  if (run.event === 'push' && (proofCommit?.source_sha !== r.source_sha
-      || proofCommit.base_sha !== proofCommit.request?.source_sha)) throw new Error('Push proof requires independently validated request-only commit');
+  if (proofCommit?.source_sha !== r.source_sha || proofCommit.base_sha !== proofCommit.request?.source_sha
+      || proofCommit.request?.success_artifact !== SUCCESS_ARTIFACT
+      || proofCommit.request?.diagnostic_artifact !== undefined) throw new Error('Push proof requires independently validated success-retention request-only commit');
   // Never use run.pull_requests[].head.sha: GitHub mutates that field on later pushes.
-  if (run.event === 'pull_request' && (!Array.isArray(run.pull_requests) || run.pull_requests.length !== 1
-      || run.pull_requests[0].head?.ref !== BRANCH || run.pull_requests[0].base?.ref !== 'main'
-      || run.pull_requests[0].head?.repo?.url !== `https://api.github.com/repos/${REPOSITORY}`
-      || run.pull_requests[0].base?.repo?.url !== `https://api.github.com/repos/${REPOSITORY}`)) throw new Error('Historical native proof PR repository mismatch');
   if (!Array.isArray(jobs.jobs) || jobs.total_count !== jobs.jobs.length || jobs.total_count > 100
       || jobs.jobs.some(j => j.run_id !== run.id || j.head_sha !== run.head_sha
-        || j.status !== 'completed' || (j.conclusion !== 'success'
-          && !(run.event === 'workflow_dispatch' && j.name === PROOF_JOB && j.conclusion === 'skipped')))) throw new Error('Incomplete or unsuccessful historical native jobs');
-  const required = ['windows-cpu-proof', 'windows-direct-crt-signatures'];
-  if (run.event === 'push') required.push('CPU proof source guards', PROOF_JOB);
+        || j.run_attempt !== r.proof.run_attempt || j.status !== 'completed'
+        || j.conclusion !== 'success')) throw new Error('Incomplete or unsuccessful historical native jobs');
+  const required = ['windows-cpu-proof', 'windows-direct-crt-signatures', 'CPU proof source guards', PROOF_JOB];
   for (const name of required) {
     if (jobs.jobs.filter(j => j.name === name && j.conclusion === 'success').length !== 1) throw new Error(`Missing unique successful native job: ${name}`);
   }
+  const cpu = jobs.jobs.find(j => j.name === 'windows-cpu-proof');
+  if (cpu.id !== r.proof.job_id || !Array.isArray(cpu.steps)) throw new Error('Exact successful CPU job is missing');
+  for (const [name, conclusion] of [
+    ['Test input locks and binary inventory logic', 'success'],
+    ['Inventory official toolchain and build two CPU wheels', 'success'],
+    ['Retain explicit failed-verifier diagnostic (never a release candidate)', 'skipped'],
+    ['Export the three reviewed candidate assets and proof only', 'success'],
+  ]) if (cpu.steps.filter(s => s.name === name && s.status === 'completed' && s.conclusion === conclusion).length !== 1) {
+    throw new Error('Successful native proof/export steps are incomplete');
+  }
+  return cpu;
+}
+function validateArtifact(artifact, cpu, request, now = Date.now()) {
+  const pin = request.proof.artifact, origin = artifact.workflow_run;
+  const created = Date.parse(artifact.created_at), expires = Date.parse(artifact.expires_at);
+  const started = Date.parse(cpu.started_at), completed = Date.parse(cpu.completed_at);
+  if (artifact.id !== pin.id || artifact.name !== pin.name || artifact.name !== candidateName(request)
+      || artifact.expired !== false || artifact.size_in_bytes !== pin.bytes || artifact.digest !== `sha256:${pin.sha256}`
+      || artifact.archive_download_url !== `https://api.github.com/repos/${REPOSITORY}/actions/artifacts/${pin.id}/zip`
+      || origin?.id !== request.proof.run_id || origin.head_sha !== request.source_sha || origin.head_branch !== BRANCH
+      || origin.repository_id !== REPOSITORY_ID || origin.head_repository_id !== REPOSITORY_ID
+      || ![created, expires, started, completed, now].every(Number.isFinite)
+      || started > completed || created < started || created > completed || created > now
+      || expires <= now || expires <= created || expires - created > 14 * 86400000 + 60000) {
+    throw new Error('Successful artifact identity, exact job attempt interval, digest or retention differs');
+  }
+  return artifact;
 }
 function validateLocks(sources, notices) {
   if (sources.schema !== 1 || sources.variant !== VARIANT || sources.wheel_build_tag !== '1lumacpu'
@@ -178,17 +233,45 @@ async function prepareWheel({ github, context, core, fetchImpl = fetch, inspectP
     locks[kind] = JSON.parse(bytes.toString('utf8'));
   }
   validateLocks(locks.sources, locks.notices);
-  const run = await publicApi(repo, `actions/runs/${request.proof.run_id}`, fetchImpl);
-  const jobs = await publicApi(repo, `actions/runs/${request.proof.run_id}/attempts/${request.proof.run_attempt}/jobs?per_page=100`, fetchImpl);
+  const run = await publicProofMetadata(repo, `actions/runs/${request.proof.run_id}/attempts/${request.proof.run_attempt}`, fetchImpl);
+  const jobs = await publicProofMetadata(repo, `actions/runs/${request.proof.run_id}/attempts/${request.proof.run_attempt}/jobs?per_page=100`, fetchImpl);
   const proofCommit = run.event === 'push'
     ? await validateProofCommit({ github, repo, sha: request.source_sha }) : null;
-  validateProvenance(run, jobs, request, proofCommit);
+  const cpu = validateProvenance(run, jobs, request, proofCommit);
   const target = await tagCommit(github, repo, TAG);
   if (target && target !== request.source_sha) throw new Error('Immutable component tag has another source');
   core?.setOutput('source_sha', request.source_sha);
   const alreadyPublished = inspectPublished ? await verifyPublished({ github, context, request, locks }) : false;
   core?.setOutput('already_published', String(alreadyPublished));
-  return { request, locks, alreadyPublished };
+  // A verified completed release remains retryable after temporary CI retention
+  // expires. Every new/incomplete release still requires the original artifact.
+  const artifact = alreadyPublished ? null : validateArtifact(await publicProofMetadata(repo,
+    `actions/artifacts/${request.proof.artifact.id}`, fetchImpl), cpu, request);
+  return { request, locks, alreadyPublished, cpu, artifact };
+}
+async function retrieveWheelArtifact({ github, context, core, destination, receiptPath, fetchImpl = fetch, storageFetch = fetch }) {
+  if (fs.existsSync(destination) || fs.existsSync(receiptPath)) throw new Error('Promotion download and approval must be fresh');
+  const before = await prepareWheel({ github, context, fetchImpl });
+  await downloadPinnedArchive({ github, repo: context.repo, destination,
+    artifact: before.request.proof.artifact, fetchImpl: storageFetch, core });
+  // Re-read every live source/run/job/artifact gate after transport, while never
+  // comparing mutable nested PR head metadata with immutable proof identities.
+  const after = await prepareWheel({ github, context, fetchImpl });
+  if (!equal(before.request, after.request) || !equal(before.locks, after.locks)
+      || !equal(before.cpu, after.cpu) || !equal(before.artifact, after.artifact)) {
+    throw new Error('Successful producer or artifact metadata changed during retrieval');
+  }
+  const pin = after.request.proof.artifact;
+  const approval = { schema: 1, archive: { bytes: pin.bytes, sha256: pin.sha256 },
+    files: [...after.request.assets, after.request.proof.summary] };
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+  fs.writeFileSync(receiptPath, JSON.stringify(approval, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  core?.info('Exact successful two-build/native proof artifact verified; only four hash-pinned files may be extracted.');
+  return approval;
+}
+async function validateRetrievedWheel({ github, context, root, fetchImpl = fetch }) {
+  const { request, locks } = await prepareWheel({ github, context, fetchImpl });
+  return validateArtifacts(root, request, locks);
 }
 async function digestStream(stream, max) {
   const digest = createHash('sha256'); let bytes = 0;
@@ -229,7 +312,7 @@ async function validateArtifacts(root, request, locks) {
     const file = path.join(root, pin.name); const stat = fs.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== pin.bytes) throw new Error('Missing, symlink or changed candidate file');
     const digest = await digestStream(fs.createReadStream(file), pin.bytes);
-    if (digest.bytes !== pin.bytes || digest.sha256 !== pin.sha256) throw new Error('Rebuild differs from reviewed successful-proof bytes');
+    if (digest.bytes !== pin.bytes || digest.sha256 !== pin.sha256) throw new Error('Candidate differs from reviewed successful-proof bytes');
     files.push({ ...pin, file });
   }
   validateProof(JSON.parse(fs.readFileSync(path.join(root, NAMES.proof), 'utf8')), request, locks);
@@ -315,8 +398,9 @@ async function verifyPublished({ github, context, request, locks }) {
 }
 
 async function publishWheel({ github, context, core, root, fetchImpl = fetch }) {
-  // Repeat all live read-only source/proof guards after the long native rebuild.
-  const { request, locks } = await prepareWheel({ github, context, fetchImpl });
+  // Repeat all live read-only source/proof guards after immutable retrieval.
+  const { request, locks, alreadyPublished } = await prepareWheel({ github, context, fetchImpl, inspectPublished: true });
+  if (alreadyPublished) return { tag: TAG, source_sha: request.source_sha, already_published: true };
   const files = await validateArtifacts(root, request, locks);
   const repo = context.repo, body = bodyFor(request), latest = await latestIdentity(github, repo);
   let tagEstablished = false;
@@ -380,7 +464,7 @@ async function publishWheel({ github, context, core, root, fetchImpl = fetch }) 
   core?.info(`Verified immutable ${TAG}; latest app release and latest.json are unchanged.`);
   return { tag: TAG, source_sha: request.source_sha, release_id: releaseId };
 }
-module.exports = { REPOSITORY, BRANCH, REQUEST_PATH, TAG, VARIANT, NAMES, MAX_ASSET, CHECKS, CT2_SOURCE_EXPORT, BUILD_STRATEGY,
-  parseRequest, assertContext, validateProvenance, validateLocks, prepareWheel, digestStream,
+module.exports = { REPOSITORY, REPOSITORY_ID, BRANCH, REQUEST_PATH, TAG, VARIANT, NAMES, MAX_ASSET, MAX_ARCHIVE, CHECKS, CT2_SOURCE_EXPORT, BUILD_STRATEGY,
+  parseRequest, candidateName, assertContext, publicProofMetadata, validateProvenance, validateArtifact, validateLocks, prepareWheel, retrieveWheelArtifact, validateRetrievedWheel, digestStream,
   validateProof, validateArtifacts, bodyFor, validateRelease, validateRemoteAssets, verifyRemoteAsset,
   latestIdentity, verifyPublished, publishWheel, hash, equal };

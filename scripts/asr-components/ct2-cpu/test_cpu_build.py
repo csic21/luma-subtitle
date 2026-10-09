@@ -368,18 +368,18 @@ class SourceTests(unittest.TestCase):
                                      'dist/ct2-cpu-diagnostic/luma-ct2-cpu-4.8.2-1-sources.zip',
                                      'dist/ct2-cpu-diagnostic/luma-ct2-cpu-4.8.2-1-notices.zip',
                                      'dist/ct2-cpu-diagnostic/diagnostic-manifest.json'})
-        self.assertIn("if: success() && env.CPU_CANDIDATE_EXPORT == 'true'", workflow)
-        self.assertIn("github.workflow == 'Publish reviewed CPU wheel'", workflow)
+        self.assertIn("if: success() && !cancelled() && env.CPU_CANDIDATE_EXPORT == 'true'", workflow)
+        self.assertIn("needs.request.outputs.success_artifact == 'cpu-wheel-source-notices-proof-14-days'", workflow)
         self.assertIn("github.event_name == 'push'", workflow)
         self.assertIn("github.ref == 'refs/heads/feat/optional-asr-engines'", workflow)
-        self.assertIn('asr-cpu-wheel-publish.yml@', workflow)
+        self.assertNotIn('publication:', workflow.split('permissions:', 1)[0])
         self.assertIn('name: ct2-cpu-candidate-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow)
-        self.assertIn('value: ${{ jobs.windows-cpu-proof.outputs.candidate_artifact_id }}', workflow)
-        self.assertIn('candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}', workflow)
+        self.assertNotIn('candidate_artifact_id:', workflow.split('permissions:', 1)[0])
         self.assertIn('        id: candidate-upload', workflow)
         for name in ('ct2-cpu-proof', 'direct-crt-proof'):
-            self.assertIn("name: " + name + "-${{ env.SOURCE_SHA }}${{ inputs.publication && format('-{0}-{1}', github.run_id, github.run_attempt) || '' }}", workflow)
-        self.assertIn('        default: false', workflow)
+            self.assertIn("name: " + name + "-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
+        self.assertNotIn('inputs.publication', workflow)
+        self.assertIn('needs: [source-tests, request, windows-direct-crt-signatures]', workflow)
 
 
 if __name__ == '__main__':

@@ -44,6 +44,48 @@ pub(crate) fn private_python_launch_path(path: &Path) -> Result<PathBuf, String>
     }
 }
 
+// Reviewed application envelope, not a promise about every Win32 loader. The
+// failed relocated Nagisa module was only 251 units; DLL probing needs room too.
+#[cfg(any(windows, test))]
+fn native_path_budget(root: &str, files: &[store::FileReceipt]) -> Result<(), String> {
+    let ordinary = ordinary_python_spelling(root)?;
+    let root_units = ordinary.encode_utf16().count();
+    if root_units > 112 { return Err(format!("Managed Windows Python requires staging and final runtime roots of at most 112 UTF-16 units; this root uses {root_units}. Setup cannot use this app-data location. Existing components are unchanged; no files were moved or Windows settings changed.")); }
+    for file in files {
+        if !file.path.rsplit('.').next().is_some_and(|suffix| ["pyd", "dll", "exe"].iter().any(|ext| suffix.eq_ignore_ascii_case(ext))) { continue; }
+        super::archive::relative_path(&file.path)?;
+        let relative = file.path.replace('/', "\\");
+        let relative_units = relative.encode_utf16().count();
+        let full_units = root_units + 1 + relative_units;
+        if relative_units > 127 || full_units > 240 {
+            let member: String = relative.chars().filter(|c| !c.is_control()).take(160).collect();
+            return Err(format!("Verified native member {member} exceeds the supported Windows path budget (relative {relative_units}/127, full {full_units}/240 UTF-16 units). The candidate was not activated."));
+        }
+        ordinary_python_spelling(&format!("{ordinary}\\{relative}"))?;
+    }
+    Ok(())
+}
+/// Check the exact already-planned paths before any large package download.
+/// Only the owned root is resolved; the final leaf must not exist until placed.
+pub(super) fn preflight_runtime_paths(root: &Path, staging: &Path, final_path: &Path) -> Result<(), String> {
+    #[cfg(windows)] {
+        private_python_launch_path(root)?;
+        for path in [staging, final_path] {
+            let relative = path.strip_prefix(root).map_err(|_| "Private runtime path left its owned store")?;
+            if relative.as_os_str().is_empty() || !relative.components().all(|part| matches!(part, std::path::Component::Normal(_))) { return Err("Invalid planned private runtime path.".into()); }
+            store::checked_path(root, &relative.to_string_lossy().replace('\\', "/"))?;
+            native_path_budget(path.to_str().ok_or(PYTHON_PATH_ERROR)?, &[])?;
+        }
+    }
+    #[cfg(not(windows))] let _ = (root, staging, final_path);
+    Ok(())
+}
+pub(super) fn validate_native_paths(root: &Path, files: &[store::FileReceipt]) -> Result<(), String> {
+    #[cfg(windows)] { native_path_budget(root.to_str().ok_or(PYTHON_PATH_ERROR)?, files)?; }
+    #[cfg(not(windows))] let _ = (root, files);
+    Ok(())
+}
+
 pub(super) struct PrivateTemp { path: PathBuf }
 impl PrivateTemp {
     pub(super) fn create(root: &Path) -> Result<Self, String> {
@@ -86,12 +128,16 @@ pub(super) fn configure(command: &mut tokio::process::Command, root: &Path, temp
 /// order is deliberate: cleanup completes before the setup lock is released.
 #[derive(Clone)]
 pub(super) struct SetupLifetime {
+    _candidate: Option<store::VersionCandidate>,
     _staging: store::Staging,
     _lease: store::SetupLease,
 }
 impl SetupLifetime {
     pub(super) fn new(staging: &store::Staging, lease: &store::SetupLease) -> Self {
-        Self { _staging: staging.clone(), _lease: lease.clone() }
+        Self { _candidate: None, _staging: staging.clone(), _lease: lease.clone() }
+    }
+    pub(super) fn with_candidate(&self, candidate: &store::VersionCandidate) -> Self {
+        Self { _candidate: Some(candidate.clone()), _staging: self._staging.clone(), _lease: self._lease.clone() }
     }
 }
 struct ChildResources {
@@ -214,6 +260,21 @@ mod tests {
         assert!(ordinary_python_spelling(&format!("{allowed}a")).unwrap_err().contains("260 UTF-16"));
         assert!(ordinary_python_spelling(&format!("{prefix}{}😀", "a".repeat(count - 2))).is_ok());
         assert!(ordinary_python_spelling(&format!("{prefix}{}😀", "a".repeat(count - 1))).is_err());
+    }
+    #[test]
+    fn native_runtime_budget_counts_root_separator_and_unicode_with_probe_headroom() {
+        let root = format!("C:\\{}", "a".repeat(109));
+        let file = |path: String| store::FileReceipt { path, bytes: 1, sha256: "a".repeat(64) };
+        let allowed = file(format!("{}.pyd", "a".repeat(123)));
+        native_path_budget(&root, &[allowed.clone()]).unwrap(); // 112 + 1 + 127 = 240
+        native_path_budget(&format!(r"\\?\{root}"), &[allowed.clone()]).unwrap();
+        assert!(native_path_budget(&format!("{root}a"), &[]).unwrap_err().contains("112 UTF-16"));
+        assert!(native_path_budget(&root, &[file(format!("{}.pyd", "a".repeat(124)))]).is_err());
+        let unicode = format!("C:\\{}😀", "a".repeat(107));
+        native_path_budget(&unicode, &[allowed]).unwrap();
+        assert!(native_path_budget(&format!("{unicode}测"), &[]).is_err());
+        assert!(native_path_budget(r"\\server\share", &[]).is_err());
+        assert!(native_path_budget(&root, &[file("../escape.dll".into())]).is_err());
     }
     #[cfg(windows)]
     #[test]
@@ -429,15 +490,30 @@ mod tests {
                     "backend":"faster-whisper", "device":"cpu", "license":"Fixture", "license_url":"https://example.com/terms",
                     "installed_bytes":1024, "max_files":10, "entrypoint":"python-fixture"
                 })).unwrap();
+                // The lifecycle fixture executable ignores the assembly inputs,
+                // but they must still satisfy production pre-spawn validation.
+                let script = root.join("unused.py"); fs::write(&script, b"# inert fixture\n").unwrap();
+                let lock = root.join("unused.json"); fs::write(&lock, b"{}").unwrap();
+                let wheelhouse = root.join("unused-wheels"); store::create_private_dir(&wheelhouse).unwrap();
                 drop(lease);
                 let task = tokio::spawn(async move {
                     if assembly {
-                        super::super::assembly::run(&root, &root.join("unused.py"), &root.join("unused.json"), &root.join("unused-wheels"), &runtime, &AtomicBool::new(false), &lifetime).await
+                        super::super::assembly::run(&root, &script, &lock, &wheelhouse, &runtime, &AtomicBool::new(false), &lifetime).await
                     } else {
                         super::super::self_test(&root, &runtime, &AtomicBool::new(false), &lifetime).await
                     }
                 });
-                let process = ready(&fixture).await;
+                let started = Instant::now();
+                let process = loop {
+                    if let Some(pid) = fixture.child_pid() { break Arc::new(ProcessProbe::new(pid)); }
+                    if task.is_finished() {
+                        let result = task.await;
+                        panic!("native setup returned before child-ready marker (assembly={assembly}): {}",
+                            super::super::self_test_error_detail(format!("{result:?}").as_bytes()));
+                    }
+                    assert!(started.elapsed() < Duration::from_secs(10), "native setup child did not start (assembly={assembly})");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                };
                 let cleanup_observed = observe_cleanup(&fixture, &staging, &process); drop(staging);
                 let temps: Vec<_> = fs::read_dir(&staging_path).unwrap().map(|entry| entry.unwrap().path())
                     .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(".setup-temp-")).collect();

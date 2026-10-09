@@ -1,10 +1,14 @@
 import copy
+from contextlib import nullcontext
 import gzip
 import io
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
+import struct
+import subprocess
 import sys
 import tempfile
 import tarfile
@@ -567,6 +571,234 @@ class DiagnosticPackagingTests(unittest.TestCase):
         self.diagnostic_state(); self.wheel.unlink(); self.wheel.symlink_to(self.second)
         with self.assertRaisesRegex(ValueError, 'regular public input'): self.diagnostic()
         self.assertFalse((self.root / 'diagnostic-export').exists())
+
+
+class ApprovedArtifactExtractionTests(unittest.TestCase):
+    def setUp(self):
+        self.root = self.enterContext(temporary_root())
+        self.artifact = self.root / 'downloaded-actions.zip'
+        self.approval = self.root / 'approval.json'
+        self.output = self.root / 'approved-candidate'
+        # These deliberately are not executable/valid wheel or source archives.
+        # Extraction must treat all four approved files as opaque exact bytes.
+        self.payloads = {package.WHEEL: b'opaque wheel bytes', package.SOURCES: b'opaque source bytes',
+                         package.NOTICES: b'opaque notice bytes',
+                         package.PROOF: package.encoded({'note': 'résumé 日本語'})}
+        self.receipt = {'schema': 1, 'files': [package.pin(name, data) for name, data in self.payloads.items()]}
+        self.write_artifact()
+
+    def write_artifact(self, members=None, compression=zipfile.ZIP_STORED):
+        with zipfile.ZipFile(self.artifact, 'w', compression=compression) as archive:
+            for name, data in (self.payloads.items() if members is None else members):
+                archive.writestr(name, data)
+        self.repin_archive()
+
+    def repin_archive(self):
+        raw = self.artifact.read_bytes()
+        self.receipt['archive'] = {'bytes': len(raw), 'sha256': package.sha(raw)}
+        self.write_receipt()
+
+    def write_receipt(self):
+        self.approval.write_text(json.dumps(self.receipt, ensure_ascii=False), encoding='utf-8')
+
+    def extract(self):
+        return package.extract_approved_artifact(self.artifact, self.approval, self.output)
+
+    def assert_rejected(self, error=ValueError):
+        with self.assertRaises(error):
+            self.extract()
+        self.assertFalse(self.output.exists())
+
+    def test_extracts_only_exact_four_files_without_interpreting_payloads(self):
+        with patch.object(package.subprocess, 'run', side_effect=AssertionError('No execution permitted')):
+            self.assertEqual(self.extract(), self.output)
+        self.assertEqual({item.name: item.read_bytes() for item in self.output.iterdir()}, self.payloads)
+        self.assertEqual(json.loads((self.output / package.PROOF).read_text(encoding='utf-8')),
+                         {'note': 'résumé 日本語'})
+
+    def test_accepts_standard_actions_deflated_zip(self):
+        self.write_artifact(compression=zipfile.ZIP_DEFLATED)
+        self.extract()
+        self.assertEqual((self.output / package.WHEEL).read_bytes(), self.payloads[package.WHEEL])
+
+    def test_cli_extracts_only_and_fails_closed_on_bad_approval(self):
+        command = [sys.executable, '-B', str(REAL_HERE / 'package_publication.py'),
+                   '--extract-approved-artifact', str(self.artifact), '--approval', str(self.approval),
+                   '--output', str(self.output)]
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({item.name for item in self.output.iterdir()}, set(self.payloads))
+        shutil.rmtree(self.output)
+        self.receipt['schema'] = 2; self.write_receipt()
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Approved artifact extraction failed:', result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_rejects_malformed_or_oversized_receipts(self):
+        for raw in (b'not JSON', b'\xff', b'null', b'[]',
+                    b'{"schema":1,"schema":1,"archive":{},"files":[]}',
+                    b' ' * (package.MAX_APPROVAL_BYTES + 1)):
+            with self.subTest(raw=raw[:100]):
+                self.approval.write_bytes(raw)
+                self.assert_rejected()
+
+    def test_rejects_invalid_receipt_schema_and_file_pins(self):
+        original = copy.deepcopy(self.receipt)
+        mutations = [lambda x: x.update(schema=True), lambda x: x.update(extra=True),
+                     lambda x: x.update(files=x['files'][:3]), lambda x: x.update(files={}),
+                     lambda x: x['files'].__setitem__(0, None),
+                     lambda x: x['files'].__setitem__(0, x['files'][1]),
+                     lambda x: x['files'][0].update(name=package.WHEEL.upper()),
+                     lambda x: x['files'][0].update(name='../' + package.WHEEL),
+                     lambda x: x['files'][0].update(name=[]),
+                     lambda x: x['files'][0].update(bytes=True),
+                     lambda x: x['files'][0].update(bytes=0),
+                     lambda x: x['files'][0].update(bytes=package.MAX_BYTES),
+                     lambda x: x['files'][3].update(bytes=package.MAX_PROOF_BYTES + 1),
+                     lambda x: x['files'][0].update(sha256='A' * 64),
+                     lambda x: x['files'][0].update(sha256=None),
+                     lambda x: x['files'][0].update(extra=True),
+                     lambda x: x.update(archive=None),
+                     lambda x: x['archive'].update(bytes=True),
+                     lambda x: x['archive'].update(bytes=0),
+                     lambda x: x['archive'].update(bytes=package.MAX_ARTIFACT_BYTES + 1),
+                     lambda x: x['archive'].update(bytes=sum(p['bytes'] for p in x['files']) + package.MAX_ARTIFACT_OVERHEAD + 1),
+                     lambda x: x['archive'].update(sha256=None),
+                     lambda x: x['archive'].update(extra=True)]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.receipt = copy.deepcopy(original); mutation(self.receipt); self.write_receipt()
+                self.assert_rejected()
+
+    def test_rehashes_exact_archive_size_and_hash(self):
+        original = self.artifact.read_bytes()
+        for raw in (original + b'extra', original[:-1], b'X' + original[1:]):
+            with self.subTest(size=len(raw)):
+                self.artifact.write_bytes(raw)
+                self.assert_rejected()
+
+    def test_rejects_missing_duplicate_extra_case_and_path_members(self):
+        members = list(self.payloads.items())
+        alternatives = [members[:3], members + [('unexpected.dll', b'forbidden')],
+                        members + [members[0]], members[1:] + [members[1]]]
+        for name in (package.WHEEL.upper(), '../' + package.WHEEL, '/' + package.WHEEL,
+                     'nested/' + package.WHEEL, 'nested\\' + package.WHEEL, package.WHEEL + '/',
+                     'C:' + package.WHEEL):
+            alternatives.append([(name, members[0][1])] + members[1:])
+        for alternative in alternatives:
+            with self.subTest(names=[name for name, _ in alternative]):
+                with self.assertWarns(UserWarning) if len({n for n, _ in alternative}) != len(alternative) else nullcontext():
+                    self.write_artifact(alternative)
+                self.assert_rejected()
+
+    def test_rejects_nonregular_modes_and_dos_directory_attributes(self):
+        for mode, attributes in ((stat.S_IFLNK | 0o777, 0), (stat.S_IFDIR | 0o755, 0),
+                                 (stat.S_IFIFO | 0o644, 0), (stat.S_IFREG | 0o644, 0x10)):
+            info = zipfile.ZipInfo(package.WHEEL)
+            info.create_system = 3; info.external_attr = (mode << 16) | attributes
+            with self.subTest(mode=mode, attributes=attributes):
+                self.write_artifact([(info, self.payloads[package.WHEEL]), *list(self.payloads.items())[1:]])
+                self.assert_rejected()
+
+    def test_rejects_encryption_and_unsupported_compression(self):
+        for flag in (1, 0x40):
+            self.write_artifact(); raw = bytearray(self.artifact.read_bytes())
+            for signature, offset in ((b'PK\x03\x04', 6), (b'PK\x01\x02', 8)):
+                struct.pack_into('<H', raw, raw.index(signature) + offset, flag)
+            self.artifact.write_bytes(raw); self.repin_archive()
+            with self.subTest(flag=flag): self.assert_rejected()
+        self.write_artifact(compression=zipfile.ZIP_BZIP2)
+        self.assert_rejected()
+
+    def test_rejects_nul_truncated_member_names(self):
+        self.write_artifact([(package.WHEEL + 'xhidden', self.payloads[package.WHEEL]),
+                             *list(self.payloads.items())[1:]])
+        self.artifact.write_bytes(self.artifact.read_bytes().replace(
+            (package.WHEEL + 'xhidden').encode(), (package.WHEEL + '\x00hidden').encode()))
+        self.repin_archive(); self.assert_rejected()
+
+    def test_verifies_declared_member_sizes_and_actual_member_hashes_before_output(self):
+        self.receipt['files'][0]['bytes'] += 1; self.write_receipt()
+        self.assert_rejected()
+        self.receipt['files'][0]['bytes'] -= 1
+        changed = dict(self.payloads)
+        changed[package.PROOF] = b'x' * len(changed[package.PROOF])
+        self.write_artifact(changed.items())
+        self.assert_rejected()
+
+    def test_rejects_corrupt_and_truncated_zips_before_output(self):
+        original = self.artifact.read_bytes()
+        for raw in (original[:-22], original.replace(b'opaque wheel bytes', b'changed wheel data')):
+            self.artifact.write_bytes(raw); self.repin_archive()
+            with self.subTest(size=len(raw)):
+                self.assert_rejected(zipfile.BadZipFile)
+
+    def test_never_overwrites_existing_output_or_accepts_noncanonical_output(self):
+        self.output.mkdir(); marker = self.output / 'keep'; marker.write_bytes(b'keep')
+        with self.assertRaisesRegex(ValueError, 'fresh'): self.extract()
+        self.assertEqual(marker.read_bytes(), b'keep')
+        shutil.rmtree(self.output)
+        self.output.write_bytes(b'keep existing file')
+        with self.assertRaisesRegex(ValueError, 'fresh'): self.extract()
+        self.assertEqual(self.output.read_bytes(), b'keep existing file')
+        self.output.unlink()
+        for output in (Path('relative-output'), self.root / 'missing' / '..' / 'candidate'):
+            with self.subTest(output=output), self.assertRaisesRegex(ValueError, 'canonical'):
+                package.extract_approved_artifact(self.artifact, self.approval, output)
+
+    def test_rejects_nonfile_inputs(self):
+        for target in (self.artifact, self.approval):
+            original = target.read_bytes(); target.unlink(); target.mkdir()
+            with self.subTest(target=target): self.assert_rejected()
+            target.rmdir(); target.write_bytes(original)
+
+    def test_rejects_input_and_output_symlinks(self):
+        for original in (self.artifact, self.approval, self.output):
+            alias = self.root / ('alias-' + original.name)
+            try:
+                alias.symlink_to(original, target_is_directory=original == self.output)
+            except OSError as error:
+                self.skipTest('Symlinks unavailable on this test host: ' + str(error))
+            with self.subTest(original=original), self.assertRaises(ValueError):
+                package.extract_approved_artifact(alias if original == self.artifact else self.artifact,
+                    alias if original == self.approval else self.approval,
+                    alias if original == self.output else self.output)
+            self.assertFalse(self.output.exists())
+
+    def test_rejects_symlinked_input_parent(self):
+        alias = self.root / 'input-alias'
+        try:
+            alias.symlink_to(self.root, target_is_directory=True)
+        except OSError as error:
+            self.skipTest('Symlinks unavailable on this test host: ' + str(error))
+        with self.assertRaises(ValueError):
+            package.extract_approved_artifact(alias / self.artifact.name, self.approval, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_removes_partial_output_when_a_file_write_fails(self):
+        real_open = Path.open
+        def failing_open(path, *args, **kwargs):
+            if path == self.output / package.SOURCES:
+                self.assertTrue((self.output / package.WHEEL).exists())
+                raise OSError('simulated write failure')
+            return real_open(path, *args, **kwargs)
+        with patch.object(Path, 'open', failing_open):
+            with self.assertRaisesRegex(OSError, 'simulated write failure'): self.extract()
+        self.assertFalse(self.output.exists())
+        self.extract()
+        self.assertEqual(len(list(self.output.iterdir())), 4)
+
+    def test_failed_output_creation_does_not_remove_another_directory(self):
+        real_mkdir = Path.mkdir
+        def raced_mkdir(path, *args, **kwargs):
+            real_mkdir(path, *args, **kwargs)
+            if path == self.output:
+                (path / 'keep').write_bytes(b'owned by another process')
+                raise FileExistsError('simulated creation race')
+        with patch.object(Path, 'mkdir', raced_mkdir):
+            with self.assertRaises(FileExistsError): self.extract()
+        self.assertEqual((self.output / 'keep').read_bytes(), b'owned by another process')
 
 
 class TemporaryRootAliasTests(unittest.TestCase):

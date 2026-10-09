@@ -279,7 +279,7 @@ test('replay retrieval metadata remains ineligible for the unchanged publisher',
 
 test('CPU proof and publisher github-script pins use the independently verified official v7.0.1 commit', () => {
   const official = 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea';
-  for (const [name, count] of [['asr-ct2-cpu.yml', 1], ['asr-cpu-wheel-publish.yml', 2], ['asr-ct2-cpu-replay.yml', 2]]) {
+  for (const [name, count] of [['asr-ct2-cpu.yml', 1], ['asr-cpu-wheel-publish.yml', 4], ['asr-ct2-cpu-replay.yml', 2]]) {
     const text = readWorkflow(name);
     const pins = [...text.matchAll(/uses: (actions\/github-script@\S+)/g)].map(match => match[1]);
     assert.deepEqual(pins, Array(count).fill(official));

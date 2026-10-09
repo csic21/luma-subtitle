@@ -1,7 +1,7 @@
 use super::{archive::relative_path, catalog::Component, ComponentStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs::{self, OpenOptions}, io::{Read, Write}, path::{Path, PathBuf}, sync::{atomic::AtomicBool, Arc}};
+use std::{fs::{self, OpenOptions}, io::{Read, Write}, path::{Path, PathBuf}, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 use uuid::Uuid;
 
 const OWNER: &str = "luma-subtitle-managed-asr-v1\n";
@@ -134,10 +134,43 @@ pub(super) fn snapshot_lease(root: &Path) -> Result<Option<fs::File>, String> {
     fs2::FileExt::try_lock_shared(&file).map_err(|_| "Another app instance is removing managed components. Wait for it to finish, then refresh.")?;
     Ok(Some(file))
 }
+// Explicit aliases live in a namespace that catalog IDs cannot occupy. Logical
+// identity always comes from the full catalog-bound receipt, never this alias.
+fn compact_runtime(component: &Component) -> Option<&'static str> {
+    if !cfg!(windows) { return None; }
+    match component {
+        Component::Runtime(runtime) if runtime.platform == "windows-x64" => match runtime.id.as_str() {
+            "qwen3-asr-cpu-windows-x64" => Some("qw"),
+            "faster-whisper-cpu-windows-x64" => Some("fw"),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+fn component_directory(root: &Path, component: &Component) -> PathBuf {
+    match compact_runtime(component) { Some(key) => root.join(".r").join(key), None => root.join(component.id()) }
+}
+fn verify_component_directory(root: &Path, component: &Component) -> Result<(), String> {
+    verify_owned(root)?;
+    if compact_runtime(component).is_some() { verify_owned(&root.join(".r"))?; }
+    verify_owned(&component_directory(root, component))
+}
+fn versions_name(component: &Component) -> &'static str { if compact_runtime(component).is_some() { "v" } else { "versions" } }
+fn version_name(component: &Component) -> String {
+    let uuid = Uuid::new_v4();
+    if compact_runtime(component).is_some() { uuid.simple().to_string() } else { format!("{}--{uuid}", component.version()) }
+}
+fn recognized_version(component: &Component, name: &str, current: bool) -> bool {
+    if compact_runtime(component).is_some() {
+        return name.len() == 32 && name.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) && Uuid::parse_str(name).is_ok();
+    }
+    name.rsplit_once("--").is_some_and(|(version, uuid)| (!current || version == component.version()) && Uuid::parse_str(uuid).is_ok())
+}
 pub(super) fn prepare_component(root: &Path, component: &Component) -> Result<PathBuf, String> {
     verify_owned(root)?;
-    let directory = root.join(component.id()); owned_dir(&directory)?;
-    create_private_dir(&directory.join("versions"))?;
+    if compact_runtime(component).is_some() { owned_dir(&root.join(".r"))?; }
+    let directory = component_directory(root, component); owned_dir(&directory)?;
+    create_private_dir(&directory.join(versions_name(component)))?;
     create_private_dir(&directory.join("activations"))?;
     Ok(directory)
 }
@@ -151,8 +184,9 @@ struct StagingCleanup {
 impl Staging {
     pub(super) fn create(root: &Path) -> Result<Self, String> {
         verify_owned(root)?;
-        let staging = root.join(".staging"); owned_dir(&staging)?;
-        let directory = staging.join(Uuid::new_v4().to_string()); owned_dir(&directory)?;
+        let staging = root.join(if cfg!(windows) { ".s" } else { ".staging" }); owned_dir(&staging)?;
+        let uuid = Uuid::new_v4();
+        let directory = staging.join(if cfg!(windows) { uuid.simple().to_string() } else { uuid.to_string() }); owned_dir(&directory)?;
         create_private_dir(&directory.join("payload"))?;
         Ok(Self { _cleanup: Arc::new(StagingCleanup {
             directory: directory.clone(),
@@ -173,13 +207,18 @@ impl Drop for StagingCleanup {
     }
 }
 pub(super) fn recover_staging(root: &Path) -> Result<(), String> {
-    let staging = root.join(".staging");
-    if !staging.exists() { return Ok(()); }
-    verify_owned(root)?; verify_owned(&staging)?;
-    for entry in fs::read_dir(staging).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if Uuid::parse_str(&entry.file_name().to_string_lossy()).is_ok() && verify_owned(&entry.path()).is_ok() {
-            fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
+    verify_owned(root)?;
+    // Only this selected, owned store is inspected. Never search older app-data
+    // locations or infer that an unactivated version is safe crash garbage.
+    for name in [".s", ".staging"] {
+        let staging = root.join(name);
+        if !staging.exists() { continue; }
+        verify_owned(&staging)?;
+        for entry in fs::read_dir(staging).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            if Uuid::parse_str(&entry.file_name().to_string_lossy()).is_ok() && verify_owned(&entry.path()).is_ok() {
+                fs::remove_dir_all(entry.path()).map_err(|e| e.to_string())?;
+            }
         }
     }
     Ok(())
@@ -210,7 +249,7 @@ fn activate(component_dir: &Path, component: &Component, directory: Option<Strin
     let previous = files.last().and_then(|p| p.file_name()).and_then(|p| p.to_str()).and_then(|s| s[..20].parse::<u64>().ok()).unwrap_or(0);
     let sequence = previous.checked_add(1).ok_or("Component activation sequence overflow")?;
     let receipt_sha256 = match &directory {
-        Some(name) => Some(hash_file(&component_dir.join("versions").join(name).join(".luma-receipt.json"))?),
+        Some(name) => Some(hash_file(&component_dir.join(versions_name(component)).join(name).join(".luma-receipt.json"))?),
         None => None,
     };
     let activation = Activation { schema: 1, id: component.id().into(), directory, receipt_sha256 };
@@ -223,19 +262,113 @@ fn activate(component_dir: &Path, component: &Component, directory: Option<Strin
     Ok(())
 }
 fn sync_dir(path: &Path) { #[cfg(unix)] { if let Ok(file) = fs::File::open(path) { let _ = file.sync_all(); } } let _ = path; }
+/// A planned final runtime location is owned before blocking placement starts.
+/// Every final-path child retains this guard through SetupLifetime. Cleanup runs
+/// before its own lease field drops, even if an abandoned blocking result is
+/// dropped after the waiter's original lifetime has gone away.
+#[derive(Clone)]
+pub(super) struct VersionCandidate { inner: Arc<CandidateCleanup> }
+struct CandidateCleanup {
+    root: PathBuf, directory: PathBuf, path: PathBuf, name: String, component: Component,
+    placed: AtomicBool, activated: AtomicBool,
+    #[cfg(test)] before_cleanup: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    _staging: std::sync::Mutex<Option<Staging>>,
+    _lease: SetupLease,
+}
+impl VersionCandidate {
+    pub(super) fn plan(root: &Path, component: &Component, lease: &SetupLease) -> Result<Self, String> {
+        if !matches!(component, Component::Runtime(_)) { return Err("Only a private runtime needs final-path testing.".into()); }
+        let directory = prepare_component(root, component)?;
+        let name = version_name(component); let path = directory.join(versions_name(component)).join(&name);
+        match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            _ => return Err("The new private runtime candidate path is already occupied or inaccessible.".into()),
+        }
+        Ok(Self { inner: Arc::new(CandidateCleanup {
+            root: root.to_path_buf(), directory, path, name, component: component.clone(),
+            placed: AtomicBool::new(false), activated: AtomicBool::new(false),
+            #[cfg(test)] before_cleanup: std::sync::Mutex::new(None),
+            _staging: std::sync::Mutex::new(None),
+            _lease: lease.clone(),
+        }) })
+    }
+    pub(super) fn path(&self) -> &Path { &self.inner.path }
+    pub(super) fn place(&self, staging: &Staging) -> Result<(), String> {
+        let inner = &self.inner;
+        if inner.placed.load(Ordering::SeqCst) { return Err("Private runtime candidate was already placed.".into()); }
+        verify_component_directory(&inner.root, &inner.component)?;
+        ensure_directory(inner.path.parent().ok_or("Missing runtime version parent")?)?;
+        let staging_parent = staging.directory.parent().ok_or("Missing private staging parent")?;
+        if staging_parent.parent() != Some(inner.root.as_path()) || !matches!(staging_parent.file_name().and_then(|name| name.to_str()), Some(".s" | ".staging")) {
+            return Err("Private runtime placement requires staging from the same owned store.".into());
+        }
+        verify_owned(staging_parent)?; verify_owned(&staging.directory)?;
+        read_receipt(&staging.payload(), &inner.component)?;
+        match fs::symlink_metadata(&inner.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            _ => return Err("The planned private runtime candidate is no longer empty.".into()),
+        }
+        *inner._staging.lock().map_err(|_| "Private runtime staging ownership was poisoned")? = Some(staging.clone());
+        fs::rename(staging.payload(), &inner.path).map_err(|e| e.to_string())?;
+        inner.placed.store(true, Ordering::SeqCst);
+        sync_dir(inner.path.parent().expect("checked runtime parent"));
+        Ok(())
+    }
+    /// Called only after final-path self-test, file validation and the cancel
+    /// boundary. Journal publication and retained ownership are synchronous.
+    pub(super) fn activate(&self) -> Result<ComponentStatus, String> {
+        let inner = &self.inner;
+        if !inner.placed.load(Ordering::SeqCst) || inner.activated.load(Ordering::SeqCst) { return Err("Private runtime candidate is not ready for activation.".into()); }
+        verify_component_directory(&inner.root, &inner.component)?;
+        ensure_directory(inner.path.parent().ok_or("Missing runtime version parent")?)?;
+        ensure_directory(&inner.path)?;
+        let receipt = read_receipt(&inner.path, &inner.component)?;
+        let cached_bytes = cache_bytes(&inner.root, inner.component.id())?;
+        let total = receipt.files.iter().try_fold(0u64, |total, file| total.checked_add(file.bytes).ok_or("Runtime receipt size overflow"))?;
+        let Component::Runtime(runtime) = &inner.component else { return Err("Invalid runtime candidate identity.".into()); };
+        let status = ComponentStatus {
+            id: runtime.id.clone(), kind: inner.component.kind().into(), state: "installed".into(), version: Some(runtime.version.clone()),
+            python_path: Some(inner.path.join(&runtime.entrypoint).to_string_lossy().into_owned()),
+            path: Some(inner.path.to_string_lossy().into_owned()), installed_bytes: total, cached_bytes, error: None,
+        };
+        activate(&inner.directory, &inner.component, Some(inner.name.clone()))?;
+        inner.activated.store(true, Ordering::SeqCst);
+        Ok(status)
+    }
+    #[cfg(test)]
+    pub(super) fn observe_cleanup(&self, observer: impl FnOnce() + Send + 'static) {
+        *self.inner.before_cleanup.lock().unwrap() = Some(Box::new(observer));
+    }
+}
+impl Drop for CandidateCleanup {
+    fn drop(&mut self) {
+        if !self.placed.load(Ordering::SeqCst) || self.activated.load(Ordering::SeqCst) { return; }
+        #[cfg(test)]
+        if let Some(observer) = self.before_cleanup.get_mut().unwrap().take() { observer(); }
+        // Fail closed if anything has lost its exact owned identity. A crash or
+        // uncertain orphan is preserved; recovery never sweeps runtime versions.
+        if verify_component_directory(&self.root, &self.component).is_ok()
+            && self.path.parent().is_some_and(|parent| ensure_directory(parent).is_ok())
+            && ensure_directory(&self.path).is_ok() && read_receipt(&self.path, &self.component).is_ok() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
 /// The caller must finish validate_files and its self-test before crossing the
 /// cancellation boundary. This final, short commit does not rehash large files.
 pub(super) fn commit(root: &Path, component: &Component, staging: &Staging) -> Result<ComponentStatus, String> {
+    #[cfg(not(test))]
+    if matches!(component, Component::Runtime(_)) { return Err("Private runtimes require final-path testing before activation.".into()); }
     let receipt = read_receipt(&staging.payload(), component)?;
     let total: u64 = receipt.files.iter().map(|f| f.bytes).sum();
     let cached_bytes = cache_bytes(root, component.id())?;
     let component_dir = prepare_component(root, component)?;
-    let name = format!("{}--{}", component.version(), Uuid::new_v4());
-    let destination = component_dir.join("versions").join(&name);
+    let name = version_name(component);
+    let destination = component_dir.join(versions_name(component)).join(&name);
     // This rename and the receipt activation happen on the same filesystem.
     // Until the journal record commits, the previous activation remains active.
     fs::rename(staging.payload(), &destination).map_err(|e| e.to_string())?;
-    sync_dir(&component_dir.join("versions"));
+    sync_dir(&component_dir.join(versions_name(component)));
     activate(&component_dir, component, Some(name))?;
     Ok(ComponentStatus {
         id: component.id().into(), kind: component.kind().into(), state: "installed".into(), version: Some(component.version().into()),
@@ -245,8 +378,9 @@ pub(super) fn commit(root: &Path, component: &Component, staging: &Staging) -> R
 }
 fn current(root: &Path, component: &Component) -> Result<Option<PathBuf>, String> {
     verify_owned(root)?;
-    let directory = root.join(component.id());
+    let directory = component_directory(root, component);
     if !directory.exists() { return Ok(None); }
+    if compact_runtime(component).is_some() { verify_owned(&root.join(".r"))?; }
     verify_owned(&directory)?;
     let files = activation_files(&directory)?;
     let Some(last) = files.last() else { return Ok(None); };
@@ -255,12 +389,12 @@ fn current(root: &Path, component: &Component) -> Result<Option<PathBuf>, String
     let activation: Activation = serde_json::from_slice(&bytes).map_err(|_| "Damaged component activation receipt")?;
     if activation.schema != 1 || activation.id != component.id() { return Err("Component activation identity mismatch.".into()); }
     let Some(name) = activation.directory else { return Ok(None); };
-    let Some((version, uuid)) = name.rsplit_once("--") else { return Err("Invalid component activation directory.".into()); };
-    if version != component.version() || Uuid::parse_str(uuid).is_err() || relative_path(&name)?.components().count() != 1 { return Err("The installed component version differs from this app's verified catalog. Repair it to install the matching version.".into()); }
-    let versions = directory.join("versions"); ensure_directory(&versions)?;
+    if !recognized_version(component, &name, true) || relative_path(&name)?.components().count() != 1 { return Err("The installed component version differs from this app's verified catalog. Repair it to install the matching version.".into()); }
+    let versions = directory.join(versions_name(component)); ensure_directory(&versions)?;
     let path = versions.join(name); ensure_directory(&path)?;
     let receipt = path.join(".luma-receipt.json");
     if regular_file(&receipt)?.len() > 32 * 1024 * 1024 || activation.receipt_sha256.as_deref() != Some(hash_file(&receipt)?.as_str()) { return Err("Component file receipt has changed since activation. Use Repair.".into()); }
+    read_receipt(&path, component)?;
     Ok(Some(path))
 }
 /// The caller holds the managed use lease. Match an active runtime receipt and
@@ -349,18 +483,19 @@ pub(super) fn status_with_cancel(root: &Path, component: &Component, cancel: &At
 }
 pub(super) fn remove(root: &Path, component: &Component) -> Result<(), String> {
     verify_owned(root)?;
-    let directory = root.join(component.id());
+    let directory = component_directory(root, component);
     if !directory.exists() { return remove_component_cache(root, component.id()); }
+    if compact_runtime(component).is_some() { verify_owned(&root.join(".r"))?; }
     verify_owned(&directory)?;
     // An atomic tombstone prevents old receipts becoming active after removal,
     // even if the process exits during deletion. No external model paths enter here.
     activate(&directory, component, None)?;
-    let versions = directory.join("versions"); ensure_directory(&versions)?;
+    let versions = directory.join(versions_name(component)); ensure_directory(&versions)?;
     for entry in fs::read_dir(&versions).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some((_, uuid)) = name.rsplit_once("--") {
-            if Uuid::parse_str(uuid).is_ok() && ensure_directory(&entry.path()).is_ok() {
+        if recognized_version(component, &name, false) && relative_path(&name)?.components().count() == 1 {
+            if ensure_directory(&entry.path()).is_ok() {
                 // Receipt verifies ownership even for retained previous versions.
                 let receipt_path = entry.path().join(".luma-receipt.json");
                 if regular_file(&receipt_path).is_ok_and(|meta| meta.len() <= 32 * 1024 * 1024) {

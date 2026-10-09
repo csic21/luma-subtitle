@@ -5,9 +5,12 @@
 const { SHA } = require('../../prepare-release.cjs');
 const REPOSITORY = 'csic21/luma-subtitle';
 const BRANCH = 'feat/optional-asr-engines';
+const WORKFLOW_NAME = 'CPU-only CTranslate2 proof';
+const WORKFLOW_REF = `${REPOSITORY}/.github/workflows/asr-ct2-cpu.yml@refs/heads/${BRANCH}`;
 const REQUEST_PATH = '.github/requests/ct2-cpu-proof.json';
 const PURPOSE = 'native-cpu-wheel-proof';
 const DIAGNOSTIC_ARTIFACT = 'cpu-wheel-source-notices-1-day';
+const SUCCESS_ARTIFACT = 'cpu-wheel-source-notices-proof-14-days';
 const PROOF_JOB = 'Validate request-only CPU proof';
 const MAX_REQUEST = 4096;
 const keys = (o, expected) => o && typeof o === 'object' && !Array.isArray(o)
@@ -21,7 +24,9 @@ function parseProofRequest(text, commit) {
   const plain = keys(request, 'schema_version,source_sha,purpose');
   const diagnostic = keys(request, 'schema_version,source_sha,purpose,diagnostic_artifact')
     && request.diagnostic_artifact === DIAGNOSTIC_ARTIFACT;
-  if ((!plain && !diagnostic) || request.schema_version !== 1
+  const success = keys(request, 'schema_version,source_sha,purpose,success_artifact')
+    && request.success_artifact === SUCCESS_ARTIFACT;
+  if ((!plain && !diagnostic && !success) || request.schema_version !== 1
       || request.purpose !== PURPOSE || !SHA.test(request.source_sha || '')
       || commit.parents?.length !== 1 || commit.parents[0].sha !== request.source_sha) {
     throw new Error('CPU proof request must pin its exact sole parent and native-proof purpose');
@@ -76,10 +81,11 @@ async function validateProofCommit({ github, repo, sha }) {
   if (data.sha !== blobSha) throw new Error('CPU proof content does not match its exact Git blob');
   return { source_sha: sha, base_sha: request.source_sha, request };
 }
-async function prepareCpuProof({ github, context, core }) {
+async function prepareCpuProof({ github, context, core, workflowRef = process.env.GITHUB_WORKFLOW_REF }) {
   assertRepository(context.repo);
   if (context.eventName !== 'push' || context.ref !== `refs/heads/${BRANCH}` || context.payload.deleted
-      || context.payload.repository?.full_name !== REPOSITORY || !SHA.test(context.sha || '')) {
+      || context.payload.repository?.full_name !== REPOSITORY || !SHA.test(context.sha || '')
+      || context.workflow !== WORKFLOW_NAME || workflowRef !== WORKFLOW_REF) {
     throw new Error('Native proof requires a request-only push on the intended feature branch');
   }
   const validated = await validateProofCommit({ github, repo: context.repo, sha: context.sha });
@@ -90,7 +96,8 @@ async function prepareCpuProof({ github, context, core }) {
   core?.setOutput('source_sha', validated.source_sha);
   core?.setOutput('base_sha', validated.base_sha);
   core?.setOutput('diagnostic_artifact', validated.request.diagnostic_artifact || '');
+  core?.setOutput('success_artifact', validated.request.success_artifact || '');
   return validated;
 }
-module.exports = { REPOSITORY, BRANCH, REQUEST_PATH, PURPOSE, DIAGNOSTIC_ARTIFACT, PROOF_JOB, parseProofRequest,
+module.exports = { REPOSITORY, BRANCH, WORKFLOW_NAME, WORKFLOW_REF, REQUEST_PATH, PURPOSE, DIAGNOSTIC_ARTIFACT, SUCCESS_ARTIFACT, PROOF_JOB, parseProofRequest,
   assertProofRequestOnlyTree, validateProofCommit, prepareCpuProof };

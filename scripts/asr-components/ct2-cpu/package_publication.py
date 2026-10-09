@@ -4,6 +4,7 @@ Never publishes, uploads, downloads, assembles a runtime or authorizes release.
 Only a separate reviewed request can authorize the exact resulting public bytes.
 """
 from __future__ import annotations
+import argparse
 import gzip
 import hashlib
 import io
@@ -25,6 +26,10 @@ PROOF = 'publication-proof.json'
 DIAGNOSTIC = 'diagnostic-manifest.json'
 DIAGNOSTIC_SCOPE = 'cpu-wheel-source-notices-1-day'
 MAX_BYTES = 100_000_000
+MAX_PROOF_BYTES = 4_000_000
+MAX_APPROVAL_BYTES = 16_384
+MAX_ARTIFACT_BYTES = 304_000_000
+MAX_ARTIFACT_OVERHEAD = 1_000_000
 CT2_ROOT = 'CTranslate2-d44d2d069eb88c7b7804da864c10c201501cb4a9'
 MODEL_PREFIX = CT2_ROOT + '/tests/data/models/'
 # These five unused upstream test payloads are the entire omission permission.
@@ -119,6 +124,101 @@ def load(path):
 
 def pin(name, data):
     return {'name': name, 'bytes': len(data), 'sha256': sha(data)}
+
+
+def approved_input(path, maximum, expected_bytes=None):
+    """Read a bounded regular local input, never following a path symlink."""
+    path = Path(path)
+    if (any(parent.is_symlink() for parent in (path, *path.parents))
+            or not path.is_file() or not stat.S_ISREG(path.stat().st_mode)
+            or not 0 < path.stat().st_size <= maximum
+            or (expected_bytes is not None and path.stat().st_size != expected_bytes)):
+        raise ValueError('Expected a bounded regular approved input')
+    with path.open('rb') as source:
+        data = source.read((expected_bytes if expected_bytes is not None else maximum) + 1)
+    if not 0 < len(data) <= maximum or (expected_bytes is not None and len(data) != expected_bytes):
+        raise ValueError('Approved input size changed')
+    return data
+
+
+def approval_pairs(pairs):
+    result = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError('Duplicate approval JSON key')
+        result[name] = value
+    return result
+
+
+def extract_approved_artifact(artifact, approval, output):
+    """Materialize only four exact approved files; never import artifact code.
+
+    The caller verifies the successful Actions origin and supplies its approval
+    receipt. Publication still independently validates proof, sources and locks.
+    All ZIP members are checked in bounded memory before creating any output.
+    """
+    output = Path(output)
+    if (not output.is_absolute() or output != output.resolve()
+            or output.exists() or output.is_symlink()):
+        raise ValueError('Approved output directory must be fresh and canonical')
+    receipt = json.loads(approved_input(approval, MAX_APPROVAL_BYTES).decode('utf-8'),
+                         object_pairs_hook=approval_pairs)
+    if (not isinstance(receipt, dict) or set(receipt) != {'schema', 'archive', 'files'}
+            or type(receipt['schema']) is not int or receipt['schema'] != 1
+            or not isinstance(receipt['files'], list) or len(receipt['files']) != 4):
+        raise ValueError('Invalid approved artifact receipt')
+    expected = {WHEEL, SOURCES, NOTICES, PROOF}
+    pins = {}
+    for item in receipt['files']:
+        if (not isinstance(item, dict) or set(item) != {'name', 'bytes', 'sha256'}
+                or not isinstance(item['name'], str) or item['name'] not in expected
+                or item['name'] in pins or type(item['bytes']) is not int
+                or not 0 < item['bytes'] < MAX_BYTES
+                or (item['name'] == PROOF and item['bytes'] > MAX_PROOF_BYTES)
+                or not isinstance(item['sha256'], str) or not re.fullmatch('[a-f0-9]{64}', item['sha256'])):
+            raise ValueError('Invalid approved file pin')
+        pins[item['name']] = item
+    archive_pin = receipt['archive']
+    if (not isinstance(archive_pin, dict) or set(archive_pin) != {'bytes', 'sha256'}
+            or type(archive_pin['bytes']) is not int
+            or not 0 < archive_pin['bytes'] <= min(MAX_ARTIFACT_BYTES,
+                sum(item['bytes'] for item in pins.values()) + MAX_ARTIFACT_OVERHEAD)
+            or not isinstance(archive_pin['sha256'], str)
+            or not re.fullmatch('[a-f0-9]{64}', archive_pin['sha256'])):
+        raise ValueError('Invalid approved archive pin')
+    raw = approved_input(artifact, MAX_ARTIFACT_BYTES, archive_pin['bytes'])
+    if sha(raw) != archive_pin['sha256']:
+        raise ValueError('Approved artifact archive hash changed')
+    payloads = {}
+    # Parse the exact bytes just hashed, never reopen a possibly replaced file.
+    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+        infos = archive.infolist()
+        if len(infos) != 4 or {info.filename for info in infos} != expected:
+            raise ValueError('Expected exactly four approved artifact files')
+        for info in infos:
+            name = safe_name(info.filename)
+            if (info.orig_filename != name or info.is_dir() or info.flag_bits & 0x41
+                    or info.external_attr & 0x10
+                    or stat.S_IFMT(info.external_attr >> 16) not in (0, stat.S_IFREG)
+                    or info.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                    or info.file_size != pins[name]['bytes']):
+                raise ValueError('Unsafe or changed approved artifact member')
+        for info in infos:
+            with archive.open(info) as member:
+                data = member.read(pins[info.filename]['bytes'] + 1)
+            if pin(info.filename, data) != pins[info.filename]:
+                raise ValueError('Approved artifact member bytes changed')
+            payloads[info.filename] = data
+    output.mkdir(parents=True)
+    try:
+        for name, data in sorted(payloads.items()):
+            with (output / name).open('xb') as target:
+                if target.write(data) != len(data):
+                    raise OSError('Incomplete approved artifact write')
+    except BaseException:
+        shutil.rmtree(output)
+        raise
+    return output
 
 
 def locked_bytes(item, cache):
@@ -576,3 +676,20 @@ def package_diagnostic(*, source_sha, wheel, second_wheel, reports, cache, work,
     pending.write_bytes(payload)
     pending.replace(output / DIAGNOSTIC)
     return manifest
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Extract an already downloaded exact approved CPU artifact.')
+    parser.add_argument('--extract-approved-artifact', required=True, type=Path)
+    parser.add_argument('--approval', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args(argv)
+    try:
+        extract_approved_artifact(args.extract_approved_artifact, args.approval, args.output)
+    except (ValueError, OSError, zipfile.BadZipFile, RuntimeError, NotImplementedError) as error:
+        parser.exit(1, 'Approved artifact extraction failed: ' + str(error) + '\n')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

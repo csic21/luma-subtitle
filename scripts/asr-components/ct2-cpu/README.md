@@ -207,7 +207,7 @@ This audit does not integrate an app installer or clear public redistribution.
 
 PR revisions run cheap source/configuration guards and supersede only that PR's
 earlier guard run. Native compilation requires a validated request-only push,
-an explicit manual proof, or the source-pinned reusable publication invocation.
+an explicit manual proof, or a source-pinned metadata-only reusable invocation.
 Native proofs have unique concurrency groups and are not automatically canceled
 by later branch updates. A successful cheap guard is never native-build evidence.
 
@@ -239,10 +239,14 @@ Default, PR and manual proof runs upload only JSON/log/CMake-cache evidence.
 The explicit one-day failed-verifier diagnostic opt-in above is separate.
 Successful proofs also generate deterministic source/notices candidates and their
 asset pins locally; their publication-proof.json alone is included in reports.
-An optional workflow_call publication input is accepted only from the dedicated
-validated request-only publisher. After all native gates succeed, that caller
-may export exactly the CPU wheel, source ZIP, notices ZIP and proof JSON as a
-candidate artifact. No assembled Python/runtime, model or CRT bytes are exported.
+A proof request may instead opt into `success_artifact` with the exact literal
+`cpu-wheel-source-notices-proof-14-days`. This is mutually exclusive with failed
+diagnostic retention. Only this validated direct request can export the CPU
+wheel, source ZIP, notices ZIP and proof JSON after the independent CRT signature
+job and every build/inference/lifecycle gate pass. Manual, reusable and PR routes
+cannot export candidates. Retention is fourteen days, with an immutable artifact
+name containing source SHA, run ID and attempt; overwriting is disabled.
+No assembled Python/runtime, model or CRT bytes are exported.
 The build itself never creates a release. All result/provenance reports state
 `publication_authorized: false`. A successful native test does not clear licenses
 or authorize release.
@@ -259,3 +263,29 @@ workflow. The guarded publisher in `publish.cjs` and
 `.github/workflows/asr-cpu-wheel-publish.yml` remains dormant without a separately
 reviewed request-only commit pinning the successful source, proof and assets.
 These build controls do not activate a component download URL or embedded catalogue.
+
+
+### Exact successful-artifact promotion
+
+The publication request's sole parent is the successful native proof commit.
+Alongside the existing source, locks, three asset pins and proof-summary pin, its
+`proof` object requires `run_id`, `run_attempt`, `job_id`, `artifact` and `summary`.
+The artifact record contains exactly `id`, `name`, `bytes` and `sha256`; its name
+is `ct2-cpu-candidate-<source_sha>-<run_id>-<run_attempt>`.
+
+A read-only retrieval job has narrowly scoped `actions:read` in addition to
+`contents:read`. It verifies the exact successful attempt, CPU job and successful
+export step, request-only opt-in, repository identities, artifact creation inside
+that job's interval, fourteen-day retention, size and SHA-256. It rechecks source,
+job and artifact metadata after download. The existing restricted GitHub redirect
+transport never forwards credentials to storage or logs signed URLs.
+
+The downloaded ZIP is rehashed and bounded before extracting exactly four regular
+hash-pinned files into a fresh directory. No extracted code executes. The same
+source/provenance/lock and asset gates then run again. These four files alone pass
+through an exact same-run artifact ID to the separate `contents:write` publisher.
+The publisher does not compile again, move the reviewed tag/source, replace assets,
+or change application latest/updater identity. A fully verified completed release
+can be retried read-only after the temporary producer artifact expires; incomplete
+publication requires the original unexpired artifact. Expired/missing artifacts
+are never rebuilt or substituted silently. Catalog activation remains separate.
