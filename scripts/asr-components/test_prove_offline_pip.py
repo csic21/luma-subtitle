@@ -111,15 +111,16 @@ class WindowsInstallerJobTests(unittest.TestCase):
             directory.mkdir();(directory/'partial-model').write_bytes(b'private fixture')
             if prepare_failure:raise RuntimeError('expected fixture preparation failure')
             return {'LUMA_ASR_TEST_OUTPUT':str(directory/'results')},{'fixture':True}
-        def run(command,**kwargs):
-            self.assertEqual(command[0],str(cargo.resolve()))
+        def run(executable,**kwargs):
+            self.assertEqual(executable,str(cargo.resolve()))
+            self.assertEqual(kwargs['test_name'],'asr_components::tests::native_direct_recipe_installs_repairs_and_removes')
             self.assertEqual(kwargs['timeout'],1800);self.assertEqual(kwargs['output_limit'],8*1024*1024)
             self.assertEqual(updates[0]['windows_owned_job'],{'tree_drained':False,'job_start_pending':True})
             self.assertTrue(Path(kwargs['env']['LUMA_ASR_RECIPE_INPUTS']).is_dir())
             if raises:raise job.JobRunError('owned descendant survived',job_result)
             return job_result
         with patch.object(proof.sys,'platform','win32'),patch.object(proof.shutil,'which',return_value=str(cargo)), \
-             patch.object(job,'run_owned_tree',side_effect=run),patch('real_worker_fixture.final_cpu_recipe',return_value=with_fixture), \
+             patch.object(job,'run_owned_cargo_test',side_effect=run),patch('real_worker_fixture.final_cpu_recipe',return_value=with_fixture), \
              patch('real_worker_fixture.prepare',side_effect=prepare), \
              patch.object(proof,'owned',side_effect=AssertionError('must use Job')),patch('builtins.print'):
             try:

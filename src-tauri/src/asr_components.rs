@@ -311,6 +311,18 @@ fn self_test_failure(status: std::process::ExitStatus) -> String {
     };
     format!("Private engine self-test failed ({detail}). The previous component is unchanged. Try Repair. If the OS reports a security block, use its supported review or recovery flow, or ask your administrator; do not disable protections.")
 }
+fn self_test_error_detail(stderr: &[u8]) -> String {
+    let bytes = &stderr[stderr.len().saturating_sub(4096)..];
+    let first = bytes.iter().position(|byte| byte & 0xc0 != 0x80).unwrap_or(bytes.len());
+    let diagnostic: String = String::from_utf8_lossy(&bytes[first..]).chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect();
+    // Lossy decoding can expand malformed bytes. Bound the resulting text too,
+    // advancing only to a UTF-8 boundary, while retaining the final exception.
+    let mut start = diagnostic.len().saturating_sub(4096);
+    while !diagnostic.is_char_boundary(start) { start += 1; }
+    let tail = diagnostic[start..].trim();
+    if tail.is_empty() { String::new() } else { format!("\n{tail}") }
+}
 async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool, lifetime: &setup_process::SetupLifetime) -> Result<(), String> {
     let executable = store::checked_path(root, &runtime.entrypoint)?; store::regular_file(&executable)?;
     let code = self_test_script(&runtime.backend)?;
@@ -321,23 +333,40 @@ async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool,
         .env_remove("PYTHONPATH").env_remove("PYTHONHOME")
         .env("HF_HUB_OFFLINE", "1").env("TRANSFORMERS_OFFLINE", "1").env("HF_DATASETS_OFFLINE", "1").env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
         .env("HF_HUB_DISABLE_TELEMETRY", "1").env("DO_NOT_TRACK", "1")
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::process_utils::hide_tokio_command_window(&mut command);
-    let mut child = setup_process::OwnedChild::spawn(&mut command, lifetime, temporary).map_err(|e| format!("Cannot start private engine self-test: {e}"))?;
+    let child = setup_process::OwnedChild::spawn(&mut command, lifetime, temporary).map_err(|e| format!("Cannot start private engine self-test: {e}"))?;
+    wait_self_test(child, cancel, Duration::from_secs(120)).await
+}
+async fn wait_self_test(mut child: setup_process::OwnedChild, cancel: &AtomicBool, timeout: Duration) -> Result<(), String> {
+    use tokio::io::AsyncReadExt;
+    let mut stderr = child.child_mut().stderr.take().expect("configured self-test stderr pipe");
+    let mut tail = std::collections::VecDeque::new(); let mut buffer = [0u8; 4096];
+    let mut status = None; let mut stderr_done = false;
     let started = Instant::now();
     let result = loop {
-        if cancel.load(Ordering::SeqCst) || started.elapsed() > Duration::from_secs(120) {
+        if cancel.load(Ordering::SeqCst) || started.elapsed() > timeout {
             break Err(if cancel.load(Ordering::SeqCst) { "Component setup cancelled." } else { "Private engine self-test timed out. The previous component is still installed." }.into());
         }
-        match child.child_mut().try_wait() {
-            Ok(Some(status)) if status.success() => break Ok(()),
-            Ok(Some(status)) => break Err(self_test_failure(status)),
-            Ok(None) => tokio::time::sleep(POLL).await,
-            Err(error) => break Err(format!("Cannot inspect private engine self-test: {error}")),
+        if status.is_none() {
+            match child.child_mut().try_wait() {
+                Ok(value) => status = value,
+                Err(error) => break Err(format!("Cannot inspect private engine self-test: {error}")),
+            }
         }
+        if !stderr_done {
+            match tokio::time::timeout(Duration::from_millis(20), stderr.read(&mut buffer)).await {
+                Ok(Ok(0)) => stderr_done = true,
+                Ok(Ok(n)) => { tail.extend(&buffer[..n]); let excess = tail.len().saturating_sub(4096); tail.drain(..excess); },
+                Ok(Err(error)) => break Err(format!("Cannot read private engine self-test diagnostics: {error}")),
+                Err(_) => (),
+            }
+        }
+        if stderr_done { if let Some(exit) = status { break if exit.success() { Ok(()) } else { Err(self_test_failure(exit)) }; } }
+        tokio::time::sleep(POLL).await;
     };
     child.finish(result.is_err()).await;
-    result
+    result.map_err(|error| format!("{error}{}", self_test_error_detail(&tail.into_iter().collect::<Vec<_>>())))
 }
 pub(super) async fn cancellable<F: Future>(future: F, cancel: &AtomicBool) -> Result<F::Output, String> {
     let mut future = Box::pin(future);

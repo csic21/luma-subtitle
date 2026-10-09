@@ -168,6 +168,9 @@ class ReplayLifecycleTests(unittest.TestCase):
                 def run(command,**kwargs):
                     if 'rev-parse' in command:return {'exit_code':0,'stdout':'a'*40,'tree_drained':True}
                     if '--version' in command:return {'exit_code':0,'stdout':Path(command[0]).stem+' 1.90.0 (fixture)','tree_drained':True}
+                    raise AssertionError('Unexpected strict setup command')
+                def test_binary(cargo,**kwargs):
+                    self.assertEqual(kwargs['test_name'],'asr::process::tests::real_optional_worker_transcribes_exports_reuses_and_cancels')
                     before=json.loads((reports/'rust-lifecycle.json').read_text())
                     self.assertFalse(before['tree_drained']);self.assertTrue(before['cargo_started'])
                     self.assertEqual(kwargs['env']['LUMA_ASR_TEST_ENGINE'],'whisper-accelerated')
@@ -176,7 +179,7 @@ class ReplayLifecycleTests(unittest.TestCase):
                 with patch.object(f,'validate_replay_ready',return_value=checked),patch.object(f.sys,'platform','win32'), \
                      patch.object(f,'prepare',side_effect=prepare),patch.object(f.shutil,'which',side_effect=lambda name:str(root/(name+'.exe'))), \
                      patch.object(job,'native_tree_smoke',return_value={'tree_drained':True}), \
-                     patch.object(job,'run_owned_tree',side_effect=run),patch('builtins.print'):
+                     patch.object(job,'run_owned_tree',side_effect=run),patch.object(job,'run_owned_cargo_test',side_effect=test_binary),patch('builtins.print'):
                     with self.assertRaises(job.JobRunError):f.run_replay_lifecycle(None,None,None,None,'a'*40,root)
                 report=json.loads((reports/'rust-lifecycle.json').read_text())
                 self.assertFalse(report['passed']);self.assertEqual(report['tree_drained'],drained)

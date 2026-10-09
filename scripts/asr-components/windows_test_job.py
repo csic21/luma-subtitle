@@ -5,9 +5,14 @@ kill-on-close Job before any instruction runs, and inherits only three explicit
 stdio handles. Every exit path drains the Job before callers may remove files.
 """
 import ctypes as c
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path, PureWindowsPath
+import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -243,16 +248,20 @@ def kernel_api():
     return kernel
 
 
-def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024):
+def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024,_build_only=False):
     if sys.platform!='win32': raise RuntimeError('The native proof Job supervisor is Windows-only')
     if not 0<timeout<=1800 or not 0<output_limit<=8*1024*1024: raise ValueError('Unbounded proof process request')
     command=[str(arg) for arg in command];line=command_line(command)
+    if _build_only and (Path(command[0]).name.lower()!='cargo.exe' or command[1:2]!=['test']
+                        or '--no-run' not in command or '--message-format=json' not in command or '--' in command):
+        raise ValueError('Build-helper cleanup is restricted to compile-only Cargo invocations')
     cwd=Path(cwd).resolve(strict=True)
     if not cwd.is_dir(): raise ValueError('Proof cwd must be an existing private directory')
     block=environment_block(env);kernel=kernel_api()
     job=None;info=ProcessInfo();assigned=False;attributes=None;attribute_buffer=None;attributes_ready=False;diagnostics=None
     result={'schema':1,'exit_code':None,'job_assigned_before_resume':False,'tree_drained':False,
             'natural_drain_completed':False,'termination_requested':False,
+            'drain_policy':'terminate-build-helpers' if _build_only else 'natural',
             'total_processes':0,'timeout_seconds':timeout,'output_limit_bytes':output_limit}
     reason=None;failure=None
     def require(ok):
@@ -335,7 +344,12 @@ def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024)
             code=U32();require(kernel.GetExitCodeProcess(info.process,c.byref(code)));result['exit_code']=code.value
             # A root process exiting is not proof its descendants have exited.
             result['after_root_exit']=observe('after-root-exit')
-            drain(False)
+            if _build_only and code.value==0:
+                # Compile-only Cargo has finished. Every remaining process is
+                # owned build work, not a runtime test descendant. Kill/reap
+                # the entire Job without any process-name exception.
+                drain(True);result['build_helper_cleanup_completed']=True
+            else:drain(False)
         except BaseException as error:
             failure=error;result['reason']=reason or type(error).__name__
             try: drain(True)
@@ -347,8 +361,216 @@ def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024)
                 if handle: kernel.CloseHandle(handle)
             stdout.seek(0);stderr.seek(0)
             out=stdout.read(output_limit);err=stderr.read(max(0,output_limit-len(out)))
-            result.update(stdout=out.decode('utf-8',errors='replace'),stderr=err.decode('utf-8',errors='replace'))
+            try:text=out.decode('utf-8',errors='strict' if _build_only else 'replace')
+            except UnicodeDecodeError as error:
+                failure=failure or error;result['reason']='invalid-cargo-utf8';text=''
+            result.update(stdout=text,stderr=err.decode('utf-8',errors='replace'))
     if failure is not None: raise JobRunError(str(failure),result) from failure
+    return result
+
+
+def canonical_proof_path(path,owner,*,file=False):
+    path=Path(path);owner=Path(owner)
+    if not path.is_absolute() or not path.is_relative_to(owner) or path.resolve(strict=True)!=path:
+        raise ValueError('Cargo proof path is not canonical and owned')
+    for part in (path,*path.parents):
+        info=part.lstat()
+        if stat.S_ISLNK(info.st_mode) or getattr(info,'st_file_attributes',0)&0x400:
+            raise ValueError('Cargo proof path contains a link or reparse point')
+        if part==owner:break
+    if not (path.is_file() if file else path.is_dir()):raise ValueError('Cargo proof path has the wrong type')
+    return path
+
+
+def select_test_artifact(output,manifest,target_dir):
+    """Accept one Cargo-reported binary unit-test artifact, never a file glob."""
+    if len(output.encode('utf-8'))>8*1024*1024:raise ValueError('Cargo JSON exceeds its bound')
+    artifacts=[];finished=[]
+    for line in output.splitlines():
+        if not line.strip():continue
+        message=json.loads(line)
+        if not isinstance(message,dict):raise ValueError('Cargo emitted a non-object JSON message')
+        if message.get('reason')=='build-finished':finished.append(message.get('success'))
+        if (message.get('reason')=='compiler-artifact' and message.get('profile',{}).get('test') is True
+                and message.get('executable') is not None):artifacts.append(message)
+    if finished!=[True] or len(artifacts)!=1:raise ValueError('Cargo must report one successful build and one test executable')
+    artifact=artifacts[0];target=artifact.get('target',{})
+    manifest=Path(manifest);source=manifest.parent/'src/main.rs'
+    if (target.get('name')!='luma-subtitle' or target.get('kind')!=['bin']
+            or target.get('crate_types')!=['bin'] or target.get('test') is not True
+            or Path(artifact.get('manifest_path',''))!=manifest or Path(target.get('src_path',''))!=source):
+        raise ValueError('Cargo test artifact does not match the exact Luma manifest/source target')
+    canonical_proof_path(manifest,manifest.parent,file=True);canonical_proof_path(source,manifest.parent,file=True)
+    executable=canonical_proof_path(artifact['executable'],target_dir,file=True)
+    expected_parent=target_dir/'x86_64-pc-windows-msvc/debug/deps'
+    if (executable.parent!=expected_parent or not re.fullmatch(r'luma_subtitle-[a-f0-9]{16}\.exe',executable.name)
+            or [Path(name) for name in artifact.get('filenames',[])].count(executable)!=1):
+        raise ValueError('Cargo executable is not the emitted native test binary under the fixed target root')
+    return executable
+
+
+@contextmanager
+def locked_test_binary(executable):
+    """Keep Windows deny-write/delete sharing across verification and launch."""
+    import msvcrt
+    kernel=c.WinDLL('kernel32',use_last_error=True)
+    create=kernel.CreateFileW;create.argtypes=[c.c_wchar_p,U32,U32,HANDLE,U32,U32,HANDLE];create.restype=HANDLE
+    close=kernel.CloseHandle;close.argtypes=[HANDLE];close.restype=c.c_int
+    handle=create(str(executable),0x80000000,1,None,3,0x00200000,None)
+    if handle in (None,HANDLE(-1).value):raise c.WinError(c.get_last_error())
+    try:fd=msvcrt.open_osfhandle(handle,os.O_RDONLY|os.O_BINARY)
+    except BaseException:
+        close(handle);raise
+    with os.fdopen(fd,'rb') as stream:yield stream
+
+
+def binary_identity(stream):
+    before=os.fstat(stream.fileno())
+    if not stat.S_ISREG(before.st_mode) or not 0<before.st_size<=512*1024*1024:
+        raise ValueError('Cargo test binary is not a bounded regular file')
+    stream.seek(0);digest=hashlib.sha256()
+    if stream.read(2)!=b'MZ':raise ValueError('Cargo test artifact is not a Windows executable')
+    stream.seek(0)
+    for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+    after=os.fstat(stream.fileno())
+    identity=lambda value:(value.st_dev,value.st_ino,value.st_size,value.st_mtime_ns)
+    if identity(before)!=identity(after):raise ValueError('Cargo test binary changed during hashing')
+    return {'volume':before.st_dev,'file_id':before.st_ino,'bytes':before.st_size,
+            'mtime_ns':before.st_mtime_ns,'sha256':digest.hexdigest()}
+
+
+def compiler_diagnostics(output,limit):
+    """Render only compiler diagnostics, never Cargo build-script env records."""
+    rendered=[];size=0
+    for line in output.splitlines():
+        try:message=json.loads(line)
+        except (ValueError,TypeError):continue
+        if not isinstance(message,dict) or message.get('reason')!='compiler-message':continue
+        detail=message.get('message',{})
+        if not isinstance(detail,dict) or not isinstance(detail.get('rendered'),str):continue
+        text=detail['rendered'];size+=len(text.encode('utf-8'))
+        if size>limit:break
+        rendered.append(text)
+    return ''.join(rendered)
+
+
+def cargo_runtime_environment(output,target,libdir,environment):
+    """Mirror Cargo's documented Windows DLL paths, without exporting env."""
+    search=[]
+    for line in output.splitlines():
+        if not line.strip():continue
+        message=json.loads(line)
+        if message.get('reason')!='build-script-executed':continue
+        for value in message.get('linked_paths',[]):
+            if not isinstance(value,str) or len(value)>MAX_IMAGE_CHARS:raise ValueError('Invalid Cargo library search path')
+            if value.startswith(('native=','framework=','dependency=','crate=','all=')):value=value.split('=',1)[1]
+            path=Path(value)
+            # Cargo itself excludes build-script paths outside the target tree.
+            if not path.is_absolute() or not path.is_relative_to(target):continue
+            path=canonical_proof_path(path,target)
+            if path not in search:search.append(path)
+            if len(search)>256:raise ValueError('Cargo library path list exceeds its bound')
+    for path in (target/'x86_64-pc-windows-msvc/debug/deps',target/'x86_64-pc-windows-msvc/debug',libdir):
+        if path not in search:search.append(path)
+    result=dict(environment);path_keys=[key for key in result if key.upper()=='PATH']
+    if len(path_keys)>1:raise ValueError('Ambiguous Windows PATH keys')
+    original=result.pop(path_keys[0]) if path_keys else ''
+    result['PATH']=';'.join(map(str,search))+(';' + original if original else '')
+    return result,[str(path) for path in search]
+
+
+def run_owned_cargo_test(cargo,*,manifest,test_name,env=None,timeout=1800,output_limit=8*1024*1024):
+    """Separate owned compile helpers from a freshly owned strict runtime test."""
+    if sys.platform!='win32':raise RuntimeError('The two-phase Cargo proof is Windows-only')
+    if not 0<timeout<=1800 or not 0<output_limit<=8*1024*1024:raise ValueError('Unbounded Cargo proof request')
+    if test_name not in ('asr_components::tests::native_direct_recipe_installs_repairs_and_removes',
+                         'asr::process::tests::real_optional_worker_transcribes_exports_reuses_and_cancels'):
+        raise ValueError('Unexpected exact native proof test')
+    manifest=Path(manifest);package=manifest.parent.resolve(strict=True)
+    manifest=canonical_proof_path(manifest,package,file=True)
+    if manifest.name!='Cargo.toml':raise ValueError('Expected the package Cargo manifest')
+    source=canonical_proof_path(package/'src/main.rs',package,file=True)
+    source_sha=(env or {}).get('LUMA_ASR_TEST_VERIFIER_SOURCE_SHA','')
+    if not re.fullmatch('[a-f0-9]{40}',source_sha):raise ValueError('Exact verifier source SHA is required')
+    def source_identity():
+        identity={}
+        for key,path in (('manifest_sha256',manifest),('target_source_sha256',source)):
+            if path.stat().st_size>4*1024*1024:raise ValueError('Cargo source metadata exceeds its bound')
+            identity[key]=hashlib.sha256(path.read_bytes()).hexdigest()
+        return identity
+    source_before=source_identity()
+    target=package/'target';target.mkdir(exist_ok=True);canonical_proof_path(target,package)
+    cargo=str(Path(cargo).resolve(strict=True));deadline=time.monotonic()+timeout
+    environment=dict(env or os.environ)
+    rustc=environment.get('RUSTC') or shutil.which('rustc',path=next((value for key,value in environment.items() if key.upper()=='PATH'),None))
+    if not rustc:raise ValueError('Native Rust compiler is missing')
+    rustc=str(Path(rustc).resolve(strict=True));environment['RUSTC']=rustc
+    result={'schema':1,'kind':'two-phase-cargo-test','stage':'toolchain-query','exit_code':None,'tree_drained':True,
+            'test_name':test_name,'test_started':False,'stdout':'','stderr':'','timeout_seconds':timeout,
+            'manifest':str(manifest),'source':str(source),'source_sha':source_sha,'source_identity':source_before,
+            'target_dir':str(target)}
+    def remaining():
+        value=deadline-time.monotonic()
+        if value<=0:raise TimeoutError('Two-phase Cargo proof exceeded its shared time bound')
+        return min(value,1800)
+    def invoke(command,*,phase,environment):
+        build=phase=='build';report=None
+        budget=remaining();result['tree_drained']=False
+        try:report=run_owned_tree(command,cwd=package,env=environment,timeout=budget,
+                                  output_limit=4096 if phase=='toolchain_query' else output_limit,_build_only=build)
+        except JobRunError as error:report=error.result;raise
+        finally:
+            if report is not None:
+                result[phase]={key:value for key,value in report.items() if key not in ('stdout','stderr')}
+                result['tree_drained']=report.get('tree_drained') is True
+                result['exit_code']=report.get('exit_code')
+                # Cargo JSON may include build-script environment assignments.
+                # Do not publish it. Keep only runtime stdout and bounded stderr.
+                if phase=='test':result['stdout']=report.get('stdout','')[:output_limit]
+                detail=compiler_diagnostics(report.get('stdout',''),output_limit) if build else ''
+                remaining_bytes=max(0,output_limit-len(result['stdout'].encode('utf-8')))
+                result['stderr']=(result['stderr']+report.get('stderr','')+detail).encode('utf-8')[:remaining_bytes].decode('utf-8',errors='ignore')
+        if report.get('exit_code')!=0 or report.get('tree_drained') is not True:
+            raise RuntimeError('Cargo build failed' if build else 'Exact native test failed')
+        return report
+    try:
+        toolchain=invoke([rustc,'--print','target-libdir','--target','x86_64-pc-windows-msvc'],phase='toolchain_query',environment=environment)
+        if toolchain.get('natural_drain_completed') is not True:raise RuntimeError('Rust compiler query did not drain naturally')
+        paths=toolchain['stdout'].splitlines()
+        if len(paths)!=1 or len(paths[0])>MAX_IMAGE_CHARS:raise ValueError('Unexpected Rust target library path')
+        libdir=Path(paths[0]);canonical_proof_path(libdir,libdir)
+        result['compiler']={'executable':rustc,'target_libdir':str(libdir)}
+        result['stage']='build'
+        command=[cargo,'test','--manifest-path',str(manifest),'--locked','--bin','luma-subtitle',
+                 '--no-run','--message-format=json','--target','x86_64-pc-windows-msvc','--target-dir',str(target)]
+        build=invoke(command,phase='build',environment=environment)
+        if build.get('build_helper_cleanup_completed') is not True:raise RuntimeError('Owned build helpers were not confirmed reaped')
+        result['stage']='artifact-verification'
+        if source_identity()!=source_before:raise ValueError('Cargo manifest or target source changed while building')
+        executable=select_test_artifact(build['stdout'],manifest,target)
+        runtime_env,search=cargo_runtime_environment(build['stdout'],target,libdir,environment)
+        runtime_env.update(CARGO_MANIFEST_DIR=str(package),CARGO_MANIFEST_PATH=str(manifest))
+        result['runtime_dll_search_paths']=search
+        with locked_test_binary(executable) as stream:
+            identity=binary_identity(stream)
+            result['artifact']={'path':str(executable),**identity,'deny_write_delete_held':True}
+            canonical_proof_path(executable,target,file=True)
+            named=executable.stat()
+            if (named.st_dev,named.st_ino)!=(identity['volume'],identity['file_id']):
+                raise ValueError('Locked Cargo artifact no longer matches the launch path')
+            if binary_identity(stream)!=identity:raise ValueError('Cargo test binary changed before launch')
+            if source_identity()!=source_before:raise ValueError('Cargo manifest or target source changed before launch')
+            result['stage']='test';result['test_started']=True
+            runtime=invoke([str(executable),test_name,'--exact','--ignored','--nocapture'],phase='test',environment=runtime_env)
+            if runtime.get('natural_drain_completed') is not True or runtime.get('termination_requested') is not False:
+                raise RuntimeError('Runtime test descendants did not drain naturally')
+            if not re.search(r'(?m)^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured;',runtime['stdout']):
+                raise RuntimeError('Expected exactly one successful native test')
+            if binary_identity(stream)!=identity:raise ValueError('Cargo test binary changed during execution')
+        result['stage']='complete';result['passed']=True
+    except BaseException as error:
+        result['passed']=False
+        raise JobRunError(str(error),result) from error
     return result
 
 

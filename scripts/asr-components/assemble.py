@@ -41,6 +41,68 @@ def digest(path):
         return hashlib.file_digest(f, 'sha256').hexdigest()
 
 
+def local_windows_disk_path(path):
+    path = PureWindowsPath(path); drive = path.drive.removeprefix('\\\\?\\')
+    return path.is_absolute() and len(drive) == 2 and drive[1] == ':' and drive[0].isascii() and drive[0].isalpha()
+
+
+def within_private_root(path, root, *, allow_missing=False):
+    """Compare resolved ancestry, including equivalent Windows namespaces.
+
+    realpath preserves an explicitly supplied verbatim prefix on Windows, so
+    two resolved Path strings can differ while naming the same directory.
+    Resolve links first, then use filesystem identity for the uncommon alias
+    case. Never strip a prefix or accept an unresolved lexical descendant.
+    """
+    if sys.platform == 'win32' and not (local_windows_disk_path(path) and local_windows_disk_path(root)):
+        return False
+    root = Path(root).resolve(strict=True)
+    try:
+        path = Path(path).resolve(strict=True)
+    except FileNotFoundError:
+        if not allow_missing: raise
+        path = Path(path).resolve()
+    if path.is_relative_to(root): return True
+    if sys.platform != 'win32': return False
+    for ancestor in (path, *path.parents):
+        try:
+            if ancestor.samefile(root): return True
+        except FileNotFoundError:
+            # pip scheme destinations can be nonexistent; their existing
+            # ancestors must still lead to the exact private root.
+            if not allow_missing: raise
+            continue
+    return False
+
+
+def require_private_interpreter(root):
+    flags = {'isolated': sys.flags.isolated, 'no_site': sys.flags.no_site,
+             'no_user_site': sys.flags.no_user_site, 'enable_user_site': site.ENABLE_USER_SITE}
+    checks = {name: bool(flags[name]) for name in ('isolated', 'no_site', 'no_user_site')}
+    checks['user_site_disabled'] = not bool(flags['enable_user_site'])
+    paths = {'root': Path(root), 'prefix': Path(sys.prefix), 'executable': Path(sys.executable)}
+    comparison = {}; error = None
+    try:
+        if sys.platform == 'win32' and not all(local_windows_disk_path(path) for path in paths.values()):
+            raise ValueError('Private interpreter identity requires absolute local disk paths')
+        paths = {name: path.resolve(strict=True) for name, path in paths.items()}
+        root, prefix, executable = paths['root'], paths['prefix'], paths['executable']
+        checks.update(root_directory=root.is_dir(), prefix_directory=prefix.is_dir(), executable_file=executable.is_file())
+        checks['prefix_identity'] = checks['root_directory'] and checks['prefix_directory'] and (prefix == root or sys.platform == 'win32') and prefix.samefile(root)
+        checks['executable_contained'] = checks['executable_file'] and within_private_root(executable, root)
+        comparison = {'prefix_lexically_equal': prefix == root, 'executable_lexically_contained': executable.is_relative_to(root)}
+    except (OSError, RuntimeError, ValueError) as exc:
+        error = type(exc).__name__; checks['identity_readable'] = False
+    if not all(checks.values()):
+        # No environment or unbounded exception text. Keep namespace spelling
+        # and enough of each private path to diagnose a failed operand.
+        def diagnostic_path(path):
+            value = str(path)
+            return {'text': value if len(value) <= 128 else value[:32] + '...' + value[-93:], 'truncated': len(value) > 128}
+        detail = {'flags': flags, 'checks': checks, 'comparison': comparison, 'paths': {name: diagnostic_path(path) for name, path in paths.items()}, 'error_type': error}
+        raise RuntimeError('Assembly requires the isolated private interpreter: ' + json.dumps(detail, sort_keys=True, ensure_ascii=True))
+
+
 def wheel_requirements(lock, wheelhouse):
     """Only verified local wheel URLs, each with one exact approved hash."""
     requirements = []; expected = set()
@@ -116,8 +178,7 @@ def main():
     parser.add_argument('--wheelhouse', type=Path, required=True)
     args = parser.parse_args()
     root, wheelhouse = args.runtime_root.resolve(), args.wheelhouse.resolve()
-    if not sys.flags.isolated or not sys.flags.no_site or site.ENABLE_USER_SITE or Path(sys.prefix).resolve() != root or not Path(sys.executable).resolve().is_relative_to(root):
-        raise RuntimeError('Assembly requires the isolated private interpreter')
+    require_private_interpreter(root)
     if sys.version.split()[0] != PYTHON_VERSION:
         raise RuntimeError('Unreviewed private Python version')
     if (root / 'component.json').exists() or (root / 'ASSEMBLY.json').exists():
@@ -127,7 +188,7 @@ def main():
     # library directory directly; do not call site.addsitedir()/site.main().
     sys.path.append(str(destination))
     distribution = importlib.metadata.distribution('pip')
-    if distribution.version != PIP_VERSION or not Path(distribution.locate_file('pip')).resolve().is_relative_to(root):
+    if distribution.version != PIP_VERSION or not within_private_root(distribution.locate_file('pip'), root):
         raise RuntimeError('Unreviewed or external pip')
     lock = json.loads(args.wheel_lock.read_text(encoding='utf-8'))
     contents = wheel_requirements(lock, wheelhouse)
@@ -162,10 +223,10 @@ def main():
         raise RuntimeError('External pip configuration was not disabled')
     from pip._internal.locations import get_scheme
     scheme = get_scheme('luma-component', prefix=str(root))
-    if any(not Path(getattr(scheme, key)).resolve().is_relative_to(root)
+    if any(not within_private_root(getattr(scheme, key), root, allow_missing=True)
            for key in ('purelib', 'platlib', 'headers', 'scripts', 'data')):
         raise RuntimeError('pip installation scheme escaped the private prefix')
-    if any(Path(getattr(scheme, key)).resolve() != destination for key in ('purelib', 'platlib')):
+    if any(not Path(getattr(scheme, key)).samefile(destination) for key in ('purelib', 'platlib')):
         raise RuntimeError('pip installation scheme differs from the approved private site')
     sys.argv = ['pip', '--isolated', '--disable-pip-version-check', '--no-cache-dir', 'install',
                 '--no-index', '--no-deps', '--only-binary=:all:',

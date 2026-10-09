@@ -3,11 +3,12 @@ import csv
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from fixture_paths import temporary_root
 
-from assemble import local_file_uri, normalize_removed_records, offline_guard, remove_bootstrap_installer, wheel_requirements, PIP_VERSION, PYTHON_VERSION
+from assemble import local_file_uri, local_windows_disk_path, normalize_removed_records, offline_guard, remove_bootstrap_installer, require_private_interpreter, within_private_root, wheel_requirements, PIP_VERSION, PYTHON_VERSION
 
 
 class OfflineAssemblyTests(unittest.TestCase):
@@ -49,6 +50,82 @@ class OfflineAssemblyTests(unittest.TestCase):
 
     def test_assembly_toolchain_is_explicit(self):
         self.assertEqual(PIP_VERSION, '26.2.1'); self.assertEqual(PYTHON_VERSION, '3.12.15')
+
+    def test_private_interpreter_requires_every_isolation_flag_and_file_identity(self):
+        with temporary_root(prefix='Assembly identity é 测试 ') as tmp:
+            root = tmp / 'private'; root.mkdir(); executable = root / 'python.exe'; executable.write_bytes(b'fixture')
+            external = tmp / 'private-other'; external.mkdir(); outside = external / 'python.exe'; outside.write_bytes(b'fixture')
+            flags = SimpleNamespace(isolated=1, no_site=1, no_user_site=1)
+            with patch('assemble.sys.flags', flags), patch('assemble.sys.prefix', str(root)), patch('assemble.sys.executable', str(executable)), patch('assemble.site.ENABLE_USER_SITE', None):
+                require_private_interpreter(root)
+                for field in ('isolated', 'no_site', 'no_user_site'):
+                    with patch.object(flags, field, 0), self.assertRaisesRegex(RuntimeError, '"' + field + '": false'):
+                        require_private_interpreter(root)
+                with patch('assemble.site.ENABLE_USER_SITE', True), self.assertRaisesRegex(RuntimeError, '"user_site_disabled": false'):
+                    require_private_interpreter(root)
+                with patch('assemble.sys.prefix', str(external)), self.assertRaisesRegex(RuntimeError, '"prefix_identity": false'):
+                    require_private_interpreter(root)
+                with patch('assemble.sys.executable', str(outside)), self.assertRaisesRegex(RuntimeError, '"executable_contained": false'):
+                    require_private_interpreter(root)
+                with self.assertRaisesRegex(RuntimeError, '"prefix_identity": false'):
+                    require_private_interpreter(external)
+                with patch('assemble.sys.executable', str(root / 'missing.exe')), self.assertRaisesRegex(RuntimeError, '"identity_readable": false'):
+                    require_private_interpreter(root)
+                with patch('assemble.sys.prefix', str(tmp / ('é' * 180))):
+                    try: require_private_interpreter(root)
+                    except RuntimeError as error:
+                        diagnostic = str(error); self.assertLess(len(diagnostic), 4096)
+                        self.assertIn('"truncated": true', diagnostic); self.assertNotIn('environ', diagnostic)
+                    else: self.fail('Missing prefix was accepted')
+
+    def test_resolved_containment_rejects_sibling_and_outside_link(self):
+        with temporary_root(prefix='Assembly containment é 测试 ') as tmp:
+            root = tmp / 'runtime'; root.mkdir(); inside = root / 'inside'; inside.mkdir()
+            outside = tmp / 'runtime-other'; outside.mkdir(); (outside / 'python.exe').write_bytes(b'fixture')
+            self.assertTrue(within_private_root(inside, root)); self.assertFalse(within_private_root(outside, root))
+            self.assertTrue(within_private_root(root / 'new' / 'headers', root, allow_missing=True))
+            with self.assertRaises(FileNotFoundError): within_private_root(root / 'missing.exe', root)
+            with patch.object(Path, 'resolve', side_effect=PermissionError('denied')):
+                with self.assertRaises(PermissionError): within_private_root(inside, root)
+            link = root / 'outside-link'
+            try: link.symlink_to(outside, target_is_directory=True)
+            except OSError as error:
+                if os.name == 'nt': self.skipTest('Native symlink creation unavailable: ' + type(error).__name__)
+                raise
+            self.assertFalse(within_private_root(link / 'python.exe', root))
+
+    def test_windows_identity_fallback_rejects_remote_device_and_relative_namespaces(self):
+        for path in (r'C:\private é 测试', r'\\?\C:\private é 测试'):
+            self.assertTrue(local_windows_disk_path(path))
+        for path in (r'\\server\share\runtime', r'\\?\UNC\server\share\runtime', r'\\.\C:\runtime', r'\\?\Volume{fixture}\runtime', r'C:runtime', 'relative'):
+            self.assertFalse(local_windows_disk_path(path))
+            with patch('assemble.sys.platform', 'win32'), patch.object(Path, 'resolve') as resolve:
+                self.assertFalse(within_private_root(path, r'C:\private'))
+                resolve.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows filesystem identity regression')
+    def test_native_unicode_ordinary_and_verbatim_interpreter_identity(self):
+        with temporary_root(prefix='Assembly native é 测试 ') as tmp:
+            root = tmp / 'runtime'; root.mkdir(); executable = root / 'python.exe'; executable.write_bytes(b'fixture')
+            ordinary = root.resolve(strict=True); verbatim = Path('\\\\?\\' + str(ordinary))
+            # Establish the actual old-guard failure: resolve() retains the
+            # caller's namespace spelling even for the exact same directory.
+            self.assertNotEqual(ordinary.resolve(strict=True), verbatim.resolve(strict=True))
+            self.assertTrue(ordinary.samefile(verbatim))
+            flags = SimpleNamespace(isolated=1, no_site=1, no_user_site=1)
+            for requested in (ordinary, verbatim):
+                for prefix in (ordinary, verbatim):
+                    for executable_root in (ordinary, verbatim):
+                        with self.subTest(requested=str(requested), prefix=str(prefix), executable_root=str(executable_root)), \
+                             patch('assemble.sys.flags', flags), patch('assemble.site.ENABLE_USER_SITE', None), \
+                             patch('assemble.sys.prefix', str(prefix)), patch('assemble.sys.executable', str(executable_root / 'python.exe')):
+                            require_private_interpreter(requested)
+                            self.assertTrue(within_private_root(executable_root / 'python.exe', requested))
+                            self.assertTrue(within_private_root(executable_root / 'missing' / 'headers', requested, allow_missing=True))
+            sibling = tmp / 'runtime-other'; sibling.mkdir(); (sibling / 'python.exe').write_bytes(b'outside')
+            self.assertFalse(within_private_root(sibling / 'python.exe', verbatim))
+            different_drive = 'Z' if ordinary.drive.upper() != 'Z:' else 'Y'
+            self.assertFalse(within_private_root(f'{different_drive}:\\not-the-private-root\\python.exe', verbatim, allow_missing=True))
 
     def test_bootstrap_vendor_provenance_is_removed_only_with_pinned_installer(self):
         with temporary_root() as tmp:

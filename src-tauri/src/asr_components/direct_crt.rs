@@ -346,8 +346,19 @@ mod tests {
         }
         assert!(expansion_arguments(&work.join("attached.cab"), SLICES[1].1, DLLS[0], &work).is_err());
         assert!(expansion_arguments(Path::new("relative/attached.cab"), SLICES[1].1, MINIMUM, Path::new("relative")).is_err());
-        let traversal = work.join("..").join("direct-crt");
-        assert!(expansion_arguments(&traversal.join("attached.cab"), SLICES[1].1, MINIMUM, &traversal).is_err());
+        // PathBuf::join normalizes parent components on Windows verbatim
+        // paths. Preserve this intentionally invalid fixture's spelling instead
+        // of accidentally testing an already normalized, valid directory.
+        let separator = std::path::MAIN_SEPARATOR;
+        let mut traversal = work.as_os_str().to_os_string();
+        traversal.push(format!("{separator}..{separator}direct-crt"));
+        let traversal = PathBuf::from(traversal);
+        assert!(traversal.components().any(|part| matches!(part, std::path::Component::ParentDir)));
+        let mut cabinet = traversal.as_os_str().to_os_string();
+        cabinet.push(format!("{separator}attached.cab"));
+        let cabinet = PathBuf::from(cabinet);
+        assert_eq!(cabinet.parent(), Some(traversal.as_path()));
+        assert!(expansion_arguments(&cabinet, SLICES[1].1, MINIMUM, &traversal).is_err());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

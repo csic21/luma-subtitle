@@ -353,6 +353,74 @@ fn installation_mlx_self_test_chooses_available_device_without_changing_worker_c
     assert!(!self_test_script("faster-whisper").unwrap().contains("mx.cpu"));
     assert!(self_test_script("unknown").is_err());
 }
+#[test]
+fn self_test_diagnostics_keep_only_a_bounded_utf8_safe_error_tail() {
+    assert_eq!(self_test_error_detail(b""), "");
+    assert_eq!(self_test_error_detail(b"\0\x1b\r\n\t"), "");
+    let diagnostic = self_test_error_detail("Traceback:\n\tImportError: 模块 é\n".as_bytes());
+    assert!(diagnostic.contains("ImportError: 模块 é"));
+    assert!(diagnostic.starts_with("\nTraceback:"));
+    let mut bytes = "old diagnostic é测试".repeat(1000).into_bytes();
+    bytes.extend_from_slice(b"\nRuntimeError: exact final cause\n");
+    let diagnostic = self_test_error_detail(&bytes);
+    assert!(diagnostic.len() <= 4097); assert!(diagnostic.ends_with("RuntimeError: exact final cause"));
+    assert!(!diagnostic.contains('\u{fffd}'), "truncation must not split a valid UTF-8 character");
+    let mut invalid = vec![0xff; 16384]; invalid.extend_from_slice(b"\nlast failure\x1b\0");
+    let diagnostic = self_test_error_detail(&invalid);
+    assert!(diagnostic.len() <= 4097); assert!(diagnostic.ends_with("last failure"));
+    assert!(!diagnostic.chars().any(|c| c.is_control() && c != '\n' && c != '\t'));
+}
+#[test]
+#[ignore = "native child for the bounded self-test diagnostic regression"]
+fn native_self_test_diagnostic_child() {
+    println!("stdout is not a self-test diagnostic");
+    let timeout = std::env::var("LUMA_SELF_TEST_CHILD_MODE").as_deref() == Ok("timeout");
+    let mut stderr = std::io::stderr().lock();
+    if !timeout { stderr.write_all(&vec![b'x'; 16384]).unwrap(); }
+    stderr.write_all("\nImportError: private 模块 é\n".as_bytes()).unwrap();
+    stderr.flush().unwrap();
+    if timeout {
+        fs::write(PathBuf::from(std::env::var_os("LUMA_SELF_TEST_CHILD_READY").unwrap()), b"ready").unwrap();
+        std::thread::sleep(Duration::from_secs(60));
+    }
+    std::process::exit(9);
+}
+#[test]
+fn self_test_native_failure_and_timeout_drain_bounded_stderr_in_the_owned_future() {
+    tauri::async_runtime::block_on(async {
+        for mode in ["failure", "timeout", "cancel"] {
+            let fixture = Fixture::new(); let lease = store::acquire_setup_lease(&fixture.root).unwrap();
+            let staging = store::Staging::create(&fixture.root).unwrap();
+            let lifetime = setup_process::SetupLifetime::new(&staging, &lease);
+            let temporary = setup_process::PrivateTemp::create(&staging.payload()).unwrap();
+            let ready = staging.directory.join("self-test-child-ready");
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            setup_process::configure(&mut command, &staging.payload(), &temporary).unwrap();
+            command.args(["--ignored", "--exact", "asr_components::tests::native_self_test_diagnostic_child", "--nocapture"])
+                .env("LUMA_SELF_TEST_CHILD_MODE", if mode == "failure" { "failure" } else { "timeout" })
+                .env("LUMA_SELF_TEST_CHILD_READY", &ready)
+                .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+            crate::process_utils::hide_tokio_command_window(&mut command);
+            let child = setup_process::OwnedChild::spawn(&mut command, &lifetime, temporary).unwrap();
+            if mode == "timeout" {
+                // Start the short test deadline only after the native child has
+                // flushed its small error message, avoiding CI startup races.
+                let started = Instant::now();
+                while !ready.is_file() {
+                    assert!(started.elapsed() < Duration::from_secs(10), "self-test child did not become ready");
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+            let error = wait_self_test(child, &AtomicBool::new(mode == "cancel"), Duration::from_secs(if mode == "timeout" { 2 } else { 10 })).await.unwrap_err();
+            assert!(error.len() < 4600); assert!(!error.contains("stdout is not a self-test diagnostic"));
+            if mode == "cancel" { assert!(error.contains("Component setup cancelled")); }
+            else {
+                assert!(error.ends_with("ImportError: private 模块 é"));
+                assert!(error.contains(if mode == "timeout" { "self-test timed out" } else { "native code 9 (0x00000009)" }));
+            }
+        }
+    });
+}
 #[cfg(unix)]
 #[test]
 fn self_test_errors_preserve_exit_code_or_signal_and_supported_recovery() {

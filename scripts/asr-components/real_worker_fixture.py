@@ -170,7 +170,7 @@ def validate_replay_ready(ready_path,cache,fixture_dir,reports,source_sha,runner
 
 def run_replay_lifecycle(ready_path,cache,fixture_dir,reports,source_sha,runner_temp):
     """Diagnostic only: verified replay bytes, actual new-source Rust manager."""
-    from windows_test_job import JobRunError, native_tree_smoke, run_owned_tree
+    from windows_test_job import JobRunError, native_tree_smoke, run_owned_tree, run_owned_cargo_test
     checked=validate_replay_ready(ready_path,cache,fixture_dir,reports,source_sha,runner_temp)
     if sys.platform!='win32':raise RuntimeError('Exact CPU replay Rust proof requires native Windows')
     report={'schema':1,'kind':'ct2-rust-manager-lifecycle','publication_authorized':False,'passed':False,
@@ -211,10 +211,10 @@ def run_replay_lifecycle(ready_path,cache,fixture_dir,reports,source_sha,runner_
                            LUMA_ASR_TEST_ENGINE='whisper-accelerated',LUMA_ASR_TEST_DEVICE='cpu',
                            HF_HUB_OFFLINE='1',TRANSFORMERS_OFFLINE='1',HF_HUB_DISABLE_TELEMETRY='1',
                            HF_HUB_DISABLE_IMPLICIT_TOKEN='1',DO_NOT_TRACK='1')
-        command=[str(Path(cargo).resolve()),'test','--manifest-path',str(repo/'src-tauri/Cargo.toml'),'--locked',
-                 'real_optional_worker_transcribes_exports_reuses_and_cancels','--','--ignored','--nocapture']
         report.update(tree_drained=False,cargo_started=True);dump(report_path,report)
-        try: cargo_result=run_owned_tree(command,cwd=repo,env=environment,timeout=1800,output_limit=8*1024*1024)
+        try: cargo_result=run_owned_cargo_test(str(Path(cargo).resolve()),manifest=repo/'src-tauri/Cargo.toml',
+                                              test_name='asr::process::tests::real_optional_worker_transcribes_exports_reuses_and_cancels',
+                                              env=environment,timeout=1800,output_limit=8*1024*1024)
         except JobRunError as error:
             cargo_result=error.result;raise
         finally:

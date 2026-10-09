@@ -80,7 +80,7 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progres
         command=['cargo', 'test', '--manifest-path', str(ROOT.parent.parent / 'src-tauri/Cargo.toml'), '--locked',
                  test, '--', '--ignored', '--nocapture']
         if sys.platform=='win32':
-            from windows_test_job import JobRunError, run_owned_tree
+            from windows_test_job import JobRunError, run_owned_cargo_test
             cargo=shutil.which('cargo')
             if not cargo:raise ValueError('Native Cargo build tool is missing')
             command[0]=str(Path(cargo).resolve(strict=True));job_result=None
@@ -88,7 +88,8 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progres
             if progress:progress(result)
             tree_drained=False
             try:
-                job_result=run_owned_tree(command,cwd=ROOT.parent.parent,env=env,timeout=1800,output_limit=8*1024*1024)
+                job_result=run_owned_cargo_test(command[0],manifest=ROOT.parent.parent/'src-tauri/Cargo.toml',
+                                              test_name='asr_components::tests::'+test,env=env,timeout=1800,output_limit=8*1024*1024)
             except JobRunError as error:
                 job_result=error.result;raise
             finally:
