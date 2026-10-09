@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_sha": "f379c65248b6d60487ed18db638ffd7486a4bc42",
+  "source_sha": "6d21f86827f714b3bf0453c6e2aabdc2b24ba91c",
   "purpose": "native-cpu-wheel-proof",
-  "diagnostic_artifact": "cpu-wheel-source-notices-1-day"
+  "success_artifact": "cpu-wheel-source-notices-proof-14-days"
 }
