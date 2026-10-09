@@ -697,6 +697,36 @@ fn native_direct_recipe_installs_repairs_and_removes() {
     let failed = store::Staging::create(&fixture.root).unwrap();
     assert!(tar_bootstrap::extract(&python_archive,&failed.payload(),recipe.python.installed_bytes,recipe.python.max_files,&AtomicBool::new(true)).is_err());
     assert_eq!(store::status(&fixture.root,&component).path.as_deref(),Some(installed_paths[1].to_str().unwrap()));
+    // This gate cannot select the old PyPI/cuDNN reference wheel. UI availability
+    // remains unchanged: the worker uses this test-owned successful activation.
+    if runtime.id == "faster-whisper-cpu-windows-x64" {
+        let filename = "ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl";
+        let url = format!("https://github.com/csic21/luma-subtitle/releases/download/asr-ct2-cpu-4.8.2-1/{filename}");
+        let cpu = recipe.wheels.iter().find(|wheel| wheel.name == "ctranslate2").unwrap();
+        assert_eq!(cpu.filename,filename); assert_eq!(cpu.url,url); assert_eq!(cpu.version,"4.8.2");
+        assert_eq!(recipe.windows_crt.as_deref(),Some("msvc-14.44.35211-x64"));
+        let lock: serde_json::Value = serde_json::from_str(include_str!("../../../scripts/asr-components/locks/faster-whisper-cpu-windows-x64.json")).unwrap();
+        let pin = lock["wheels"].as_array().unwrap().iter().find(|wheel| wheel["name"] == "ctranslate2").unwrap();
+        assert_eq!(pin["filename"].as_str(),Some(cpu.filename.as_str())); assert_eq!(pin["url"].as_str(),Some(cpu.url.as_str()));
+        assert_eq!(pin["sha256"].as_str(),Some(cpu.sha256.as_str())); assert_eq!(pin["bytes"].as_u64(),Some(cpu.bytes));
+        let model = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_MODEL").expect("pinned Tiny fixture required")).unwrap();
+        let audio = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_AUDIO").expect("pinned JFK fixture required")).unwrap();
+        let long_audio = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_LONG_AUDIO").expect("bounded cancellation fixture required")).unwrap();
+        let output = PathBuf::from(std::env::var_os("LUMA_ASR_TEST_OUTPUT").expect("isolated worker output required"));
+        let pins: serde_json::Value = serde_json::from_str(include_str!("../../../scripts/asr-components/fixtures.json")).unwrap();
+        for pin in pins["faster_whisper_tiny"]["files"].as_array().unwrap() {
+            let file = model.join(pin["path"].as_str().unwrap());
+            download::verify_digest(store::regular_file(&file).unwrap().len(),&store::hash_file(&file).unwrap(),pin["bytes"].as_u64().unwrap(),pin["sha256"].as_str().unwrap()).unwrap();
+        }
+        download::verify_digest(store::regular_file(&audio).unwrap().len(),&store::hash_file(&audio).unwrap(),pins["audio"]["bytes"].as_u64().unwrap(),pins["audio"]["sha256"].as_str().unwrap()).unwrap();
+        assert!(store::regular_file(&long_audio).unwrap().len() <= 36*1024*1024);
+        let config = crate::asr::AsrConfig { engine:"whisper-accelerated".into(),device:"cpu".into(),
+            python_path:installed_paths[1].join(&runtime.entrypoint).to_string_lossy().into_owned(),
+            model_path:model.to_string_lossy().into_owned(),..Default::default() };
+        tauri::async_runtime::block_on(crate::asr::run_real_optional_worker_fixture(&config,&audio,&long_audio,&output));
+        store::validate_files(&installed_paths[1],&component,&cancel).unwrap();
+        println!("NATIVE_DIRECT_WORKER_LIFECYCLE_OK cold_warm_srt_export_cancel_recovery=true");
+    }
     let _exclusive = store::acquire_use_lease(&fixture.root,true).unwrap(); store::remove(&fixture.root,&component).unwrap();
     assert_eq!(store::status(&fixture.root,&component).state,"not_installed"); assert!(installed_paths.iter().all(|p| !p.exists()));
     println!("NATIVE_DIRECT_RECIPE_INSTALLER_OK id={} plan_sha256={} install_repair_cancel_remove=true",runtime.id,recipe::plan_hash(runtime).unwrap());

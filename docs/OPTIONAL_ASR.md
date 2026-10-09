@@ -3,32 +3,43 @@
 The default `whisper.cpp` engine and existing GGML models continue to work without
 Python. These additional engines are opt-in. Luma downloads verified private
 engine components and models only after an explicit install/download action.
-The app downloads pinned upstream Python and binary wheels, then runs its private,
-version-pinned pip entirely offline inside staging. There is no network dependency
-resolution or source build. You do not install Python, enter pip commands, or
+The managed setup design downloads pinned Python and wheels directly from their
+original upstream publishers, plus a separately reviewed Luma CPU-only
+CTranslate2 wheel for Windows Whisper. It runs its private, version-pinned pip
+entirely offline inside staging during Install or Repair, never transcription.
+There is no network dependency resolution or source build. You do not install Python, enter pip commands, or
 change the system environment. Luma does not read Hugging Face credentials or
-silently switch engines.
+silently switch engines. Whole Python/runtime bundles are not republished by Luma.
+
+**Availability (2026-10-09):** the current embedded catalog still marks the four
+managed runtime candidates unavailable pending final native evidence, exact pins
+and release review. The steps below describe the supported managed setup flow
+for an enabled, verified recipe; they do not make a pending component available.
+The Windows CPU wheel has no final published size or verified download yet.
+See [the build and publication boundaries](ASR_COMPONENTS_BUILD.md).
 
 ## One-click managed setup
 
 1. Select an optional engine in Settings or task configuration. The original
    whisper.cpp engine and its Turbo preset remain available without this setup.
-2. Select a compatible engine component, review download/install sizes, exact
-   sources and applicable third-party terms, then choose Install. The private runtime is kept in Luma's own data directory;
-   you do not need to install Python or enter terminal commands.
+2. Select an available compatible component, review download sizes, labelled
+   installed-size bounds, exact sources and applicable third-party terms, then
+   choose Install. The private runtime is kept in Luma's own data directory; you
+   do not need to install Python or enter terminal commands.
 3. Download a compatible model separately. Qwen needs both its ASR model and the
    distinct ForcedAligner model. Choose the installed components for this task and
    run the capability check before processing your media.
 
-The initial managed components are Windows x64 Whisper CPU, Apple Silicon MLX
+The initial managed targets are Windows x64 Whisper CPU, Apple Silicon MLX
 Whisper/Metal, and Qwen CPU for either platform. They do not include CUDA. Device
 and minimum macOS-version checks can reject an incompatible component before
 installation. A GPU being present does not make an unsupported backend ready.
 
 Downloads expose progress and cancellation. Complete bytes and SHA-256 values
 are pinned in the application catalog, not accepted from an untrusted remote
-manifest. A component is unpacked into staging, checked and self-tested, then
-activated atomically. Failed installation keeps the previous working component.
+manifest. Verified inputs are unpacked and assembled privately in staging,
+checked and self-tested, then activated atomically. Failed installation keeps
+the previous working component.
 Repair verifies/reinstalls the selected owned component; removal affects only
 Luma-managed copies, not existing external models. Cancel or finish transcription
 before replacing/removing components in use. Old component versions are retained
@@ -51,6 +62,9 @@ component or change Windows security settings.
 
 Advanced external-runtime paths remain available for existing configurations.
 The manual commands below are optional advanced examples, not the standard setup.
+Luma does not install, update or repair those external Python/model paths. Managed
+Repair applies only to Luma-owned components and keeps its normal verification
+and user-assent requirements.
 
 ## Choose an engine
 
@@ -59,6 +73,10 @@ The manual commands below are optional advanced examples, not the standard setup
 | Whisper accelerated | Apple Silicon `auto` / `metal` | MLX Whisper conversion |
 | Whisper accelerated | `cpu`, or Windows/Linux `auto` / `cuda` | CTranslate2 faster-whisper conversion |
 | Qwen3-ASR | `cpu` / `cuda` / `auto` | Original qwen-asr ASR model **and** original Qwen3-ForcedAligner |
+
+This table describes adapter capabilities, including advanced external runtimes.
+It does not mean managed Linux/CUDA packs are provided; the managed targets are
+the CPU/Apple Silicon entries described above.
 
 Automatic selection checks the selected runtime's actual device availability.
 Windows alone does not imply CUDA. Explicit unavailable devices fail with a
@@ -78,14 +96,17 @@ claims. RAM/VRAM remains occupied while that worker stays warm.
 
 The commands below are **user-run setup**, outside Luma. They install software or
 download weights only when you choose to run them. Dependency-free unit tests use
-fixtures; separate native tests execute the pinned private setup recipe. Use separate environments to avoid
-dependency conflicts. Python 3.12 is a practical starting point.
+fixtures; separate native tests execute the pinned private setup recipe. Use
+separate environments to avoid dependency conflicts. Python 3.12 is a practical
+starting point. You maintain these external environments yourself; managed Repair
+does not modify them.
 
 The adapter was checked against the upstream APIs of `mlx-whisper==0.4.3`,
 `faster-whisper==1.2.1`, and `qwen-asr==0.0.6`; actual hardware inference with these
-packages still requires validation on your machine. For these external examples, transitive dependencies are not a reproducible
-lockfile. Managed components instead use fixed, hash-pinned wheel/runtime locks.
-Keep an external working environment stable after testing.
+packages still requires validation on your machine. For these external examples,
+transitive dependencies are not a reproducible lockfile. Managed components
+instead use fixed, hash-pinned wheel/runtime locks. Keep an external working
+environment stable after testing.
 
 ### Apple Silicon: MLX Whisper
 
@@ -116,8 +137,10 @@ python3.12 -m venv "$HOME/.venvs/luma-faster-whisper"
 "$HOME/.venvs/luma-faster-whisper/bin/hf" download dropbox-dash/faster-whisper-large-v3-turbo --local-dir "$HOME/Models/luma/faster-whisper-turbo"
 ```
 
-For Windows CPU, use Luma's managed component. Its reviewed CPU-only CTranslate2
-build excludes CUDA/cuDNN and Intel OpenMP/MKL. The general upstream Windows
+For Windows CPU, prefer Luma's managed component once its verified recipe becomes
+available. Its CPU-only CTranslate2 build excludes CUDA/cuDNN and Intel OpenMP/MKL.
+Final native proof, publication and catalog activation are still required; this
+guide does not supply a ready CPU-wheel download. The general upstream Windows
 CTranslate2 wheel can include GPU libraries and additional terms even when CPU
 execution is selected; it is not the managed CPU recipe. Existing external
 runtimes remain usable through advanced paths, but their dependencies and terms
@@ -170,8 +193,10 @@ On Windows create the venv with `py -3.12 -m venv`, then run its
 `Scripts\python.exe` / `Scripts\hf.exe` as in the faster-whisper example. Use the
 Windows CPU/CUDA command from the PyTorch selector. Upstream qwen-asr's Japanese
 tokenizer dependency may need platform-specific build support if no wheel exists.
-If a compatible environment cannot be installed, use Whisper instead; Luma does
-not attempt to repair or install the runtime automatically.
+If a compatible external environment cannot be installed, use an available
+managed component or native whisper.cpp instead. Luma does not install or repair
+this user-created environment. This does not limit Install/Repair for enabled
+Luma-managed components.
 
 Select Qwen3-ASR, the absolute Python executable, the ASR directory, and the
 **separate forced-aligner directory**. Download full snapshots with tokenizer,
@@ -251,6 +276,16 @@ weight or detect every form of corruption.
 
 ## Validation boundary (2026-10-09)
 
+- **Windows CPU candidate proof failed:** [run 37943815924](https://github.com/csic21/luma-subtitle/actions/runs/37943815924)
+  produced two identical 25,058,630-byte wheels from fresh builds at the same
+  fixed native path, and static closure passed for 156 PE files/1,039 imports.
+  The native verifier then timed out after 900 seconds without stage evidence;
+  imports, model loading, inference and the final loaded-module inventory cannot
+  yet be localized or claimed successful. The failed candidate's exact hash is
+  recorded in [the build guide](ASR_COMPONENTS_BUILD.md); these bytes are not a
+  final installed-runtime size or approved catalog pin. Publication remains
+  blocked. Fixed-path repeatability is not path-independent or cross-machine
+  reproducibility, and the Linux result below does not validate this Windows wheel.
 - **Native Apple Silicon setup proof passed:** MLX and Qwen private offline
   installation reproduced exactly, relocated imports passed, and the actual
   Rust installer exercised install, repair, cancellation and removal. The MLX

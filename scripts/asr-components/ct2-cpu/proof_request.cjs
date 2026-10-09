@@ -7,6 +7,7 @@ const REPOSITORY = 'csic21/luma-subtitle';
 const BRANCH = 'feat/optional-asr-engines';
 const REQUEST_PATH = '.github/requests/ct2-cpu-proof.json';
 const PURPOSE = 'native-cpu-wheel-proof';
+const DIAGNOSTIC_ARTIFACT = 'cpu-wheel-source-notices-1-day';
 const PROOF_JOB = 'Validate request-only CPU proof';
 const MAX_REQUEST = 4096;
 const keys = (o, expected) => o && typeof o === 'object' && !Array.isArray(o)
@@ -17,7 +18,10 @@ function assertRepository(repo) {
 function parseProofRequest(text, commit) {
   if (Buffer.byteLength(text) >= MAX_REQUEST) throw new Error('CPU proof request exceeds bounds');
   const request = JSON.parse(text);
-  if (!keys(request, 'schema_version,source_sha,purpose') || request.schema_version !== 1
+  const plain = keys(request, 'schema_version,source_sha,purpose');
+  const diagnostic = keys(request, 'schema_version,source_sha,purpose,diagnostic_artifact')
+    && request.diagnostic_artifact === DIAGNOSTIC_ARTIFACT;
+  if ((!plain && !diagnostic) || request.schema_version !== 1
       || request.purpose !== PURPOSE || !SHA.test(request.source_sha || '')
       || commit.parents?.length !== 1 || commit.parents[0].sha !== request.source_sha) {
     throw new Error('CPU proof request must pin its exact sole parent and native-proof purpose');
@@ -85,7 +89,8 @@ async function prepareCpuProof({ github, context, core }) {
   if (branch.object.type !== 'commit' || branch.object.sha !== context.sha) throw new Error('Feature branch advanced; stale native proof request');
   core?.setOutput('source_sha', validated.source_sha);
   core?.setOutput('base_sha', validated.base_sha);
+  core?.setOutput('diagnostic_artifact', validated.request.diagnostic_artifact || '');
   return validated;
 }
-module.exports = { REPOSITORY, BRANCH, REQUEST_PATH, PURPOSE, PROOF_JOB, parseProofRequest,
+module.exports = { REPOSITORY, BRANCH, REQUEST_PATH, PURPOSE, DIAGNOSTIC_ARTIFACT, PROOF_JOB, parseProofRequest,
   assertProofRequestOnlyTree, validateProofCommit, prepareCpuProof };

@@ -33,8 +33,23 @@ test('new nested request directory tests the request commit itself with no mutat
   const f = fixture(); const outputs = {};
   const result = await p.prepareCpuProof({ ...f, core: { setOutput: (key, value) => { outputs[key] = value; } } });
   assert.equal(result.source_sha, PROOF); assert.equal(result.base_sha, BASE);
-  assert.deepEqual(outputs, { source_sha: PROOF, base_sha: BASE });
+  assert.deepEqual(outputs, { source_sha: PROOF, base_sha: BASE, diagnostic_artifact: '' });
 });
+test('one-day own-wheel diagnostic retention needs the exact optional literal and all existing push guards', async () => {
+  const f = fixture(), outputs = {};
+  f.state.request.diagnostic_artifact = p.DIAGNOSTIC_ARTIFACT;
+  await p.prepareCpuProof({ ...f, core: { setOutput: (key, value) => { outputs[key] = value; } } });
+  assert.equal(outputs.diagnostic_artifact, 'cpu-wheel-source-notices-1-day');
+  f.context.payload.forced = true;
+  const rejectedOutputs = {};
+  await assert.rejects(p.prepareCpuProof({ ...f, core: { setOutput: (key, value) => { rejectedOutputs[key] = value; } } }));
+  assert.deepEqual(rejectedOutputs, {});
+});
+for (const value of [true, false, 1, null, '', 'cpu-wheel-source-notices-14-days', 'whole-runtime', { days: 1 }]) {
+  test(`invalid diagnostic scope is rejected: ${JSON.stringify(value)}`, async () => {
+    const f = fixture(); f.state.request.diagnostic_artifact = value; await assert.rejects(f.prepare());
+  });
+}
 test('existing request directory and prior inert request may be updated without touching siblings', async () => {
   const f = fixture(); f.state.trees[BASE_GITHUB].push(entry('requests', OLD_REQUESTS, 'tree'));
   f.state.trees[OLD_REQUESTS] = [entry('ct2-cpu-proof.json', PREVIOUS_BLOB), entry('other.json', SAME)];
@@ -133,4 +148,32 @@ test('reusable candidate export remains bound to the dedicated validated caller 
   assert.deepEqual(candidatePaths, ['ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl',
     'luma-ct2-cpu-4.8.2-1-notices.zip', 'luma-ct2-cpu-4.8.2-1-sources.zip', 'publication-proof.json'].sort());
   assert(job.includes('candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}'));
+});
+
+test('diagnostic upload is opt-in, failure-only, one day, literal four-file scope, and never reusable publication', () => {
+  const { text, jobs } = workflowJobs(), job = jobs['windows-cpu-proof'];
+  assert(jobs.request.includes('diagnostic_artifact: ${{ steps.request.outputs.diagnostic_artifact }}'));
+  assert.equal(job.match(/^      CPU_DIAGNOSTIC_EXPORT: (.+)$/m)?.[1],
+    "${{ needs.request.outputs.diagnostic_artifact == 'cpu-wheel-source-notices-1-day' && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && !inputs.source_sha && !inputs.publication }}");
+  assert(job.includes("if: failure() && !cancelled() && env.CPU_DIAGNOSTIC_EXPORT == 'true' && hashFiles('dist/ct2-cpu-diagnostic/diagnostic-manifest.json') != ''"));
+  const section = job.slice(job.indexOf('      - name: Retain explicit failed-verifier diagnostic'), job.indexOf('      - name: Export the three reviewed'));
+  assert(section.includes('retention-days: 1\n'));
+  assert(section.includes('overwrite: false'));
+  assert(section.includes('name: ct2-cpu-DIAGNOSTIC-NOT-FOR-RELEASE-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}'));
+  const names = [...section.matchAll(/^            dist\/ct2-cpu-diagnostic\/(.+)$/gm)].map(x => x[1]).sort();
+  assert.deepEqual(names, ['ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl',
+    'luma-ct2-cpu-4.8.2-1-sources.zip', 'luma-ct2-cpu-4.8.2-1-notices.zip', 'diagnostic-manifest.json'].sort());
+  assert(!text.includes('actions: write'));
+});
+
+test('diagnostic manifest cannot satisfy the unchanged publisher proof schema even if renamed', () => {
+  const publisher = require('./publish.cjs');
+  const diagnostic = { schema_version: 1, kind: 'ct2-cpu-diagnostic', purpose: 'failed-native-verifier-debugging',
+    publication_authorized: false, installable: false, inference_passed: false, origin: { source_sha: PROOF },
+    assets: [], locks: {}, source_exports: [], provenance: {}, build_checks: {}, verification: { outcome: 'timed_out' },
+    evidence: [], retention_days: 1 };
+  assert.throws(() => publisher.validateProof(diagnostic, {}, {}), /Missing or mismatched/);
+  // Renaming a file does not remove its failure-only schema or create passed checks.
+  assert.throws(() => publisher.validateProof({ ...diagnostic, schema: 1, source_sha: PROOF,
+    variant: publisher.VARIANT, checks: Object.fromEntries(publisher.CHECKS.map(key => [key, true])) }, {}, {}), /Missing or mismatched/);
 });

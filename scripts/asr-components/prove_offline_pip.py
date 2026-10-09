@@ -28,25 +28,40 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates):
     if recipe is None:
         return {'tested': False, 'reason': candidate['unavailable_reason']}
     inputs = output / 'recipe inputs é 测试'; inputs.mkdir()
-    runtime_path = output / 'recipe-runtime.json'
-    dump(runtime_path, candidate)
-    artifacts = [(recipe['python'], recipe['python']['sha256'])] + [(wheel, wheel['filename']) for wheel in recipe['wheels']]
-    if recipe.get('windows_crt'):
-        from windows_crt_proof import CONTRACT, ID
-        if recipe['windows_crt'] != ID: raise ValueError('Unreviewed direct CRT recipe')
-        crt = json.loads(CONTRACT.read_text(encoding='utf-8'))['installer']
-        artifacts.append((crt, crt['sha256']))
-    for artifact, name in artifacts:
-        source = cache / artifact['sha256']
-        if source.is_symlink() or not source.is_file() or source.stat().st_size != artifact['bytes'] or sha256(source) != artifact['sha256']:
-            raise RuntimeError('Native installer proof requires the already verified input cache')
-        shutil.copyfile(source, inputs / name)
-    env = dict(os.environ, LUMA_ASR_RECIPE_RUNTIME=str(runtime_path), LUMA_ASR_RECIPE_INPUTS=str(inputs))
-    test = 'native_direct_recipe_installs_repairs_and_removes'
-    owned(['cargo', 'test', '--manifest-path', str(ROOT.parent.parent / 'src-tauri/Cargo.toml'), '--locked',
-           test, '--', '--ignored', '--nocapture'], timeout=1800, env=env)
-    shutil.rmtree(inputs); runtime_path.unlink()
-    return {'tested': True, 'passed': True, 'test': test}
+    fixtures = output/'real worker fixtures é 测试'; owns_fixtures = False
+    runtime_path = output/'recipe-runtime.json'
+    try:
+        dump(runtime_path, candidate)
+        artifacts = [(recipe['python'], recipe['python']['sha256'])] + [(wheel, wheel['filename']) for wheel in recipe['wheels']]
+        if recipe.get('windows_crt'):
+            from windows_crt_proof import CONTRACT, ID
+            if recipe['windows_crt'] != ID: raise ValueError('Unreviewed direct CRT recipe')
+            crt = json.loads(CONTRACT.read_text(encoding='utf-8'))['installer']
+            artifacts.append((crt, crt['sha256']))
+        for artifact, name in artifacts:
+            source = cache / artifact['sha256']
+            if source.is_symlink() or not source.is_file() or source.stat().st_size != artifact['bytes'] or sha256(source) != artifact['sha256']:
+                raise RuntimeError('Native installer proof requires the already verified input cache')
+            shutil.copyfile(source, inputs / name)
+        env = {key:value for key,value in os.environ.items() if not key.upper().startswith('LUMA_ASR_TEST_')}
+        env.update(LUMA_ASR_RECIPE_RUNTIME=str(runtime_path),LUMA_ASR_RECIPE_INPUTS=str(inputs))
+        from real_worker_fixture import final_cpu_recipe, prepare
+        worker_fixture = None
+        if final_cpu_recipe(candidate):
+            if fixtures.exists(): raise ValueError('Worker fixture output must be fresh')
+            owns_fixtures = True
+            fixture_env, worker_fixture = prepare(cache,fixtures); env.update(fixture_env)
+        test = 'native_direct_recipe_installs_repairs_and_removes'
+        owned(['cargo', 'test', '--manifest-path', str(ROOT.parent.parent / 'src-tauri/Cargo.toml'), '--locked',
+               test, '--', '--ignored', '--nocapture'], timeout=1800, env=env)
+        return {'tested': True, 'passed': True, 'test': test,
+                'real_worker_lifecycle': {'tested': bool(worker_fixture), 'fixtures': worker_fixture,
+                'managed_use_lease_tested': False,
+                'scope': 'Existing real worker against test-activated bytes; global managed-use lease integration remains a separate test.'}}
+    finally:
+        shutil.rmtree(inputs)
+        runtime_path.unlink(missing_ok=True)
+        if owns_fixtures and fixtures.exists(): shutil.rmtree(fixtures)
 
 
 def main():

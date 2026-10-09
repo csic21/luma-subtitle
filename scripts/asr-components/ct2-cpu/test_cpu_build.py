@@ -347,14 +347,18 @@ class SourceTests(unittest.TestCase):
         self.assertNotIn('contents: write', workflow)
         self.assertNotIn('packages: write', workflow)
         blocks = re.findall(r'(?m)^          path: (?:\|\n((?:            [^\n]+\n)+)|([^\n]+))', workflow)
-        self.assertEqual(len(blocks), 3)
+        self.assertEqual(len(blocks), 4)
         paths = [line.strip() for block in blocks for text in block for line in text.splitlines() if line.strip()]
         self.assertEqual(set(paths), {'dist/ct2-cpu-reports/*.json', 'dist/ct2-cpu-reports/*.log',
                                      'dist/ct2-cpu-reports/*-CMakeCache.txt', 'dist/direct-crt-reports/*.json',
                                      'dist/ct2-cpu-candidate/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl',
                                      'dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-sources.zip',
                                      'dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-notices.zip',
-                                     'dist/ct2-cpu-candidate/publication-proof.json'})
+                                     'dist/ct2-cpu-candidate/publication-proof.json',
+                                     'dist/ct2-cpu-diagnostic/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl',
+                                     'dist/ct2-cpu-diagnostic/luma-ct2-cpu-4.8.2-1-sources.zip',
+                                     'dist/ct2-cpu-diagnostic/luma-ct2-cpu-4.8.2-1-notices.zip',
+                                     'dist/ct2-cpu-diagnostic/diagnostic-manifest.json'})
         self.assertIn("if: success() && env.CPU_CANDIDATE_EXPORT == 'true'", workflow)
         self.assertIn("github.workflow == 'Publish reviewed CPU wheel'", workflow)
         self.assertIn("github.event_name == 'push'", workflow)

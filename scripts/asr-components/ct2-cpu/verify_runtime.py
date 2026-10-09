@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Executed by the fresh, relocated PBS interpreter, never the build interpreter."""
 import argparse
+from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import importlib
 import importlib.metadata
+import faulthandler
 import io
 import json
 import os
@@ -12,6 +14,108 @@ from pathlib import Path
 import runpy
 import sys
 import time
+
+
+class StageJournal:
+    """Small atomic metadata snapshots survive an outer forced termination."""
+    MAX_EVENTS = 256
+    MAX_BYTES = 256_000
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.started = time.monotonic()
+        self.events = []
+
+    def record(self, stage, state, details=None):
+        if len(self.events) >= self.MAX_EVENTS or len(stage) > 128 or len(state) > 32:
+            raise RuntimeError('Verifier diagnostic event bound exceeded')
+        event = {'stage': stage, 'state': state, 'elapsed_seconds': round(time.monotonic() - self.started, 6)}
+        if details:
+            event['details'] = details
+        events = self.events + [event]
+        payload = json.dumps({'schema': 1, 'publication_authorized': False,
+                              'outer_timeout_seconds': 900, 'traceback_snapshot_after_seconds': 90,
+                              'events': events}, indent=2, sort_keys=True, ensure_ascii=True) + '\n'
+        if len(payload.encode('utf-8')) > self.MAX_BYTES:
+            raise RuntimeError('Verifier diagnostic byte bound exceeded')
+        temporary = self.path.with_suffix(self.path.suffix + '.tmp')
+        temporary.write_text(payload, encoding='utf-8', newline='\n')
+        temporary.replace(self.path)
+        self.events = events
+        print('LUMA_CT2_STAGE ' + json.dumps(event, sort_keys=True, ensure_ascii=True), flush=True)
+
+    @contextmanager
+    def stage(self, name):
+        self.record(name, 'started')
+        try:
+            yield
+        except BaseException as error:
+            self.record(name, 'failed', {'exception_type': type(error).__name__})
+            raise
+        else:
+            self.record(name, 'completed')
+
+
+class ProtocolCapture(io.StringIO):
+    """Keep original frames for assertions, while journaling bounded progress."""
+    MAX_BYTES = 1_000_000
+    MAX_LINE_BYTES = 128_000
+
+    def __init__(self, journal):
+        super().__init__()
+        self.journal = journal
+        self.total = 0
+        self.pending = ''
+
+    def write(self, value):
+        size = len(value.encode('utf-8'))
+        if self.total + size > self.MAX_BYTES:
+            raise RuntimeError('Verifier protocol output bound exceeded')
+        pending = self.pending + value
+        lines = pending.split('\n')
+        if any(len(line.encode('utf-8')) > self.MAX_LINE_BYTES for line in lines):
+            raise RuntimeError('Verifier protocol frame bound exceeded')
+        for line in lines[:-1]:
+            if not line:
+                continue
+            frame = json.loads(line)
+            if not isinstance(frame, dict):
+                raise RuntimeError('Verifier expected protocol object')
+            details = {}
+            for key in ('id', 'event', 'backend', 'device', 'ready', 'reused', 'code', 'message'):
+                item = frame.get(key)
+                if isinstance(item, bool):
+                    details[key] = item
+                elif isinstance(item, str):
+                    details[key] = item[:512 if key == 'message' else 128]
+            if isinstance(frame.get('segments'), list):
+                details['segment_count'] = len(frame['segments'])
+            self.journal.record('worker.protocol', 'frame', details)
+        self.pending = lines[-1]
+        self.total += size
+        return super().write(value)
+
+
+def record_failure(report, error):
+    report.update(passed=False, error=f'{type(error).__name__}: {error}')
+
+
+def validate_loaded_paths(paths, root, system):
+    forbidden = ('cudnn', 'cublas', 'cudart', 'nvrtc', 'nvcuda', 'iomp', 'libomp', 'vcomp', 'mkl', 'tbb')
+    resolved = []
+    for name in paths:
+        path = Path(name); base = path.name.lower()
+        if any(word in base for word in forbidden):
+            raise RuntimeError('Unexpected GPU/OpenMP/MKL native module: ' + name)
+        # Match the shared runtime policy: this exact Windows OS component is
+        # not one of the optional numbered Visual C++ redistributable DLLs.
+        if base != 'msvcp_win.dll' and base.startswith(('msvcp', 'vcruntime', 'concrt', 'vcomp', 'vccorlib')) and not path.is_relative_to(root):
+            raise RuntimeError('Host-global VC runtime leaked into clean proof: ' + name)
+        if not path.is_relative_to(root) and not path.is_relative_to(system):
+            raise RuntimeError('Unexpected native module outside private runtime/Windows: ' + name)
+        resolved.append({'path': str(path.relative_to(root)) if path.is_relative_to(root) else str(path),
+                         'scope': 'private' if path.is_relative_to(root) else 'windows_os'})
+    return resolved
 
 
 def loaded_modules():
@@ -45,16 +149,26 @@ def main():
     a = p.parse_args(); root = a.root.resolve()
     report = {'schema': 1, 'passed': False, 'isolated': bool(sys.flags.isolated),
               'relocated': True, 'system_python_used': False, 'host_crt_fallback_allowed': False}
+    journal = StageJournal(a.report.with_name('inference-stages.json'))
+    journal.record('verifier.bootstrap', 'started')
+    trace = a.report.with_name('inference-traceback.log').open('w', encoding='utf-8')
+    trace.write('One diagnostic stack snapshot after 90 seconds; the outer proof timeout remains 900 seconds.\n')
+    trace.flush()
+    faulthandler.dump_traceback_later(90, repeat=False, file=trace)
     try:
         if sys.platform != 'win32' or sys.version.split()[0] != '3.12.15' or not sys.flags.isolated or not sys.flags.dont_write_bytecode:
             raise RuntimeError('Expected isolated pinned native Windows interpreter')
         if Path(sys.prefix).resolve() != root or not Path(sys.executable).resolve().is_relative_to(root):
             raise RuntimeError('Verifier must run inside the fresh private interpreter')
-        worker = runpy.run_path(str(a.worker))
-        worker['configure_offline'](); sys.addaudithook(worker['offline_audit'])
+        journal.record('verifier.bootstrap', 'completed')
+        with journal.stage('worker.module_load'):
+            worker = runpy.run_path(str(a.worker))
+        with journal.stage('worker.offline_audit'):
+            worker['configure_offline'](); sys.addaudithook(worker['offline_audit'])
         imports = {}
         for name in ('ctranslate2', 'faster_whisper', 'av', 'numpy', 'onnxruntime', 'tokenizers'):
-            module = importlib.import_module(name)
+            with journal.stage('import.' + name):
+                module = importlib.import_module(name)
             origin = Path(module.__file__).resolve()
             if not origin.is_relative_to(root):
                 raise RuntimeError('Imported package escaped private runtime: ' + name)
@@ -62,19 +176,24 @@ def main():
         import ctranslate2
         if ctranslate2.__version__ != '4.8.2' or importlib.metadata.version('faster-whisper') != '1.2.1':
             raise RuntimeError('Unreviewed inference package version')
-        if ctranslate2.get_cuda_device_count() != 0:
+        with journal.stage('device.cuda_count'):
+            cuda_count = ctranslate2.get_cuda_device_count()
+        if cuda_count != 0:
             raise RuntimeError('CPU build unexpectedly reports CUDA')
-        compute = sorted(ctranslate2.get_supported_compute_types('cpu'))
+        with journal.stage('device.cpu_compute_types'):
+            compute = sorted(ctranslate2.get_supported_compute_types('cpu'))
         if not {'float32', 'int8'}.issubset(compute):
             raise RuntimeError('Supported CPU float32/int8 GEMM backends were not built')
         common = {'engine': 'whisper-accelerated', 'device': 'cpu', 'model_path': str(a.model),
                   'audio_path': str(a.audio), 'language': 'en'}
         requests = [dict(common, id='probe', op='probe'), dict(common, id='cold', op='transcribe'),
                     dict(common, id='warm', op='transcribe')]
-        output = io.StringIO()
+        output = ProtocolCapture(journal)
         started = time.perf_counter()
-        worker['serve'](io.StringIO(''.join(json.dumps(x) + '\n' for x in requests)), output)
+        with journal.stage('worker.serve'):
+            worker['serve'](io.StringIO(''.join(json.dumps(x) + '\n' for x in requests)), output)
         elapsed = time.perf_counter() - started
+        journal.record('protocol.validation', 'started')
         frames = [json.loads(x) for x in output.getvalue().splitlines()]
         results = {f['id']: f for f in frames if f.get('event') in {'probe', 'result', 'error'}}
         if not results['probe']['ready']:
@@ -90,29 +209,26 @@ def main():
                 previous = segment['end_ms']
         if results['cold']['reused'] or not results['warm']['reused']:
             raise RuntimeError('Cold/warm model reuse contract failed')
-        paths = loaded_modules()
+        journal.record('protocol.validation', 'completed')
+        with journal.stage('loaded_modules.enumeration'):
+            paths = loaded_modules()
+        journal.record('loaded_modules.validation', 'started')
         system = Path(next(v for k, v in os.environ.items() if k.upper() == 'SYSTEMROOT')).resolve()
-        forbidden = ('cudnn', 'cublas', 'cudart', 'nvrtc', 'nvcuda', 'iomp', 'libomp', 'vcomp', 'mkl', 'tbb')
-        resolved = []
-        for name in paths:
-            path = Path(name); base = path.name.lower()
-            if any(word in base for word in forbidden):
-                raise RuntimeError('Unexpected GPU/OpenMP/MKL native module: ' + name)
-            if base.startswith(('msvcp', 'vcruntime', 'concrt', 'vcomp', 'vccorlib')) and not path.is_relative_to(root):
-                raise RuntimeError('Host-global VC runtime leaked into clean proof: ' + name)
-            if not path.is_relative_to(root) and not path.is_relative_to(system):
-                raise RuntimeError('Unexpected native module outside private runtime/Windows: ' + name)
-            resolved.append({'path': str(path.relative_to(root)) if path.is_relative_to(root) else str(path),
-                             'scope': 'private' if path.is_relative_to(root) else 'windows_os'})
+        resolved = validate_loaded_paths(paths, root, system)
+        journal.record('loaded_modules.validation', 'completed')
         report.update(passed=True, imports=imports, compute_types=compute, loaded_modules=resolved,
                       inference={'model': 'SYSTRAN/faster-whisper-tiny', 'cold_and_warm': True,
                                  'segments': results['cold']['segments'], 'cpu_only': True,
                                  'total_seconds_observed': elapsed, 'performance_claim': False},
                       offline_audit_enabled=True, inherited_python_path_ignored=True)
+        journal.record('verification', 'completed', {'passed': True})
     except BaseException as error:
-        report['error'] = f'{type(error).__name__}: {error}'
+        record_failure(report, error)
+        journal.record('verification', 'failed', {'exception_type': type(error).__name__})
         raise
     finally:
+        faulthandler.cancel_dump_traceback_later()
+        trace.close()
         a.report.write_text(json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + '\n', encoding='utf-8')
 
 

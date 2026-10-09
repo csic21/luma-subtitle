@@ -1,353 +1,387 @@
-# Private ASR component builds
+# Managed ASR setup and CPU-wheel builds
 
-These are opt-in, application-managed components, separate from the native
-whisper.cpp app release. End users do not install Python, run pip, change PATH,
-use an administrator account, or install a compiler. Model downloads are a
-separate explicit choice and are never part of engine assembly. Whole-runtime ZIP
-publication is retired; the active CI uploads only proof metadata. The local ZIP
-format below is retained as a deterministic comparison and security-test fixture.
+Optional ASR setup is separate from the native whisper.cpp application release.
+The shipping design is **direct upstream download, followed by private offline
+assembly on the user's machine**. Luma does not publish assembled Python/runtime
+ZIPs. The only separate binary publication planned here is Luma's narrow
+CPU-only CTranslate2 wheel, with its exact source, notices and proof metadata.
 
-## Pinned component set
+Users explicitly review the selected component's sources, sizes and applicable
+terms before Install or Repair. They do not install system Python, run terminal
+pip commands, change PATH, use an administrator account or install a compiler.
+Luma's pinned private pip runs only during managed setup, never transcription.
+ASR/forced-aligner model weights are separate, explicit downloads and are never
+part of engine assembly or public component artifacts. An upstream package's
+bundled tokenizer data, such as Nagisa's, is part of that package's locked input.
 
-Component version: `1.2.0-r1`. Separate proposed immutable release tag:
-`asr-components-1.2.0-r1` in `csic21/luma-subtitle`, published as a prerelease with
-`make_latest:false`. This is not an application updater release. The application
-release tag, stable latest release, and updater manifest are unchanged.
+**Activation status (2026-10-09):** the embedded runtime catalog still marks all
+four candidates unavailable. Review-only recipe generation does not activate
+those entries. Final native evidence, exact catalog pins and release review are
+required. CPU-wheel proof [run 37943815924](https://github.com/csic21/luma-subtitle/actions/runs/37943815924)
+**failed at the native verifier's 900-second timeout**. Its two fresh fixed-root
+builds produced identical 25,058,630-byte candidate wheels, SHA-256
+`58100ba77f97900b6959e220b30da805743977ea9337033b1f0f4b1ef7b88410`.
+Static dependency closure passed for 156 PE files and 1,039 imports. The verifier
+left no stage evidence, an empty inference log and no inference report, so the
+stall cannot yet be localized to imports, model loading, inference or the final
+loaded-module inventory. None of those runtime stages is established as passed.
+The observed wheel identity belongs to this failed candidate: it is not a final
+install-size measurement, approved download pin or catalog activation. Publication
+remains blocked. Passing build/setup checks alone does not authorize release or
+establish model inference on every target.
 
-| Pack | Native platform | Minimum OS | Core packages | Wheel download bytes |
+## Current component targets and size boundaries
+
+The managed recipe version is `1.2.0-r1`. This identifies private setup recipes,
+not an active whole-runtime release tag.
+
+| Target | Native platform | Minimum OS | Core packages | Locked upstream wheel bytes only |
 | --- | --- | --- | --- | ---: |
-| faster-whisper-cpu-windows-x64 | Windows x64 | Windows 10 | faster-whisper 1.2.1, CTranslate2 4.8.2 | 85,004,906 |
+| faster-whisper-cpu-windows-x64 | Windows x64 | Windows 10 | faster-whisper 1.2.1, Luma CPU CTranslate2 4.8.2 | Pending final CPU wheel |
 | mlx-whisper-metal-macos-arm64 | Apple Silicon | macOS 14 | mlx-whisper 0.4.3, MLX/MLX Metal 0.29.3, PyTorch 2.9.1 | 198,349,117 |
 | qwen3-asr-cpu-windows-x64 | Windows x64 | Windows 10 | qwen-asr 0.0.6, PyTorch 2.9.1 CPU, Transformers 4.57.6 | 363,486,390 |
 | qwen3-asr-cpu-macos-arm64 | Apple Silicon | macOS 14 | qwen-asr 0.0.6, PyTorch 2.9.1, Transformers 4.57.6 | 293,589,133 |
 
-The last column is the exact sum of the selected upstream wheel sizes. It is
-**not** the final compressed archive size or installed footprint. Native build
-manifests record those measured quantities, hashes, and file counts. Runtime
-archives add 22,011,023 download bytes on Windows or 25,013,243 on macOS before
-repacking. Initial compressed planning estimates are roughly 100–160 MB for
-faster-whisper, 200–280 MB for MLX, and 300–450 MB for Qwen, excluding weights.
-Do not display estimates as measured available disk space or memory requirements.
+The numeric column sums the exact selected upstream wheel sizes in the existing
+locks. It excludes Python, the Windows CRT prerequisite, model weights, temporary
+staging/cache copies and installed expansion. Python adds 22,011,023 download
+bytes on Windows or 25,013,243 on macOS. The fixed direct-Microsoft package adds
+25,635,768 bytes where required. These are individual input sizes, **not** final
+installed totals, free-space measurements, compressed runtime assets or memory
+requirements. The old Windows faster-whisper total used the rejected upstream
+CT2 wheel and is not a valid total for the new CPU recipe.
 
-Qwen CPU remains experimental and high-memory. This recipe never downloads its
-multi-GB ASR/aligner weights. Both weights are needed for timed subtitles, and both
-are loaded as FP32 on CPU; the 0.6B pair alone requires approximately 7.5 GB of
-weight memory before activations and overhead. A passing import check is not an
-inference or memory-fit result. Native whisper.cpp remains the existing GPU route.
+`measure_recipe_caps.py` reads only already verified local archives; it does not
+fetch missing inputs. `recipe-caps.json` labels measured archive member counts
+separately from conservative enforced extraction/final-tree caps. The two Qwen
+candidates use a 4 GiB/100,000-file final-tree ceiling; this is not a measured
+installed footprint. Final CPU recipe sizes/caps must be recomputed from the
+approved wheel, never copied from the old upstream-CT2 candidate.
 
-MLX's macOS 14 minimum is separate from the base app's lower OS requirement.
-Metal availability is checked on the actual machine. Hosted CI without a Metal
-device records `metal_available:false, metal_tested:false`; CPU tensor execution
-is never reported as Metal validation. No MLX model inference is claimed here.
+Qwen CPU remains experimental and high-memory. Both ASR and aligner weights are
+loaded as FP32 on CPU; the 0.6B pair alone needs approximately 7.5 GB of weight
+memory before activations and overhead. Imports do not establish inference or
+memory fit. Native whisper.cpp remains the existing GPU route. MLX's macOS 14
+minimum is separate from the base app's lower OS requirement; a real Metal device
+must be checked on the target machine.
 
-## Runtime and package provenance
+## Input provenance and trust
 
-The private interpreter is CPython **3.12.15**, from the official Astral
+The private interpreter is CPython **3.12.15** from the official Astral
 [python-build-standalone 20261003 release](https://github.com/astral-sh/python-build-standalone/releases/tag/20261003).
-`packs.json` pins each install-only-stripped archive's URL, SHA-256 and byte count.
-These vendor distributions are [designed to be portable and self-contained](https://github.com/astral-sh/python-build-standalone).
-The app uses an absolute path to the interpreter within its component directory.
-It does not register Python, create a venv tied to a CI path, or fall back to a
-system interpreter.
+`packs.json` pins its install-only-stripped URL, SHA-256 and byte count. The app
+uses an absolute private interpreter path, with no system-Python fallback or
+registration and no venv tied to a CI path.
 
-All package inputs are exact, platform-specific wheels uploaded by their
-publishers to PyPI. `scripts/asr-components/locks/<pack>.json` records filename,
-version, HTTPS origin, exact bytes and SHA-256. Build jobs consume only those
-records. There is no runtime resolver, pip install, moving `latest` URL, source
-build, model download, or package repair. The `.txt` and `.in` files document the
-maintainer resolution; they are not executed by the app or build workflow.
+For upstream packages, `scripts/asr-components/locks/<pack>.json` records each
+publisher's exact platform wheel, version, HTTPS origin, bytes and SHA-256.
+Python comes directly from Astral, wheels such as PyAV and PyTorch directly from
+their original publisher distribution, and the CRT package directly from
+Microsoft. Luma does not mirror, proxy or republish these runtime inputs. The
+exception is the separately reviewed Luma CPU CT2 wheel, whose immutable URL,
+bytes and hash must be pinned after its own guarded publication. The original
+Windows CT2 wheel is excluded from the current managed recipe.
 
-The separately published official PyPI Windows `torch==2.9.1` wheel has been
-inspected: 110,940,568 bytes, SHA-256
+The verified application downloader owns all artifact downloads. Compiled catalog
+pins and reviewed recipes are the trust inputs; an untrusted remote manifest
+cannot replace them. There is no network dependency resolution, source build or
+moving `latest` URL during setup. The `.txt`/`.in` maintainer resolution files are
+not executed by the app. Model downloads remain separate and preserve model cards.
+
+The official PyPI Windows `torch==2.9.1` input is 110,940,568 bytes, SHA-256
 `81a285002d7b8cfd3fdf1b98aa8df138d41f1a8334fd9ea37511517cedf43083`.
-Its `torch/version.py` reports `2.9.1+cpu`, `cuda=None`, `hip=None`, `xpu=None`,
-and its archive contains no CUDA DLL/PYD files. Native smoke must additionally
-check the actual imported runtime. This source is distinct from the official
-CPU-index wheel with a similar name. The inaccessible `download-r2.pytorch.org`
-artifacts are not used, rewritten, proxied, or retried by this recipe.
+Its inspected metadata reports `2.9.1+cpu`, `cuda=None`, `hip=None`, `xpu=None`,
+and its archive has no CUDA DLL/PYD files. Native checks must still verify the
+actual imported runtime. This is distinct from the similarly named CPU-index
+wheel; inaccessible `download-r2.pytorch.org` artifacts are not substituted,
+proxied or used by this recipe.
 
-No CUDA pack is provided. NVIDIA's CUDA/cuDNN redistribution terms, driver
-requirements, matching CTranslate2/PyTorch versions and substantially larger
-payloads require a separate source/license/size assessment. Installing a CPU pack
-does not make CUDA available. No new signing credentials are requested.
+No managed CUDA pack is provided. CUDA/cuDNN terms, drivers, matching native
+versions and payload sizes need separate review. Selecting CPU execution does
+not make a GPU-containing wheel an acceptable CPU delivery input. User assent
+cannot authorize a use excluded by a vendor's terms.
 
-## Normalized archive contract
+## Private offline assembly, activation and Repair
 
-Each release asset is `luma-asr-<pack-id>-1.2.0-r1.zip`. The archive has no enclosing
-folder and contains only ordinary files with safe relative paths; upstream
-internal symlinks are copied as ordinary files. Entry points are:
+`assemble.py` is the shared install-time entrypoint for CI and the application.
+It uses the exact private PBS interpreter and bundled **pip 26.2.1**, launched
+with `-I -S -B -u -X utf8`. It adds only the known private site directory without
+processing startup `.pth` files or site-customization hooks.
 
-- Windows: `python.exe`, with `Lib/site-packages/`
-- macOS: `bin/python3`, with `lib/python3.12/site-packages/`
+Every wheel is rechecked for exact bytes/hash, and the wheelhouse must contain
+exactly the approved files. Requirements contain direct local file URLs with one
+exact SHA-256 per wheel. Pip runs with no index, dependency resolution, source
+builds, bytecode compilation or cache. Inherited environment and `PIP_*` options
+are cleared; `PIP_CONFIG_FILE` is the platform null device, and the bootstrap
+asserts that no global/user/site configuration loads. An audit guard installed
+before pip imports denies network and child-process operations. The Rust caller
+owns the only helper process, applies a timeout, and kills/reaps it on cancellation
+or error. This is defense in depth, not an OS sandbox for arbitrary native code.
 
-`component.json`, `self_test.py`, `LICENSES.json`, `THIRD_PARTY_NOTICES.txt`, and
-runtime license files are included. The application continues to supply its
-reviewed `worker.py`, preserving the existing process lifecycle and protocol.
-The worker is invoked with `-I -B -u -X utf8` in verification; application launch
-uses isolated mode as well. `-B` only suppresses generated bytecode during tests.
+Installation uses a fresh private interpreter's explicit `--prefix`, preserving
+standard wheel `.data/data` placement. The old bootstrap setuptools package is
+removed before replacement. The bootstrap pip, generated launchers and reviewed
+setuptools startup hook are removed from the finished component. Generated local
+`direct_url.json` records are checked against approved wheel identities, then
+removed. Deterministic `ASSEMBLY.json` preserves original upstream URLs/hashes
+without CI/user paths. Only RECORD rows for deliberately removed files are dropped;
+retained package file hashes and notices remain intact.
 
-No pip/ensurepip, generated console launchers, CI venv paths, bytecode or test logs
-are shipped. A wheel's library and runtime data files are retained; CLI launcher
-and developer header installation schemes are not used. ZIP entries are sorted,
-have fixed timestamps and normalized modes, and use the pinned private Python's
-zlib. Native CI builds each component twice into fresh directories and compares
-all output bytes. Reproducibility is an observed CI requirement, not an assumed
-property. Assets at or above 2,000,000,000 bytes are rejected.
+The app assembles into owned staging, verifies the bounded tree, self-tests it,
+and activates atomically. Failed setup preserves the previous working component.
+Managed **Repair** verifies/reinstalls the selected owned component through this
+same verified recipe. Removal affects only Luma-owned copies, and replacement or
+removal waits until the component is not in use. External Python/model paths are
+advanced user-managed configurations: Luma does not install or repair them.
 
-The per-pack manifest contains immutable source SHA, component identity, runtime
-entry point, OS minimum, exact installed byte/file counts, and archive URL/bytes/
-SHA-256. The manifest is printed with its own SHA-256 in the build log. It becomes
-an installer trust input only after approved publication and catalog pinning.
+`generate_recipes.py` combines exact input bounds, Python/engine notices,
+dependency inventory and applicable proprietary terms into review-only output.
+CI generates it twice under `RUNNER_TEMP`, compares bytes and logs its hash.
+The generator never changes the production catalog and retains an unavailable
+reason for each candidate. `engine-terms.lock.json` pins displayed engine texts
+and source-version evidence; an inventory is not a blanket license grant or a
+runtime pass. The Windows faster-whisper candidate remains excluded until the
+CPU wheel and complete app-local dependency recipe are approved.
 
-## Licenses and sources
+## Licenses, notices and redistribution boundary
 
-The ZIP preserves the actual notices shipped in each wheel, including notices
-outside `.dist-info`, and records their paths and package/source identities in
-`LICENSES.json`. Original wheel metadata is preserved. These components contain
-multiple licenses; the engine's MIT or Apache license is not a blanket license
-for dependencies or bundled native libraries.
+Private direct-upstream assembly does not grant Luma permission to redistribute
+the downloaded binaries. Applicable upstream terms remain in force; required
+terms must be displayed for explicit assent before the relevant download.
+The engine's MIT/Apache notice does not cover every bundled dependency. Preserve
+actual wheel notices, including those outside `.dist-info`, and source identities;
+do not imply OpenAI, Alibaba, MLX or other upstream authors endorse this assembly.
+ASR/aligner model licenses are a separate review and download decision.
 
 Astral install-only archives omit the full distribution's third-party license
-set. We extracted `PYTHON.json` and all `python/licenses/*` from each exact full
-vendor archive, checked its archive digest, and committed these notices under
-`scripts/asr-components/licenses/`. `licenses.lock.json` pins every retained file
-and its upstream full-archive source. Every build rechecks these hashes and copies
-the notices. This includes CPython and the vendor's OpenSSL, zlib, bzip2, libffi,
-SQLite and other native-library notices. The full runtime metadata identifies
-linked components and license paths.
+set. The exact full-vendor archives were hash-checked to retain `PYTHON.json` and
+`python/licenses/*` under `scripts/asr-components/licenses/`.
+`licenses.lock.json` pins each notice and its full-archive origin, including
+CPython, OpenSSL, zlib, bzip2, libffi, SQLite and other native-library notices.
+Supplemental locked material covers the missing macOS zlib-ng 2.2.4 notice.
+Original package metadata/source references are retained; PyTorch, torchvision
+and torchaudio revisions are recorded separately where no PyPI sdist exists.
 
-PyPI source distributions, where published, are recorded with exact URLs and
-hashes. PyTorch, torchvision and torchaudio source revisions are separately
-recorded because those binary releases do not supply PyPI source distributions.
-The corresponding-source obligations of native dependencies still apply to
-redistributors; retaining an inventory does not waive them. In particular review
-PyAV/FFmpeg, numerical libraries, PyTorch's bundled notices, and runtime native
-libraries before publishing. Do not strip licenses or imply OpenAI/Alibaba/MLX
-endorses the combined distribution. No model licenses are included under this
-runtime license grant; model cards are preserved with separate model downloads.
+The selected PyAV 19.0.1 Windows wheel includes FFmpeg, libx264, libx265,
+libiconv and GCC runtime libraries, while its own license directory contains
+PyAV's BSD notice and authors. Those notices alone do not establish the bundled
+libraries' complete terms or corresponding-source fulfillment. See the
+[upstream wheel-license report](https://github.com/PyAV-Org/PyAV/issues/2270)
+and [FFmpeg build project](https://github.com/PyAV-Org/pyav-ffmpeg).
+This blocks republishing a combined runtime; it is not itself an import failure.
+The shipping route fetches the original PyAV wheel directly and does not publish
+PyAV or FFmpeg binaries. The same separation applies to PyTorch, python-soxr,
+soundfile, Microsoft CRT and other native inputs. Neither direct delivery nor
+retaining notices waives applicable terms or source duties of a redistributor.
 
-### Reviewed supplemental notices and CPU-only trimming
+The old upstream CT2 wheel's Intel OpenMP/NVIDIA issues are not resolved by user
+assent or deleting an unused DLL. That wheel is excluded. Luma's CPU wheel instead
+builds a separately reviewed permissively licensed native closure, described below.
+No new signing credentials or expanded publication permissions are requested.
 
-The build supplements the vendor's missing macOS zlib-ng 2.2.4 notice from its
-exact official source and preserves the CTranslate2 4.8.2 MIT license, oneDNN
-3.1.1 license/third-party notices, and the exact Intel OpenMP 2025.3.0 license and
-third-party notices. All supplemental files and their sources are hash-locked;
-`licenses/SUPPLEMENTAL-SOURCES.json` explains their origins. The official Intel
-PyPI wheel contains a byte-identical CTranslate2 OpenMP DLL, which establishes the
-notice provenance but does not by itself establish redistribution clearance.
+## Separate CPU-only CTranslate2 wheel
 
-The upstream CTranslate2 Windows recipe at
-`d44d2d069eb88c7b7804da864c10c201501cb4a9` builds with `WITH_CUDNN=OFF` yet copies
-`cudnn64_9.dll` into the wheel. `pruning.json` now omits that exact unused 266,288-byte
-file from the CPU-only component. The builder pins the CTranslate2 DLL identity,
-parses its normal PE imports, rejects any CUDA/cuDNN import and any unreviewed
-delay-import directory, and checks the omitted file's exact bytes/hash before
-removing it. `INSTALLATION_CHANGES.json` records this operation. Native CPU
-imports and real Tiny cold/warm inference must pass again after this change.
-The Intel OpenMP DLL remains a direct dependency and is not removed or replaced.
+The dedicated recipe in `scripts/asr-components/ct2-cpu/` builds official
+CTranslate2 4.8.2 commit `d44d2d069eb88c7b7804da864c10c201501cb4a9` with static
+oneDNN 3.1.1, exact cpu_features/spdlog sources and pybind11 headers. CUDA, cuDNN,
+HIP, MKL and OpenMP runtimes are disabled. oneDNN uses its sequential CPU runtime
+with MATMUL, CONVOLUTION and REORDER enabled. It may be slower than the upstream
+multithreaded MKL/OpenMP variant; no speedup or performance parity is claimed.
+The output is `ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl`.
+Library sources are unmodified; the wheel adds reviewed notices/provenance and
+normalized packaging. It contains no Microsoft DLLs or assembled Python runtime.
 
-Intel's exact redist designation and the applicability of nested notices remain
-unresolved. Preserving those notices is **not** a blanket declaration that the
-DLL is open source or freely redistributable under the app's GPL. The Qwen packs'
-python-soxr and soundfile bundled native libraries also require corresponding
-source/notices review. These are publication holds alongside PyAV below.
+`sources.lock.json` and `notices.lock.json` bind every source/header, tool input,
+flag and notice. The native closure uses MIT, Apache-2.0, BSD and Zlib licenses;
+complete retained notices include embedded third-party code. The source ZIP
+includes exact compiled-source dependencies, reviewed recipe/locks and provenance.
+Luma's recipe scripts retain their own GPL license; this does not relicense
+upstream libraries. Build-tool/Python binaries and inference weights are excluded.
 
-### Publication blocker: PyAV bundled libraries
+The original CT2 source tar remains the exact hash-checked **build input**. For
+public source export only, five reviewed unused `tests/data/models/**/model.bin`
+fixtures are omitted because `BUILD_TESTS=OFF`. Every retained tar record,
+compiled source, license and fixture metadata file is unchanged. `SOURCE-EXPORTS.json`
+and the public proof record the original archive identity, every omitted member's
+name/size/hash, retained inventory, and deterministic source-only export identity.
+Any omission drift fails; the whole model subtree is not removed silently.
 
-The selected PyAV 19.0.1 Windows wheel was inspected. Its `av.libs/` includes
-FFmpeg DLLs, libx264, libx265, libiconv and GCC runtime libraries, while its included
-license directory contains only PyAV's BSD notice and authors. Those top-level
-metadata do **not** describe all bundled native-library terms. The publisher must
-supply the exact dependent licenses and corresponding-source fulfillment before
-publishing affected packs; source package links for PyAV alone do not resolve this.
-See the [upstream wheel-license report](https://github.com/PyAV-Org/PyAV/issues/2270)
-and [PyAV's FFmpeg build project](https://github.com/PyAV-Org/pyav-ffmpeg).
-This is a release blocker, not a runtime import failure. Native build/test work may
-continue, but current reports are not redistribution clearance.
+### Native proof and repeatability scope
 
-## Build and verification
+`.github/workflows/asr-ct2-cpu.yml` runs cheap source guards on PRs. Native work
+requires an explicit validated request-only push, manual proof or pinned reusable
+publication invocation. A proof request under `.github/requests/ct2-cpu-proof.json`
+must be the only change in a single non-forced feature-branch push, name its sole
+parent and preserve the exact tree elsewhere. The request commit itself is built;
+run, jobs, checkout and report source identities must agree. A cheap PR guard is
+not native proof.
 
-The read-only `.github/workflows/asr-components.yml` runs on native Windows x64
-and macOS arm64 runners. PR jobs check out `pull_request.head.sha` explicitly.
-It is also callable with an exact `source_sha` and component `tag`. Every job is
-named `Build component <pack-id>`. The primary proof assembles the exact inputs
-twice with the shared offline installer, compares output bytes, tests relocation
-and imports, and then runs the genuine Rust direct-recipe lifecycle test for
-install, repair, cancellation rollback and removal. The legacy whole-runtime ZIP
-reference build and its duplicate installer run are no longer active CI steps.
-Archive/security unit tests remain required, alongside final aggregate native
-verification for the exact candidate source.
+The Windows proof requires all of the following:
 
-Each job uploads only `asr-offline-pip-proof-<pack-id>`, containing
-`<pack-id>.offline-pip-proof.json`. No runtime binaries, model weights or input
-caches are uploaded. A missing recipe or failed native dependency check is not
-reported as a successful end-user installation.
+- Exact preinstalled Visual Studio/SDK versions, compiler/tool hashes and an
+  early actual compiler/path-mapping probe.
+- Two fresh builds at the **same canonical native source/build path**, with
+  sources re-extracted and the native root/objects removed between builds.
+  Retained complete wheel bytes/hashes must match, with no native object-cache
+  reuse. Actual paths/freshness remain diagnostic evidence; deterministic public
+  provenance records only the strategy.
+- Private PBS/offline assembly using the local CPU wheel; the original upstream
+  CT2 wheel is skipped before fetch. All normal/delay PE dependencies and actually
+  loaded native modules must close within the private runtime or allowed OS files.
+  No host-global optional CRT, GPU, MKL or OpenMP fallback is accepted.
+- Relocation to a Unicode/spaced path, isolated imports, empty PATH, poisoned
+  inherited Python configuration and fresh home/cache, then actual pinned Tiny/JFK
+  cold/warm speech inference with valid text/timestamps and model reuse.
 
-The build host's Python handles build orchestration only. The test extracts the
-ZIP, verifies actual uncompressed bytes/counts, moves it to another directory with
-spaces and non-ASCII characters, and launches its private interpreter. HOME and
-caches are clean; PATH has no executables; PYTHONHOME and PYTHONPATH are poisoned;
-user site is disabled. `sys.prefix`, all Python search paths, imported package
-paths, and actually loaded native libraries must remain inside the component or
-OS-owned library directories. The self-test blocks Python network and subprocess
-audit events before importing ML packages. This is defense in depth, not an OS
-sandbox for arbitrary native code.
+This proves, if successful, fixed-path fresh-build repeatability on the recorded
+CI toolchain/host. It does **not** prove path independence, cross-machine or
+cross-toolchain binary reproducibility, performance, or old/non-AVX CPU support.
+Matching hashes do not substitute for native inference; inference on one wheel
+does not excuse a repeat-build mismatch.
 
-Evidence explicitly distinguishes:
+### Guarded publication and catalog activation
 
-- Private runtime import/API checks and tiny tensor operations
-- Offline JSON-lines path rejection, clean EOF shutdown, idle termination/reaping,
-  and a fresh-worker recovery request (not Qwen inference cancellation)
-- Actual faster-whisper Tiny CPU cold/warm inference with a pinned public
-  11-second JFK fixture, checking text, timestamp validity and warm reuse
-- MLX device/tensor capability, with explicit Metal booleans; no model inference
-- Qwen imports/API only; no ASR/aligner weights, inference, memory fit or speed claim
+Ordinary CPU proofs upload JSON/log/CMake-cache evidence only. Successful proof
+constructs local wheel/source/notices candidates and `publication-proof.json`,
+with `publication_authorized:false`. Only the dedicated validated publisher may
+export those exact four files as a candidate artifact. No private runtime,
+Microsoft DLL, model or download cache is uploaded.
 
-The MLX Tiny fixture metadata read was paused; this workflow intentionally does
-not fetch it, substitute Turbo weights, or report a model smoke. The existing
-reviewed SYSTRAN Tiny fixture manifest and a pinned whisper.cpp JFK sample are
-used only by the faster-whisper CI test, never bundled into user engine archives.
+The dormant `.github/workflows/asr-cpu-wheel-publish.yml` requires separate
+maintainer approval and a request-only commit at `.github/asr-cpu-wheel-request.json`.
+Its sole parent must be the exact tested source. The request binds repository,
+feature branch, source, successful run/attempt, lock identities and expected
+wheel/source/notices/proof sizes and hashes. Historical checks use immutable
+`run.head_sha` and each `job.head_sha`, not a PR's mutable current head.
+A same-source rebuild must match the approved native proof and asset pins.
+Only the validated final publish job receives `contents:write`.
 
-Run dependency-free packaging/harness tests locally:
+The separate tag is `asr-ct2-cpu-4.8.2-1`, a prerelease with explicit
+`make_latest:false`, outside application `v*` releases. Existing tags/assets are
+never overwritten, deleted or retargeted. An exact completed retry is read-only;
+mismatches fail closed. Stable application `/releases/latest` and downloaded
+`latest.json` identities are independently checked before and after mutation.
+A GitHub permission failure is surfaced unchanged; the publisher must not change
+its pinned target or expand credentials to bypass a Workflows-permission denial.
+Publication still does not activate the app catalog: that requires a separately
+reviewed immutable wheel pin and complete direct-source setup recipe.
+
+## Native setup evidence and functional boundaries
+
+`.github/workflows/asr-components.yml` is read-only and tests exact-source
+private offline assembly on native Windows x64 and macOS arm64. Each eligible
+recipe is assembled twice and compared, relocated and import-tested, then passed
+to the actual Rust installer lifecycle test for Install, Repair, cancellation
+rollback and removal. The generated original-CT2 Windows candidate is deliberately
+unavailable; the dedicated CPU proof supplies its replacement evidence. A missing
+recipe or failed native dependency gate is not successful setup.
+
+The workflow uploads only `asr-offline-pip-proof-<pack-id>` JSON evidence. Private
+runtime binaries, model weights and caches stay out of artifacts. Test isolation
+checks private Python search/import paths and actually loaded native libraries.
+Python network/subprocess audit guards are defense in depth, not an OS sandbox.
+
+Keep these evidence categories separate:
+
+- Apple Silicon MLX/Qwen setup has passed private offline assembly repeatability,
+  relocated imports and actual Rust install/repair/cancel/remove lifecycle tests.
+  A real Metal tensor ran on the MLX host; this is not Whisper model inference.
+- The Linux faster-whisper Tiny/JFK functional smoke exercised the real worker,
+  cold/warm transcription, timestamp/SRT validation, export, inference cancellation
+  and recovery. It does not validate the new Windows CPU wheel.
+- Private runtime imports/API checks and small tensor operations do not load
+  ASR/aligner weights. Qwen imports, alignment dataclasses and metadata-only probe
+  fixtures are not Qwen speech inference, memory-fit or speed results.
+- JSON-lines path rejection, clean EOF, idle termination/reaping and worker
+  recovery tests are process/protocol evidence, not inference cancellation unless
+  a real loaded model was transcribing at the time.
+- MLX device reports distinguish `metal_available` from `metal_tested`; a CPU
+  tensor on a host without Metal must never be called Metal validation. No MLX
+  model inference is claimed. Qwen real-model proof is separately resource-gated;
+  its existence alone is not a passing result.
+
+The pinned SYSTRAN Tiny model and whisper.cpp JFK sample are CI inference inputs
+only. No test model weights are included in public CPU assets or managed engine
+assembly. Representative accuracy, speed/peak-memory comparisons and complete
+native desktop UI/queue smoke remain separate checks. See [OPTIONAL_ASR.md](OPTIONAL_ASR.md)
+for the dated user-facing validation boundary.
+
+## Windows private dependencies
+
+### Managed Nagisa initialization
+
+Qwen pins Nagisa 0.2.11 and DyNet38 2.2. Nagisa's default absolute model path goes
+through a native narrow-string API that fails under Unicode Windows paths.
+The app-owned `src-tauri/src/asr/nagisa_compat.py` helper is embedded into the
+managed worker/self-test, never loaded from a user-selected path. External
+Python environments are unchanged.
+
+Before worker activity threads, it checks exact private versions, bounded
+metadata, retained RECORD files and module origins. For one official default
+`Tagger` construction only, it supplies supported relative file arguments from
+Python's Unicode-aware cwd. It restores constructor, loader and cwd in `finally`;
+partial initialization failure is fatal. Original wheel bytes and the public API
+remain unchanged. Native proof compares actual Japanese tokens/POS with ordinary
+ASCII-path initialization and checks restoration after a deliberate error.
+This uses bundled tokenizer data, not Qwen ASR weights, and does not establish
+Qwen inference or CRT closure.
+
+### Direct Microsoft CRT prerequisite
+
+The implemented Windows Qwen candidate selects `windows_crt:msvc-14.44.35211-x64`;
+the future CPU Whisper recipe must bind its reviewed prerequisite too. This is
+one fixed package contract, not a generic installer. The package executable is
+never run. Bounded exact CAB extraction yields only original `msvcp140.dll`,
+`msvcp140_1.dll` and English/Chinese RTF notices. Existing PBS VCRUNTIME companions
+must match the exact same-version originals. Full English/Chinese EULAs are
+shown and hashed before assent and package download. Source identities and
+original RTF hashes are preserved; this grants no binary redistribution right.
+
+Install and Repair use bounded, cancellable Windows certificate-chain/revocation
+validation. Trust checks can need internet even with cached bytes; private pip
+stays offline, but fully offline Repair is not promised. Failures preserve the
+current component and original trust error. No global install, admin access,
+security-policy changes or Gatekeeper/SmartScreen bypass is used.
+
+Native CI verifies signatures and exact extraction, protects the CRT files during
+wheel preflight, and checks receipts after pip/activation. Whole-tree normal and
+delay imports include Torch, PyAV and DyNet; loaded optional CRT/OpenMP libraries
+must remain private. Unknown missing libraries fail rather than widening the
+two-DLL policy. A CI-only CPU test copy from the licensed hosted Visual Studio
+installation is technical evidence, never authority to publish a CRT sidecar.
+
+The direct-CRT proof compiles the real application's `main.rs` with
+`cargo rustc --locked --bin luma-subtitle -- -C debug-assertions=no`, checks its
+Windows GUI subsystem, and invokes only the fixed early signature-helper mode.
+It tests online/cache-only trust separately, rejects invalid roles/paths, and
+uses Unicode/spaced paths, poisoned PATH and bounded inherited handles. This is
+not a full release/bundle or UI test; no downloaded installer is launched.
+No macOS Developer ID/notarization or Windows SmartScreen reputation is claimed.
+
+## Historical ZIP fixtures only
+
+`build.py`, the normalized `luma-asr-<pack-id>-1.2.0-r1.zip` layout,
+`asr-components-1.2.0-r1` tag naming and the old whole-runtime controller are
+retained for deterministic comparison/security unit fixtures. They are **not**
+the shipping route; `.github/workflows/asr-components-publish.yml` has no
+publication path. There is no proposed whole-runtime prerelease.
+
+Those fixtures use ordinary safe relative files, normalized ZIP order/timestamps,
+fixed entry points, component manifests and notice inventories. Archive extraction,
+traversal/link rejection, byte/file ceilings and deterministic-record tests remain
+useful. The historical `pruning.json` removal of one exact unused cuDNN DLL and
+its `INSTALLATION_CHANGES.json` receipt are not the current CPU build strategy
+and do not clear the upstream wheel's Intel/NVIDIA redistribution issues.
+The active CPU recipe builds from source and never fetches or prunes that wheel.
+
+Run dependency-free source/packaging guards locally:
 
 ```sh
 python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_*.py' -v
+node --test scripts/asr-components/ct2-cpu/publish.node-test.cjs scripts/asr-components/ct2-cpu/proof_request.node-test.cjs
 ```
 
-Native verification remains required before publishing. No macOS Developer ID
-signature/notarization or Windows SmartScreen reputation is claimed. The build
-never removes quarantine, bypasses Gatekeeper/SmartScreen, changes PATH or requires
-administrator permissions. A native CI import pass does not establish first-launch
-behavior on every clean user machine.
-
-## Publication boundary
-
-Whole-runtime binary publication is retired. The historical release/controller
-contract below is not an active delivery route; any future reviewed CPU-only
-dependency publication requires its own explicit approval and source closure.
-
-The build workflow has read-only repository permissions and never uploads release
-assets, creates tags, modifies the app release, or updates the application catalog.
-A separately reviewed publication controller must verify the exact successful PR
-source/run, approved archive and manifest hashes, and rebuilt evidence before any
-release mutation. Published component tags/assets must be immutable; mismatches
-must fail rather than overwrite. A failed or untested pack remains unavailable.
-
-## Direct-upstream assembly proof (activation requires final review)
-
-The separate `assemble.py` entrypoint is shared with the planned application
-installer. It is install-time assembly only; transcription never invokes pip.
-The verified downloader owns every network request. The bootstrap uses the exact
-private PBS interpreter and its bundled **pip 26.2.1**, launched with
-`-I -S -B -u -X utf8`. It manually adds only that interpreter's known private site
-directory, without processing startup `.pth` or site customization hooks.
-
-Every input wheel is rechecked for exact bytes/hash, and the wheelhouse must
-contain exactly the approved files. Requirements are direct local file URLs with
-one exact SHA-256 per wheel. Pip runs with no index, dependency resolution, source
-builds, bytecode compilation or cache. The bootstrap clears inherited environment
-and all `PIP_*` options, sets `PIP_CONFIG_FILE` to the platform's null device, and
-asserts that the pinned pip loads no global/user/site configuration even in
-isolated mode. An audit guard is installed before pip imports and denies network
-and child-process operations. The caller owns the only child process, imposes a
-timeout and kills/reaps it on cancellation or error.
-
-Installation uses the fresh private interpreter's explicit `--prefix`, preserving
-standard wheel `.data/data` locations under the runtime root. The complete old
-bootstrap setuptools package is removed before replacement. Generated launchers are
-removed. Generated local `direct_url.json` records are verified against their
-approved wheel identity and removed; the exact original upstream URLs/hashes are
-preserved in deterministic `ASSEMBLY.json`, without CI or user filesystem paths.
-Only RECORD rows for deliberately removed artifacts are dropped, so launcher and
-local-URL hashes cannot retain staging-dependent content. The reviewed setuptools
-startup `.pth` is also removed; startup hooks are not needed by transcription.
-The native proof assembles twice and compares bytes, then runs the same relocated
-private runtime and functional smoke used by the reference build. Only the JSON
-proof report is uploaded. Until those native checks pass, this is an implemented
-proof path, not verified end-user installation support.
-
-The eventual UI must show exact applicable proprietary terms before a user's
-explicit install click. Consent cannot authorize a use excluded by a vendor's
-license. In particular, the original CUDA/cuDNN-containing CTranslate2 wheel is
-not a direct-source CPU delivery candidate; a separately verified CPU-only build
-is under consideration. Proprietary/native redistribution and source-closure
-holds still prohibit shipping the reference ZIPs.
-
-`measure_recipe_caps.py` reads only the already verified local archive cache.
-`recipe-caps.json` labels each input count as measured or a conservative enforced
-cap. It does not fetch missing archives. The two Qwen candidates use an independent
-4 GiB/100,000-file final-tree limit; that is not a measured installed size.
-
-`generate_recipes.py` combines those bounds with exact Python notices, upstream
-engine license texts, declared dependency inventory and applicable proprietary
-terms into an explicitly named review-only output. CI generates it twice under
-`RUNNER_TEMP`, compares exact bytes, logs its SHA-256 and passes that path to the
-native proof. The redundant generated text is not checked into the repository.
-The generator never modifies the production catalog and
-preserves an unavailable reason for every candidate. The original Windows
-CTranslate2 wheel is excluded entirely. Engine text provenance and matching source
-version evidence are locked in `engine-terms.lock.json`; this does not establish
-complete native dependency license coverage or validate runtime operation.
-
-Windows smoke rejects numbered optional Visual C++ runtime DLLs loaded outside
-the private component, even if the hosted runner has installed them in System32.
-Guaranteed Windows OS libraries such as `msvcp_win.dll` are classified separately.
-The pinned PBS package does not itself supply every optional DLL used by the
-upstream engine wheels; clean-user readiness remains blocked until app-local
-dependencies and their exact upstream terms are reviewed and tested.
-
-
-## Managed Windows Nagisa initialization
-
-The reviewed Qwen dependency pins Nagisa 0.2.11 and DyNet38 2.2. Its default
-initializer passes an absolute model path to a native narrow-string file API,
-which fails in a Unicode Windows installation directory. The app-owned helper
-`src-tauri/src/asr/nagisa_compat.py` is embedded from one source into the managed
-worker and installer self-test; it is never loaded from a user-selected path.
-Manual Python environments are unchanged.
-
-Before any worker activity threads, the helper checks the exact private package
-versions, bounded metadata, every retained RECORD file and expected module origins.
-During official package initialization only, it supplies the supported relative
-`Tagger` file arguments for one default construction from Python's Unicode-aware
-working directory. It restores the original constructor, import loader and cwd in
-`finally`; a partial failure is fatal to that worker process. Wheel bytes and the
-upstream public API remain unchanged.
-
-Native Windows proof must compare actual Japanese tokens and POS tags from an
-ordinary ASCII-path initialization with the adapted Unicode-path initialization,
-and prove restoration after a deliberate post-import error. This check uses only
-Nagisa's already bundled data. It does not establish Qwen ASR inference, memory
-fit, or closure of the separate Windows app-local CRT requirement.
-
-## Fixed direct-Microsoft Windows runtime prerequisite
-
-The Windows Qwen review candidate selects `windows_crt:msvc-14.44.35211-x64`.
-This is a single compiled, hash-pinned Microsoft package contract, not a generic
-installer mechanism. Its direct official download is 25,635,768 bytes. The
-package executable is never run: bounded, exact CAB members yield only the two
-reviewed original `msvcp140` DLLs and English/Chinese RTF notices. Existing PBS
-VCRUNTIME companions must match the exact same-version originals. Windows verifies
-Microsoft signatures; the application does not install globally or require admin.
-The full English and Chinese EULAs are displayed and hashed before assent and
-before any package download. Original RTF hashes and source package identities are
-preserved; direct-source delivery does not grant binary redistribution rights.
-
-Native CI uses the existing audited extractor and native signature verifier,
-then copies those unchanged originals into both deterministic private assemblies.
-The genuine Rust lifecycle test independently uses the production CRT extraction
-primitive, protects those files in wheel preflight, and checks their exact receipts
-after pip and after activation. Whole-tree normal and delay PE import closure
-includes Torch, PyAV and DyNet; actual loaded CRT/OpenMP libraries must also stay
-inside the private runtime. Unknown or additional missing libraries fail the proof
-rather than expand the two-DLL extraction policy. The original NVIDIA-containing
-CTranslate2 wheel remains excluded from application recipe delivery.
-
-The direct-CRT proof also compiles the actual application's `main.rs` with
-`cargo rustc --locked --bin luma-subtitle -- -C debug-assertions=no`, verifies its
-PE subsystem is Windows GUI, and runs only the fixed early signature-helper mode.
-It checks online and cache-only trust policies separately, rejects invalid
-role/path requests, and uses Unicode/spaced app, package and working-directory
-paths with poisoned PATH and bounded inherited output handles. This is a
-GUI-subsystem helper check, not a full release/bundle build. Final release builds
-remain independently required; no UI or downloaded installer is launched.
+These unit guards do not install runtimes, run native compilation or establish
+model inference. Successful exact-source native proof and final release review
+remain required before activation or publication.

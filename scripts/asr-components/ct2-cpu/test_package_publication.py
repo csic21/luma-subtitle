@@ -222,6 +222,16 @@ class PackagingTests(unittest.TestCase):
                 self.assertFalse((self.work / 'publication-candidate').exists())
                 (self.reports / name).write_bytes(original)
 
+    def test_windows_os_msvcp_win_is_distinct_from_private_numbered_crt(self):
+        self.change('inference.json', lambda x: x['loaded_modules'].append(
+            {'scope': 'windows_os', 'path': 'C:/Windows/System32/msvcp_win.dll'}))
+        self.package()
+
+    def test_numbered_crt_and_lookalike_names_still_cannot_be_windows_os(self):
+        for name in ('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'concrt140.dll', 'msvcp_win.dll.extra'):
+            self.change('inference.json', lambda x: x.update(loaded_modules=[{'scope': 'windows_os', 'path': name}]))
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'unsafe dependency'): self.package()
+
     def test_canonical_native_objects_must_be_removed_before_packaging(self):
         native = self.work / 'native-build'; native.mkdir(); (native / 'stale.obj').write_bytes(b'object cache')
         with self.assertRaisesRegex(ValueError, 'not removed'): self.package()
@@ -325,6 +335,185 @@ class PackagingTests(unittest.TestCase):
     def test_unsafe_archive_member_paths_are_rejected(self):
         for name in ('../secret', '/root/file', 'C:/file', 'a\\b', 'a//b', 'a/./b'):
             with self.subTest(name=name), self.assertRaises(ValueError): package.safe_name(name)
+
+
+class DiagnosticPackagingTests(unittest.TestCase):
+    setUp = PackagingTests.setUp
+    write = PackagingTests.write
+    change = PackagingTests.change
+    write_wheels = PackagingTests.write_wheels
+    write_freshness = PackagingTests.write_freshness
+    package = PackagingTests.package
+    def diagnostic_state(self, outcome='timed_out'):
+        status = {'started': True, 'outcome': outcome}
+        status.update(timeout_seconds=900) if outcome == 'timed_out' else status.update(returncode=1)
+        self.change('result.json', lambda value: value.update(passed=False, native_inference_passed=False,
+                                                             native_verifier=status))
+        (self.reports / 'inference.json').unlink(missing_ok=True)
+        return status
+
+    def origin(self):
+        return {'repository': 'csic21/luma-subtitle', 'run_id': 123, 'run_attempt': 1,
+                'job': 'windows-cpu-proof', 'head_sha': SOURCE, 'source_sha': SOURCE,
+                'ref': 'refs/heads/feat/optional-asr-engines', 'event_name': 'push',
+                'workflow_ref': 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines'}
+
+    def diagnostic(self, **kwargs):
+        return package.package_diagnostic(source_sha=SOURCE, wheel=self.wheel, second_wheel=self.second,
+            reports=self.reports, cache=self.cache, work=self.work,
+            diagnostic_output=kwargs.pop('diagnostic_output', self.root / 'diagnostic-export'),
+            origin=kwargs.pop('origin', self.origin()), **kwargs)
+
+    def test_diagnostic_exact_four_files_reuse_unchanged_source_notices_and_wheel(self):
+        self.package()
+        expected = {name: (self.work / 'publication-candidate' / name).read_bytes()
+                    for name in (package.WHEEL, package.SOURCES, package.NOTICES)}
+        self.diagnostic_state()
+        report = self.diagnostic(); output = self.root / 'diagnostic-export'
+        self.assertEqual({p.name for p in output.iterdir()}, {*expected, package.DIAGNOSTIC})
+        for name, data in expected.items(): self.assertEqual((output / name).read_bytes(), data)
+        self.assertEqual(report['kind'], 'ct2-cpu-diagnostic')
+        self.assertEqual(report['purpose'], 'failed-native-verifier-debugging')
+        self.assertEqual(report['retention_days'], 1)
+        for field in ('publication_authorized', 'installable', 'inference_passed'): self.assertIs(report[field], False)
+        self.assertEqual(report['origin']['source_sha'], SOURCE)
+        self.assertEqual(report['verification']['outcome'], 'timed_out')
+        self.assertEqual(report['provenance']['build_strategy'], package.BUILD_STRATEGY)
+        self.assertNotIn(str(self.root), package.encoded(report).decode())
+        self.assertNotIn('checks', report)
+        self.assertNotIn('source_sha', report)
+        for item in report['evidence']:
+            self.assertEqual(item, package.pin(item['name'], (self.reports / item['name']).read_bytes()))
+        self.assertEqual((output / package.DIAGNOSTIC).read_bytes(), package.encoded(report))
+        self.assertFalse((output / package.PROOF).exists())
+        with self.assertRaisesRegex(ValueError, 'successful exact native proof'): self.package()
+
+    def test_diagnostic_failed_exit_may_have_a_failed_inference_report(self):
+        self.diagnostic_state('failed')
+        self.write(self.reports / 'inference.json', {'passed': False, 'error': 'bounded fixture error'})
+        report = self.diagnostic()
+        self.assertEqual(report['verification']['returncode'], 1)
+        self.assertFalse((self.reports / package.PROOF).exists())
+
+    def test_diagnostic_origin_rejects_other_runs_repositories_and_mutable_source(self):
+        self.diagnostic_state()
+        for key, value in [('repository', 'other/repo'), ('ref', 'refs/heads/main'), ('event_name', 'workflow_dispatch'),
+                           ('job', 'other'), ('head_sha', 'b'*40), ('source_sha', 'main'),
+                           ('workflow_ref', 'other.yml@refs/heads/feat/optional-asr-engines'),
+                           ('run_id', True), ('run_attempt', 0), ('run_id', 2**53)]:
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(ValueError, 'origin'):
+                self.diagnostic(origin=dict(self.origin(), **{key: value}))
+        self.assertFalse((self.root / 'diagnostic-export').exists())
+
+    def test_diagnostic_rejects_success_cancellation_earlier_failure_and_unknown_status(self):
+        self.diagnostic_state(); baseline = (self.reports / 'result.json').read_bytes()
+        mutations = [lambda x: x.update(passed=True), lambda x: x.update(native_inference_passed=True),
+                     lambda x: x.pop('native_verifier'), lambda x: x['native_verifier'].update(started=False),
+                     lambda x: x['native_verifier'].update(outcome='passed'),
+                     lambda x: x['native_verifier'].update(outcome='cancelled'),
+                     lambda x: x['native_verifier'].update(outcome='launch_error'),
+                     lambda x: x['native_verifier'].update(timeout_seconds=1800)]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                self.change('result.json', mutation); self.diagnostic()
+            (self.reports / 'result.json').write_bytes(baseline)
+        for code in (0, -1, -1073741510, 0xc000013a, True, 2**32, 130, 143):
+            self.change('result.json', lambda x: x.update(native_verifier={'started': True, 'outcome': 'failed', 'returncode': code}))
+            with self.subTest(code=code), self.assertRaises(ValueError): self.diagnostic()
+        self.assertFalse((self.root / 'diagnostic-export').exists())
+
+    def test_diagnostic_rejects_incomplete_native_build_or_static_closure(self):
+        self.diagnostic_state()
+        mutations = [('result.json', lambda x: x.update(wheel_reproduced=False)),
+                     ('result.json', lambda x: x.update(source_sha='b'*40)),
+                     ('compiler-probe.json', lambda x: x.update(passed=False)),
+                     ('wheel-comparison.json', lambda x: x.update(identical=False)),
+                     ('whole-runtime-native.json', lambda x: x.update(passed=False)),
+                     ('whole-runtime-native.json', lambda x: x.update(blocked_dependencies=[{'name':'missing.dll'}])),
+                     ('build-2-freshness.json', lambda x: x.update(native_object_cache_reused=True)),
+                     ('private-crt-proof.json', lambda x: x.update(public_redistribution_authorized=True)),
+                     ('provenance.json', lambda x: x.update(publication_authorized=True))]
+        for name, mutation in mutations:
+            original = (self.reports / name).read_bytes()
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                self.change(name, mutation); self.diagnostic()
+            (self.reports / name).write_bytes(original)
+        self.assertFalse((self.root / 'diagnostic-export').exists())
+
+    def test_diagnostic_rejects_contradictory_successful_inference(self):
+        self.diagnostic_state(); self.write(self.reports / 'inference.json', {'passed': True})
+        with self.assertRaisesRegex(ValueError, 'contradicts'): self.diagnostic()
+
+    def test_diagnostic_keeps_source_notice_and_model_omission_guards(self):
+        self.diagnostic_state()
+        item = self.source['sources'][0]; path = self.cache / item['sha256']; original = path.read_bytes()
+        path.write_bytes(b'changed source')
+        with self.assertRaisesRegex(ValueError, 'source pin'): self.diagnostic()
+        path.write_bytes(original)
+        notice = self.here / self.notices['files'][0]['path']; original = notice.read_bytes(); notice.write_bytes(b'changed notice')
+        with self.assertRaisesRegex(ValueError, 'Notice bytes'): self.diagnostic()
+        notice.write_bytes(original)
+        source_entries = dict(self.source_entries); source_entries[package.MODEL_PREFIX + 'new/model.bin'] = b'forbidden'
+        original = source_tar(source_entries); item.update(bytes=len(original), sha256=package.sha(original))
+        (self.cache / item['sha256']).write_bytes(original)
+        self.write(self.here / 'sources.lock.json', self.source)
+        self.write(self.reports / 'provenance.json', self.provenance)
+        self.entries[package.DIST_INFO + 'LUMA_CPU_BUILD.json'] = package.encoded(self.provenance)
+        self.write_wheels(); self.diagnostic_state()
+        with self.assertRaisesRegex(ValueError, 'model payload'): self.diagnostic()
+
+    def test_diagnostic_rejects_runtime_model_and_nested_third_party_wheel_payload(self):
+        for name in ('python.exe', 'ctranslate2/msvcp140.dll', 'ctranslate2/model.bin',
+                     'ctranslate2/torch.whl', 'ctranslate2/avcodec.dll', package.DIST_INFO + 'model.bin'):
+            self.entries[name] = b'forbidden'; self.write_wheels(); self.diagnostic_state()
+            with self.subTest(name=name), self.assertRaises(ValueError): self.diagnostic()
+            del self.entries[name]
+        self.assertFalse((self.root / 'diagnostic-export').exists())
+
+    def test_diagnostic_never_overwrites_previous_output_or_symlink(self):
+        self.diagnostic_state(); output = self.root / 'keep'; output.mkdir(); (output/'marker').write_text('keep')
+        with self.assertRaisesRegex(ValueError, 'fresh'): self.diagnostic(diagnostic_output=output)
+        self.assertEqual((output/'marker').read_text(), 'keep')
+        alias = self.root / 'alias'; alias.symlink_to(output, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'fresh'): self.diagnostic(diagnostic_output=alias)
+
+    def test_partial_export_never_exposes_manifest_completion_marker(self):
+        self.diagnostic_state(); output = self.root / 'diagnostic-export'
+        def broken_copy(source, target):
+            target.mkdir(); (target / package.WHEEL).write_bytes(self.wheel.read_bytes())
+            raise OSError('simulated interrupted copy')
+        with patch.object(package.shutil, 'copytree', side_effect=broken_copy):
+            with self.assertRaisesRegex(OSError, 'interrupted'): self.diagnostic()
+        self.assertFalse((output / package.DIAGNOSTIC).exists())
+        self.assertFalse((output / package.PROOF).exists())
+
+    def test_unexpected_file_or_changed_copy_blocks_manifest_marker(self):
+        self.diagnostic_state(); output = self.root / 'diagnostic-export'; real_copy = shutil.copytree
+        def changed_copy(source, target):
+            real_copy(source, target); (target / package.WHEEL).write_bytes(b'changed')
+        with patch.object(package.shutil, 'copytree', side_effect=changed_copy):
+            with self.assertRaisesRegex(ValueError, 'changed during copying'): self.diagnostic()
+        self.assertFalse((output / package.DIAGNOSTIC).exists())
+
+    def test_extra_copy_file_blocks_manifest_marker(self):
+        self.diagnostic_state(); output = self.root / 'diagnostic-export'; real_copy = shutil.copytree
+        def extra_copy(source, target):
+            real_copy(source, target); (target / 'runtime.dll').write_bytes(b'forbidden')
+        with patch.object(package.shutil, 'copytree', side_effect=extra_copy):
+            with self.assertRaisesRegex(ValueError, 'Unexpected diagnostic'): self.diagnostic()
+        self.assertFalse((output / package.DIAGNOSTIC).exists())
+
+    def test_failed_final_atomic_marker_activation_does_not_look_complete(self):
+        self.diagnostic_state(); output = self.root / 'diagnostic-export'
+        with patch.object(Path, 'replace', side_effect=OSError('simulated marker activation failure')):
+            with self.assertRaisesRegex(OSError, 'marker activation'): self.diagnostic()
+        self.assertFalse((output / package.DIAGNOSTIC).exists())
+        self.assertTrue((output / '.diagnostic-manifest.pending').exists())
+
+    def test_diagnostic_wheel_symlink_is_rejected(self):
+        self.diagnostic_state(); self.wheel.unlink(); self.wheel.symlink_to(self.second)
+        with self.assertRaisesRegex(ValueError, 'regular public input'): self.diagnostic()
+        self.assertFalse((self.root / 'diagnostic-export').exists())
 
 
 class TemporaryRootAliasTests(unittest.TestCase):

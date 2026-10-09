@@ -22,6 +22,8 @@ WHEEL = 'ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl'
 SOURCES = 'luma-ct2-cpu-4.8.2-1-sources.zip'
 NOTICES = 'luma-ct2-cpu-4.8.2-1-notices.zip'
 PROOF = 'publication-proof.json'
+DIAGNOSTIC = 'diagnostic-manifest.json'
+DIAGNOSTIC_SCOPE = 'cpu-wheel-source-notices-1-day'
 MAX_BYTES = 100_000_000
 CT2_ROOT = 'CTranslate2-d44d2d069eb88c7b7804da864c10c201501cb4a9'
 MODEL_PREFIX = CT2_ROOT + '/tests/data/models/'
@@ -253,17 +255,16 @@ def verify_wheel(wheel, provenance, notices):
     return data
 
 
-def validate_evidence(source_sha, wheel, second_wheel, reports, lock, work):
+def validate_build_evidence(source_sha, wheel, second_wheel, reports, lock, work):
     result = load(reports / 'result.json')
     provenance = load(reports / 'provenance.json')
     comparison = load(reports / 'wheel-comparison.json')
     native = load(reports / 'whole-runtime-native.json')
-    inference = load(reports / 'inference.json')
     compiler = load(reports / 'compiler-probe.json')
     crt = load(reports / 'private-crt-proof.json')
     if (result.get('source_sha') != source_sha or result.get('publication_authorized') is not False
-            or any(result.get(k) is not True for k in ('passed', 'wheel_reproduced', 'native_inference_passed'))):
-        raise ValueError('Publication candidates require the successful exact native proof')
+            or result.get('wheel_reproduced') is not True):
+        raise ValueError('Exact source and completed matching native builds required')
     left, right = read_plain(wheel), read_plain(second_wheel)
     if (left != right or result.get('wheel') != dict(filename=WHEEL, bytes=len(left), sha256=sha(left))
             or result.get('second_sha256') != sha(right) or comparison.get('identical') is not True
@@ -284,24 +285,12 @@ def validate_evidence(source_sha, wheel, second_wheel, reports, lock, work):
             or native.get('blocked_dependencies') != [] or native.get('forbidden_files') != []
             or not native.get('files')):
         raise ValueError('Private whole-runtime dependency closure is incomplete')
-    if (any(inference.get(k) is not True for k in ('passed', 'isolated', 'relocated', 'offline_audit_enabled', 'inherited_python_path_ignored'))
-            or inference.get('system_python_used') is not False or inference.get('host_crt_fallback_allowed') is not False
-            or inference.get('inference', {}).get('cold_and_warm') is not True
-            or inference['inference'].get('cpu_only') is not True or not inference['inference'].get('segments')
-            or inference['inference'].get('model') != 'SYSTRAN/faster-whisper-tiny'
-            or not {'float32', 'int8'}.issubset(inference.get('compute_types', []))
-            or not inference.get('loaded_modules') or compiler.get('passed') is not True):
-        raise ValueError('Real isolated Tiny CPU cold/warm inference is incomplete')
-    for item in inference['loaded_modules']:
-        name = item.get('path', '').replace('\\', '/').rsplit('/', 1)[-1].lower()
-        if (item.get('scope') not in {'private', 'windows_os'}
-                or re.search(r'cudnn|cublas|cudart|nvrtc|nvcuda|iomp|libomp|vcomp|mkl|tbb', name)
-                or (name.startswith(('msvcp', 'vcruntime', 'concrt')) and item['scope'] != 'private')):
-            raise ValueError('Actual loaded-module evidence includes an unsafe dependency')
     if (crt.get('public_redistribution_authorized') is not False or crt.get('redistribution_grant_verified') is not False
             or crt.get('original_files_unmodified') is not True or crt.get('global_installation_performed') is not False
             or not crt.get('files')):
         raise ValueError('Private CRT technical proof must retain its redistribution hold')
+    if compiler.get('passed') is not True:
+        raise ValueError('Actual compiler probe did not pass')
     if provenance.get('build_strategy') != BUILD_STRATEGY:
         raise ValueError('Build repeatability strategy is not the reviewed fresh fixed-root scope')
     if (provenance.get('schema') != 1 or provenance.get('luma_source_sha') != source_sha
@@ -316,11 +305,34 @@ def validate_evidence(source_sha, wheel, second_wheel, reports, lock, work):
     return provenance
 
 
-def package_publication(*, source_sha, wheel, second_wheel, reports, cache, work, publication_output=None):
-    """Create four local candidates and a deterministic report; never publish."""
+def validate_evidence(source_sha, wheel, second_wheel, reports, lock, work):
+    result = load(reports / 'result.json')
+    if (result.get('passed') is not True or result.get('native_inference_passed') is not True):
+        raise ValueError('Publication candidates require the successful exact native proof')
+    provenance = validate_build_evidence(source_sha, wheel, second_wheel, reports, lock, work)
+    inference = load(reports / 'inference.json')
+    compiler = load(reports / 'compiler-probe.json')
+    if (any(inference.get(k) is not True for k in ('passed', 'isolated', 'relocated', 'offline_audit_enabled', 'inherited_python_path_ignored'))
+            or inference.get('system_python_used') is not False or inference.get('host_crt_fallback_allowed') is not False
+            or inference.get('inference', {}).get('cold_and_warm') is not True
+            or inference['inference'].get('cpu_only') is not True or not inference['inference'].get('segments')
+            or inference['inference'].get('model') != 'SYSTRAN/faster-whisper-tiny'
+            or not {'float32', 'int8'}.issubset(inference.get('compute_types', []))
+            or not inference.get('loaded_modules') or compiler.get('passed') is not True):
+        raise ValueError('Real isolated Tiny CPU cold/warm inference is incomplete')
+    for item in inference['loaded_modules']:
+        name = item.get('path', '').replace('\\', '/').rsplit('/', 1)[-1].lower()
+        if (item.get('scope') not in {'private', 'windows_os'}
+                or re.search(r'cudnn|cublas|cudart|nvrtc|nvcuda|iomp|libomp|vcomp|mkl|tbb', name)
+                or (name != 'msvcp_win.dll' and name.startswith(('msvcp', 'vcruntime', 'concrt'))
+                    and item['scope'] != 'private')):
+            raise ValueError('Actual loaded-module evidence includes an unsafe dependency')
+    return provenance
+
+
+def public_inputs(source_sha):
     if not re.fullmatch('[a-f0-9]{40}', source_sha):
         raise ValueError('Exact source SHA required')
-    reports, cache, work = (Path(x).resolve() for x in (reports, cache, work))
     # Import lazily to avoid a build_cpu/package_publication circular import.
     from build_cpu import validate_lock
     lock = load(HERE / 'sources.lock.json'); validate_lock(lock)
@@ -337,10 +349,10 @@ def package_publication(*, source_sha, wheel, second_wheel, reports, cache, work
         if len(data) != item['bytes'] or sha(data) != item['sha256']:
             raise ValueError('Notice bytes differ from the locked review')
         notices[name] = data
-    provenance = validate_evidence(source_sha, Path(wheel), Path(second_wheel), reports, lock, work)
-    if provenance.get('notices') != notice_lock:
-        raise ValueError('Native provenance notice lock differs')
-    wheel_bytes = verify_wheel(wheel, provenance, notices)
+    return lock, notice_lock, notices
+
+
+def source_notice_entries(source_sha, cache, lock, notices, provenance):
     source_entries, source_exports = {}, []
     for item in lock['sources']:
         name = safe_name(f'upstream/{item["name"]}-{item["commit"]}.tar.gz')
@@ -375,6 +387,18 @@ def package_publication(*, source_sha, wheel, second_wheel, reports, cache, work
     notice_entries = dict(notices)
     notice_entries['notices.lock.json'] = repository_bytes(source_sha, 'scripts/asr-components/ct2-cpu/notices.lock.json')
     notice_entries['BUILD-PROVENANCE.json'] = encoded(provenance)
+    return source_entries, notice_entries, source_exports
+
+
+def package_publication(*, source_sha, wheel, second_wheel, reports, cache, work, publication_output=None):
+    """Create four local candidates and a deterministic report; never publish."""
+    reports, cache, work = (Path(x).resolve() for x in (reports, cache, work))
+    lock, notice_lock, notices = public_inputs(source_sha)
+    provenance = validate_evidence(source_sha, Path(wheel), Path(second_wheel), reports, lock, work)
+    if provenance.get('notices') != notice_lock:
+        raise ValueError('Native provenance notice lock differs')
+    wheel_bytes = verify_wheel(wheel, provenance, notices)
+    source_entries, notice_entries, source_exports = source_notice_entries(source_sha, cache, lock, notices, provenance)
     candidate = work / 'publication-candidate'
     if candidate.exists() or candidate.is_symlink():
         raise ValueError('Candidate directory must be fresh')
@@ -396,3 +420,100 @@ def package_publication(*, source_sha, wheel, second_wheel, reports, cache, work
     if publication_output is not None:
         shutil.copytree(candidate, publication_output)
     return proof
+
+
+def diagnostic_origin(origin, source_sha):
+    expected = {'repository', 'run_id', 'run_attempt', 'job', 'head_sha', 'source_sha',
+                'ref', 'event_name', 'workflow_ref'}
+    if (not isinstance(origin, dict) or set(origin) != expected
+            or origin['repository'] != 'csic21/luma-subtitle'
+            or origin['ref'] != 'refs/heads/feat/optional-asr-engines'
+            or origin['event_name'] != 'push' or origin['job'] != 'windows-cpu-proof'
+            or origin['workflow_ref'] != 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines'
+            or origin['source_sha'] != source_sha or origin['head_sha'] != source_sha
+            or any(type(origin[k]) is not int or not 0 < origin[k] < 2**53 for k in ('run_id', 'run_attempt'))):
+        raise ValueError('Diagnostic origin must be the exact direct request-only native proof')
+    return dict(origin)
+
+
+def diagnostic_failure(result):
+    verifier = result.get('native_verifier')
+    if (result.get('passed') is not False or result.get('native_inference_passed') is not False
+            or not isinstance(verifier, dict) or verifier.get('started') is not True):
+        raise ValueError('Diagnostics require an actually started failed native verifier')
+    if verifier.get('outcome') == 'timed_out':
+        if set(verifier) != {'started', 'outcome', 'timeout_seconds'} or verifier['timeout_seconds'] != 900:
+            raise ValueError('Unexpected native verifier timeout evidence')
+    elif verifier.get('outcome') == 'failed':
+        code = verifier.get('returncode')
+        if (set(verifier) != {'started', 'outcome', 'returncode'} or type(code) is not int
+                or not 0 < code <= 0xffffffff or code in (130, 143, 0xc000013a)):
+            raise ValueError('Native verifier cancellation/invalid exit cannot export diagnostics')
+    else:
+        raise ValueError('Only failed or timed-out native verification permits diagnostics')
+    return {'stage': 'native-verifier', **verifier}
+
+
+def package_diagnostic(*, source_sha, wheel, second_wheel, reports, cache, work,
+                       diagnostic_output, origin):
+    """Retain only the reviewed own-wheel/source/notices after verifier failure.
+
+    This is binary distribution for a separately opted-in one-day diagnostic,
+    never a successful publication candidate. No replay, download or upload here.
+    """
+    origin = diagnostic_origin(origin, source_sha)
+    reports, cache, work = (Path(x).resolve() for x in (reports, cache, work))
+    output = Path(diagnostic_output)
+    if (not output.is_absolute() or output != output.resolve() or output.exists() or output.is_symlink()):
+        raise ValueError('Diagnostic export directory must be fresh and canonical')
+    lock, notice_lock, notices = public_inputs(source_sha)
+    failure = diagnostic_failure(load(reports / 'result.json'))
+    provenance = validate_build_evidence(source_sha, Path(wheel), Path(second_wheel), reports, lock, work)
+    if provenance.get('notices') != notice_lock:
+        raise ValueError('Native provenance notice lock differs')
+    # A contradictory success report may never be repackaged as a failed proof.
+    inference_path = reports / 'inference.json'
+    if inference_path.exists() or inference_path.is_symlink():
+        if load(inference_path).get('passed') is not False:
+            raise ValueError('Diagnostic inference report contradicts the failed verifier')
+    wheel_bytes = verify_wheel(wheel, provenance, notices)
+    source_entries, notice_entries, source_exports = source_notice_entries(source_sha, cache, lock, notices, provenance)
+    candidate = work / 'diagnostic-candidate'
+    if candidate.exists() or candidate.is_symlink():
+        raise ValueError('Diagnostic candidate directory must be fresh')
+    candidate.mkdir(parents=True)
+    (candidate / WHEEL).write_bytes(wheel_bytes)
+    write_archive(candidate / SOURCES, source_entries)
+    write_archive(candidate / NOTICES, notice_entries)
+    assets = [pin(name, read_plain(candidate / name, candidate)) for name in sorted((WHEEL, SOURCES, NOTICES))]
+    if sum(item['bytes'] for item in assets) >= MAX_BYTES:
+        raise ValueError('Diagnostic assets exceed the bounded combined size')
+    locks = {key: pin(name, repository_bytes(source_sha, 'scripts/asr-components/ct2-cpu/' + name))
+             for key, name in (('sources', 'sources.lock.json'), ('notices', 'notices.lock.json'))}
+    evidence_names = ('result.json', 'wheel-comparison.json', 'compiler-probe.json',
+                      'build-1-freshness.json', 'build-2-freshness.json',
+                      'whole-runtime-native.json', 'private-crt-proof.json')
+    manifest = {'schema_version': 1, 'kind': 'ct2-cpu-diagnostic',
+        'purpose': 'failed-native-verifier-debugging', 'publication_authorized': False,
+        'installable': False, 'inference_passed': False, 'origin': origin,
+        'assets': assets, 'locks': locks, 'source_exports': source_exports, 'provenance': provenance,
+        'build_checks': {'compiler_probe': True, 'fresh_fixed_root_repeatability': True,
+                         'static_runtime_closure': True, 'executable_bytes_modified': False},
+        'verification': failure, 'evidence': [pin(name, read_plain(reports / name, reports)) for name in evidence_names],
+        'retention_days': 1}
+    payload = encoded(manifest)
+    # Only digests of technical reports leave their separate metadata channel;
+    # no host paths, logs, loaded-runtime bytes or model data enter this bundle.
+    (reports / DIAGNOSTIC).write_bytes(payload)
+    shutil.copytree(candidate, output)
+    if {p.name for p in output.iterdir()} != {WHEEL, SOURCES, NOTICES}:
+        raise ValueError('Unexpected diagnostic export contents')
+    for item in assets:
+        if pin(item['name'], read_plain(output / item['name'], output)) != item:
+            raise ValueError('Diagnostic export changed during copying')
+    # This exact final filename is the workflow's completion marker. Expose it
+    # only after every exported asset passes; partial exports cannot be uploaded.
+    pending = output / '.diagnostic-manifest.pending'
+    pending.write_bytes(payload)
+    pending.replace(output / DIAGNOSTIC)
+    return manifest

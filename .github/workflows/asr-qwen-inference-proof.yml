@@ -1,7 +1,8 @@
 name: One-time Qwen inference proof
 
-# Temporary feature-branch-only control. Never merge this trigger to main; remove
-# it after the reviewed one-time attempt. No request file is committed with it.
+# Temporary feature-branch-only control. It may accompany a reviewed release
+# prerequisite on main, but cannot run there. Remove it after the reviewed one-time
+# attempt and before the app release. No request file is committed with it.
 on:
   push:
     branches: ['feat/optional-asr-engines']

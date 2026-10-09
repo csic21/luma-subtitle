@@ -19,7 +19,7 @@ def closure(files):
                 if GPU.search(name): resolution = 'unreviewed_gpu'
                 elif name in by_name: resolution = 'private'
                 elif _pe.CRT.search(name): resolution = 'missing_private_crt'
-                elif name.startswith(('api-ms-win-', 'ext-ms-win-')): resolution = 'windows_api_set'
+                elif name.endswith('.dll') and name.startswith(('api-ms-win-', 'ext-ms-win-')): resolution = 'windows_api_set'
                 elif name in _pe.OS_DLLS: resolution = 'windows_os'
                 else: resolution = 'unresolved'
                 dependencies.append({'from': item['path'], 'kind': kind, 'name': name,

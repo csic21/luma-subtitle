@@ -151,13 +151,87 @@ def validate_lock(lock):
         raise ValueError('Vendor CT2 wheel must never enter the build')
 
 
+class CommandFailed(RuntimeError):
+    def __init__(self, returncode, message):
+        super().__init__(message)
+        self.returncode = returncode
+
+
 def command(argv, *, cwd, env, logfile, timeout=3600):
     print('RUN:', subprocess.list2cmdline([str(x) for x in argv]), flush=True)
     with Path(logfile).open('ab') as log:
         proc = subprocess.run([str(x) for x in argv], cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
     if proc.returncode:
         tail = Path(logfile).read_text(encoding='utf-8', errors='replace')[-16000:]
-        raise RuntimeError(f'Command failed ({proc.returncode}): {argv[0]}\n{tail}')
+        raise CommandFailed(proc.returncode, f'Command failed ({proc.returncode}): {argv[0]}\n{tail}')
+
+
+def run_native_verifier(status, execute):
+    state = {'started': True, 'outcome': 'running'}
+    status['native_verifier'] = state
+    try:
+        execute()
+    except subprocess.TimeoutExpired as error:
+        state.update(outcome='timed_out', timeout_seconds=error.timeout)
+        raise
+    except CommandFailed as error:
+        cancelled = error.returncode <= 0 or error.returncode in (130, 143, 0xC000013A)
+        state.update(outcome='cancelled' if cancelled else 'failed', returncode=error.returncode)
+        raise
+    except BaseException as error:
+        state['outcome'] = 'cancelled' if isinstance(error, (KeyboardInterrupt, SystemExit)) else 'launch_error'
+        raise
+    else:
+        state['outcome'] = 'passed'
+
+
+def diagnostic_origin(source_sha, environment):
+    fields = {'repository': 'GITHUB_REPOSITORY', 'job': 'GITHUB_JOB', 'head_sha': 'GITHUB_SHA',
+              'ref': 'GITHUB_REF', 'event_name': 'GITHUB_EVENT_NAME', 'workflow_ref': 'GITHUB_WORKFLOW_REF'}
+    origin = {key: environment.get(name, '') for key, name in fields.items()}
+    origin['source_sha'] = source_sha
+    for key, name in (('run_id', 'GITHUB_RUN_ID'), ('run_attempt', 'GITHUB_RUN_ATTEMPT')):
+        value = environment.get(name, '')
+        if not re.fullmatch(r'[1-9][0-9]{0,15}', value):
+            raise ValueError('Diagnostic capture requires exact positive GitHub run identities')
+        origin[key] = int(value)
+    if (environment.get('CPU_DIAGNOSTIC_EXPORT') != 'true'
+            or origin['repository'] != 'csic21/luma-subtitle' or origin['job'] != 'windows-cpu-proof'
+            or origin['head_sha'] != source_sha or not re.fullmatch(r'[a-f0-9]{40}', source_sha)
+            or origin['ref'] != 'refs/heads/feat/optional-asr-engines' or origin['event_name'] != 'push'
+            or origin['workflow_ref'] != 'csic21/luma-subtitle/.github/workflows/asr-ct2-cpu.yml@refs/heads/feat/optional-asr-engines'):
+        raise ValueError('Diagnostic capture requires the validated request-only native proof context')
+    return origin
+
+
+def diagnostic_capture_allowed(status):
+    state = status.get('native_verifier', {})
+    if (status.get('passed') is not False or status.get('native_inference_passed') is not False
+            or status.get('wheel_reproduced') is not True or state.get('started') is not True):
+        return False
+    if state.get('outcome') == 'timed_out':
+        return state.get('timeout_seconds') == 900
+    code = state.get('returncode')
+    return (state.get('outcome') == 'failed' and type(code) is int
+            and 0 < code <= 0xFFFFFFFF and code not in (130, 143, 0xC000013A))
+
+
+def capture_failed_verifier(args, status, first, second, origin):
+    if args.diagnostic_output is None or not diagnostic_capture_allowed(status):
+        return
+    # The manifest pins these exact bytes. Do not change status after capture;
+    # the final result write must remain byte-identical, even on a failed job.
+    dump(args.reports / 'result.json', status)
+    try:
+        from package_publication import package_diagnostic
+        package_diagnostic(source_sha=args.source_sha, wheel=first, second_wheel=second,
+                           reports=args.reports, cache=args.cache, work=args.work,
+                           diagnostic_output=args.diagnostic_output, origin=origin)
+    except Exception as capture_error:
+        # The packaging helper exposes its manifest only after every copy and
+        # hash check succeeds. This separate receipt never changes result.json.
+        dump(args.reports / 'diagnostic-capture.json', {'schema': 1, 'captured': False,
+             'publication_authorized': False, 'error': f'{type(capture_error).__name__}: {capture_error}'})
 
 
 def build_environment(runtime):
@@ -443,7 +517,7 @@ def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
     return destination
 
 
-def private_proof(args, lock, wheel, runtime_archive, env):
+def private_proof(args, lock, wheel, runtime_archive, env, status):
     root = args.work / 'fresh-runtime'
     unpack_runtime(runtime_archive, root)
     upstream = load(COMPONENTS / 'locks/faster-whisper-cpu-windows-x64.json')
@@ -486,10 +560,10 @@ def private_proof(args, lock, wheel, runtime_archive, env):
                  HF_HUB_DISABLE_TELEMETRY='1', HF_HUB_DISABLE_IMPLICIT_TOKEN='1', DO_NOT_TRACK='1')
     poison = home / 'poison'; poison.mkdir()
     (poison / 'sitecustomize.py').write_text("raise RuntimeError('Inherited Python path was used')\n", encoding='utf-8')
-    command([root / 'python.exe', '-I', '-B', '-X', 'utf8', HERE / 'verify_runtime.py',
+    run_native_verifier(status, lambda: command([root / 'python.exe', '-I', '-B', '-X', 'utf8', HERE / 'verify_runtime.py',
              '--root', root, '--model', model, '--audio', audio, '--worker', args.worker,
              '--report', args.reports / 'inference.json'], cwd=home, env=clean,
-            logfile=args.reports / 'inference.log', timeout=900)
+            logfile=args.reports / 'inference.log', timeout=900))
 
 
 def main():
@@ -497,12 +571,16 @@ def main():
     for field in ('work', 'reports', 'cache', 'worker'):
         parser.add_argument('--' + field, type=Path, required=True)
     parser.add_argument('--source-sha', required=True)
-    parser.add_argument('--publication-output', type=Path)
+    outputs = parser.add_mutually_exclusive_group()
+    outputs.add_argument('--publication-output', type=Path)
+    outputs.add_argument('--diagnostic-output', type=Path)
     args = parser.parse_args()
     for field in ('work', 'reports', 'cache', 'worker'):
         setattr(args, field, getattr(args, field).resolve())
     if args.publication_output is not None:
         args.publication_output = args.publication_output.resolve()
+    if args.diagnostic_output is not None:
+        args.diagnostic_output = args.diagnostic_output.resolve()
     args.reports.mkdir(parents=True, exist_ok=True)
     status = {'schema': 1, 'source_sha': args.source_sha, 'publication_authorized': False,
               'wheel_reproduced': False, 'native_inference_passed': False,
@@ -510,6 +588,8 @@ def main():
                              'No CPU/GPU performance claim; no clean GUI-machine or non-AVX hardware claim.',
                              'Repeatability is limited to fresh builds at one fixed native root and pinned toolchain; no path-independence or cross-machine claim.',
                              'Hosted runner OS is not hermetically pinned; tool versions and hashes are reported.']}
+    origin = None
+    first = second = None
     try:
         if sys.platform != 'win32' or sys.maxsize <= 2**32:
             raise RuntimeError('Native Windows x64 build required')
@@ -521,6 +601,8 @@ def main():
         actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=COMPONENTS, text=True).strip()
         if actual != args.source_sha:
             raise ValueError('Checked-out source does not match the requested commit')
+        if args.diagnostic_output is not None:
+            origin = diagnostic_origin(args.source_sha, os.environ)
         lock = load(HERE / 'sources.lock.json'); validate_lock(lock)
         notices, _ = notice_files()
         if notices.get('notice_inputs_complete') is not True:
@@ -573,7 +655,7 @@ def main():
         # Functional diagnostics are independent: a repeatability mismatch must
         # not suppress first-wheel closure/import/Tiny evidence. Final failure is
         # retained even if that exact first wheel works correctly.
-        enforce_independent_proofs(status, lambda: private_proof(args, lock, first, runtime_archive, env))
+        enforce_independent_proofs(status, lambda: private_proof(args, lock, first, runtime_archive, env, status))
         status['passed'] = True
         dump(args.reports / 'result.json', status)
         from package_publication import package_publication
@@ -582,6 +664,7 @@ def main():
                             publication_output=args.publication_output)
     except BaseException as error:
         status.update(passed=False, error=f'{type(error).__name__}: {error}')
+        capture_failed_verifier(args, status, first, second, origin)
         raise
     finally:
         dump(args.reports / 'result.json', status)

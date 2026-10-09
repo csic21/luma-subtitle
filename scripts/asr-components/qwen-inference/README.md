@@ -2,8 +2,11 @@
 
 This temporary control is for the reviewed feature branch only. It does not enable a
 production runtime or model. Remove `.github/workflows/asr-qwen-inference-proof.yml`
-before the final integrated source is merged/released. No request file accompanies
-these scripts, and no ordinary PR action invokes a model download.
+after the reviewed one-time attempt and before the application release. It may
+accompany a reviewed source prerequisite merge to main for exact component-release
+workflow parity; its strictly feature-branch-scoped push trigger still cannot run
+on main. No request file accompanies these scripts, and no ordinary PR action
+invokes a model download.
 
 ## Request boundary
 

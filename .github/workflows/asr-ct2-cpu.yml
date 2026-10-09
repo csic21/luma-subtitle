@@ -72,6 +72,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       source_sha: ${{ steps.request.outputs.source_sha }}
+      diagnostic_artifact: ${{ steps.request.outputs.diagnostic_artifact }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -95,6 +96,7 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
       CPU_PUBLICATION_REQUESTED: ${{ inputs.publication || false }}
+      CPU_DIAGNOSTIC_EXPORT: ${{ needs.request.outputs.diagnostic_artifact == 'cpu-wheel-source-notices-1-day' && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && !inputs.source_sha && !inputs.publication }}
       CPU_CANDIDATE_EXPORT: ${{ inputs.publication && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && github.workflow == 'Publish reviewed CPU wheel' && startsWith(github.workflow_ref, 'csic21/luma-subtitle/.github/workflows/asr-cpu-wheel-publish.yml@') }}
     steps:
       - name: Restrict candidate export to the reviewed publisher caller
@@ -126,6 +128,10 @@ jobs:
           $orchestrator = Join-Path $env:pythonLocation 'python.exe'
           $reports = Join-Path $env:GITHUB_WORKSPACE 'dist/ct2-cpu-reports'
           $publicationArgs = @()
+          $diagnosticArgs = @()
+          if ($env:CPU_DIAGNOSTIC_EXPORT -eq 'true') {
+            $diagnosticArgs = @('--diagnostic-output', (Join-Path $env:GITHUB_WORKSPACE 'dist/ct2-cpu-diagnostic'))
+          }
           if ($env:CPU_CANDIDATE_EXPORT -eq 'true') {
             $publicationArgs = @('--publication-output', (Join-Path $env:GITHUB_WORKSPACE 'dist/ct2-cpu-candidate'))
           }
@@ -135,12 +141,14 @@ jobs:
             --work "$env:RUNNER_TEMP/luma-ct2-cpu-proof" `
             --cache "$env:RUNNER_TEMP/luma-ct2-cpu-downloads" `
             --reports "$reports" `
-            --worker 'src-tauri/src/asr/worker.py' @publicationArgs
+            --worker 'src-tauri/src/asr/worker.py' @publicationArgs @diagnosticArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Proof runs upload metadata only; no runtime/CRT/model upload.
+      # Ordinary reports contain metadata only; no runtime/CRT/model upload.
+      # Explicit diagnostic requests may retain only the reviewed own CPU wheel
+      # and its source/notices in the separate one-day failure artifact below.
       # The independent provenance, CRT license, hash and native inference review
       # must finish before a separate immutable non-app component release exists.
-      - name: Upload test reports only (binary redistribution hold)
+      - name: Upload test reports only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -151,6 +159,21 @@ jobs:
             dist/ct2-cpu-reports/*.json
             dist/ct2-cpu-reports/*.log
             dist/ct2-cpu-reports/*-CMakeCache.txt
+
+      - name: Retain explicit failed-verifier diagnostic (never a release candidate)
+        id: diagnostic-upload
+        if: failure() && !cancelled() && env.CPU_DIAGNOSTIC_EXPORT == 'true' && hashFiles('dist/ct2-cpu-diagnostic/diagnostic-manifest.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ct2-cpu-DIAGNOSTIC-NOT-FOR-RELEASE-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: false
+          path: |
+            dist/ct2-cpu-diagnostic/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl
+            dist/ct2-cpu-diagnostic/luma-ct2-cpu-4.8.2-1-sources.zip
+            dist/ct2-cpu-diagnostic/luma-ct2-cpu-4.8.2-1-notices.zip
+            dist/ct2-cpu-diagnostic/diagnostic-manifest.json
 
       - name: Export the three reviewed candidate assets and proof only
         id: candidate-upload

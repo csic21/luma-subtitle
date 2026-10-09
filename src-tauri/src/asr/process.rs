@@ -386,6 +386,131 @@ fn check_cancel(cancel: &AtomicBool, stopping: &AtomicBool) -> JobResult<()> {
 }
 
 #[cfg(test)]
+pub(crate) async fn run_real_optional_worker_fixture(
+    config: &AsrConfig,
+    audio: &Path,
+    long_audio: &Path,
+    output: &Path,
+) {
+    // Shared by the opt-in environment wrapper and the real managed installer
+    // fixture. The assertions exercise the same production worker lifecycle.
+    config.validate().unwrap();
+    std::fs::create_dir_all(output).unwrap();
+    let runtime = AsrRuntime::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let probe = runtime
+        .request(
+            config,
+            "probe",
+            None,
+            None,
+            cancel.clone(),
+            Some(Duration::from_secs(60)),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe["ready"], true, "{probe}");
+    assert_eq!(probe["device"], "cpu");
+    let duration = super::wav_duration_ms(audio).unwrap();
+    for (id, reused) in [("cold", false), ("warm", true)] {
+        let result = runtime
+            .request(
+                config,
+                "transcribe",
+                Some(audio),
+                Some("en"),
+                cancel.clone(),
+                Some(Duration::from_secs(180)),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(result["reused"], reused);
+        assert_eq!(result["backend"], "faster-whisper");
+        assert_eq!(result["device"], "cpu");
+        let segments = super::validate_segments(&result, duration).unwrap();
+        let rendered = crate::subtitles::render_srt(&segments, None);
+        let source_path = output.join(format!("{id}.source.srt"));
+        crate::subtitles::write_srt_text(&source_path, &rendered)
+            .await
+            .unwrap();
+        let imported = crate::subtitles::parse_srt_file(&source_path).unwrap();
+        let export_path = output.join(format!("{id}.export.srt"));
+        crate::subtitles::write_srt_text(
+            &export_path,
+            &crate::subtitles::render_srt(&imported, None),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(export_path).unwrap(), rendered);
+        assert_eq!(imported.len(), segments.len());
+        assert!(
+            rendered.to_lowercase().contains("country"),
+            "public JFK fixture should contain known speech"
+        );
+        std::fs::write(
+            output.join(format!("{id}.json")),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let flag = cancelled.clone();
+    let mut armed = false;
+    let start = Instant::now();
+    let result = runtime
+        .request(
+            config,
+            "transcribe",
+            Some(long_audio),
+            Some("en"),
+            cancelled,
+            Some(Duration::from_secs(60)),
+            |event| {
+                if !armed
+                    && event["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("Transcribing")
+                {
+                    armed = true;
+                    let flag = flag.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                        flag.store(true, Ordering::SeqCst);
+                    });
+                }
+            },
+        )
+        .await;
+    assert!(armed, "cancel after the actual model begins inference");
+    assert!(matches!(result, Err(JobError::Cancelled)), "{result:?}");
+    assert!(start.elapsed() < Duration::from_secs(15));
+    assert!(runtime.worker.lock().await.is_none());
+    let recovered = runtime
+        .request(
+            config,
+            "transcribe",
+            Some(audio),
+            Some("en"),
+            cancel,
+            Some(Duration::from_secs(180)),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered["reused"], false);
+    super::validate_segments(&recovered, duration).unwrap();
+    std::fs::write(
+        output.join("recovered.json"),
+        serde_json::to_vec_pretty(&recovered).unwrap(),
+    )
+    .unwrap();
+    runtime.shutdown().await;
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
@@ -671,7 +796,6 @@ mod tests {
                     .expect("set an existing local CTranslate2 model"),
                 ..AsrConfig::default()
             };
-            config.validate().unwrap();
             let audio = std::path::PathBuf::from(
                 std::env::var("LUMA_ASR_TEST_AUDIO").expect("set a public test WAV"),
             );
@@ -681,119 +805,7 @@ mod tests {
             let output = std::path::PathBuf::from(
                 std::env::var("LUMA_ASR_TEST_OUTPUT").expect("set an isolated output directory"),
             );
-            std::fs::create_dir_all(&output).unwrap();
-            let runtime = AsrRuntime::default();
-            let cancel = Arc::new(AtomicBool::new(false));
-            let probe = runtime
-                .request(
-                    &config,
-                    "probe",
-                    None,
-                    None,
-                    cancel.clone(),
-                    Some(Duration::from_secs(60)),
-                    |_| {},
-                )
-                .await
-                .unwrap();
-            assert_eq!(probe["ready"], true, "{probe}");
-            assert_eq!(probe["device"], "cpu");
-            let duration = super::super::wav_duration_ms(&audio).unwrap();
-            for (id, reused) in [("cold", false), ("warm", true)] {
-                let result = runtime
-                    .request(
-                        &config,
-                        "transcribe",
-                        Some(&audio),
-                        Some("en"),
-                        cancel.clone(),
-                        Some(Duration::from_secs(180)),
-                        |_| {},
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(result["reused"], reused);
-                assert_eq!(result["backend"], "faster-whisper");
-                assert_eq!(result["device"], "cpu");
-                let segments = super::super::validate_segments(&result, duration).unwrap();
-                let rendered = crate::subtitles::render_srt(&segments, None);
-                let source_path = output.join(format!("{id}.source.srt"));
-                crate::subtitles::write_srt_text(&source_path, &rendered)
-                    .await
-                    .unwrap();
-                let imported = crate::subtitles::parse_srt_file(&source_path).unwrap();
-                let export_path = output.join(format!("{id}.export.srt"));
-                crate::subtitles::write_srt_text(
-                    &export_path,
-                    &crate::subtitles::render_srt(&imported, None),
-                )
-                .await
-                .unwrap();
-                assert_eq!(std::fs::read_to_string(export_path).unwrap(), rendered);
-                assert_eq!(imported.len(), segments.len());
-                assert!(
-                    rendered.to_lowercase().contains("country"),
-                    "public JFK fixture should contain known speech"
-                );
-                std::fs::write(
-                    output.join(format!("{id}.json")),
-                    serde_json::to_vec_pretty(&result).unwrap(),
-                )
-                .unwrap();
-            }
-            let cancelled = Arc::new(AtomicBool::new(false));
-            let flag = cancelled.clone();
-            let mut armed = false;
-            let start = Instant::now();
-            let result = runtime
-                .request(
-                    &config,
-                    "transcribe",
-                    Some(&long_audio),
-                    Some("en"),
-                    cancelled,
-                    Some(Duration::from_secs(60)),
-                    |event| {
-                        if !armed
-                            && event["message"]
-                                .as_str()
-                                .unwrap_or("")
-                                .starts_with("Transcribing")
-                        {
-                            armed = true;
-                            let flag = flag.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(Duration::from_millis(150)).await;
-                                flag.store(true, Ordering::SeqCst);
-                            });
-                        }
-                    },
-                )
-                .await;
-            assert!(armed, "cancel after the actual model begins inference");
-            assert!(matches!(result, Err(JobError::Cancelled)), "{result:?}");
-            assert!(start.elapsed() < Duration::from_secs(15));
-            assert!(runtime.worker.lock().await.is_none());
-            let recovered = runtime
-                .request(
-                    &config,
-                    "transcribe",
-                    Some(&audio),
-                    Some("en"),
-                    cancel,
-                    Some(Duration::from_secs(180)),
-                    |_| {},
-                )
-                .await
-                .unwrap();
-            assert_eq!(recovered["reused"], false);
-            super::super::validate_segments(&recovered, duration).unwrap();
-            std::fs::write(
-                output.join("recovered.json"),
-                serde_json::to_vec_pretty(&recovered).unwrap(),
-            )
-            .unwrap();
-            runtime.shutdown().await;
+            run_real_optional_worker_fixture(&config, &audio, &long_audio, &output).await;
         });
     }
 

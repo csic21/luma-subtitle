@@ -183,9 +183,32 @@ an explicit manual proof, or the source-pinned reusable publication invocation.
 Native proofs have unique concurrency groups and are not automatically canceled
 by later branch updates. A successful cheap guard is never native-build evidence.
 
+## Bounded verifier diagnostics
+
+The clean-runtime verifier retains atomic, bounded stage/protocol metadata before
+third-party imports and during the existing worker request stream. A single
+Python traceback snapshot is scheduled after 90 seconds; the outer failure limit
+remains 900 seconds. The journal distinguishes imports, device probes, worker
+progress and final module validation without changing native kernels or worker
+computation. A missing journal or report is not evidence that inference started
+or completed. The exact Windows OS library `msvcp_win.dll` follows the existing
+OS-library policy; numbered optional VC runtime DLLs must still load privately.
+
+A separately validated request-only push can opt into one-day failure capture.
+Only equal fresh fixed-root builds with successful static closure and an actually
+failed or timed-out native verifier qualify. Success, cancellation and earlier
+failures do not. The explicit `--diagnostic-output` hook exports exactly the own
+CPU wheel, unchanged source/notices bundles and `diagnostic-manifest.json`, whose
+last atomic write activates the workflow upload. It includes the original
+pybind11 header/source wheel and the reviewed model-fixture omission inventory;
+no assembled runtime, CRT or model bytes are included. This failed-proof artifact
+is marked non-installable and cannot satisfy the successful publication gate.
+No replay or release is performed by this capture path.
+
 ## Release hold
 
 Default, PR and manual proof runs upload only JSON/log/CMake-cache evidence.
+The explicit one-day failed-verifier diagnostic opt-in above is separate.
 Successful proofs also generate deterministic source/notices candidates and their
 asset pins locally; their publication-proof.json alone is included in reports.
 An optional workflow_call publication input is accepted only from the dedicated

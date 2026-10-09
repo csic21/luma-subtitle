@@ -16,6 +16,8 @@ use tauri::{AppHandle, Manager};
 
 mod process;
 pub(crate) use process::AsrRuntime;
+#[cfg(test)]
+pub(crate) use process::run_real_optional_worker_fixture;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
