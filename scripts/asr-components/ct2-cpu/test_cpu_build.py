@@ -163,6 +163,8 @@ class SourceTests(unittest.TestCase):
 
     def test_developer_shell_uses_batch_and_memory_only_environment(self):
         script = (build.HERE / 'cmd_environment.ps1').read_text()
+        self.assertIn('if ($Value -cmatch ', script)
+        self.assertIn('if ($argument -cnotmatch ', script)
         self.assertIn('call "{0}" {1} >nul', script)
         self.assertIn("@('/d', '/c', 'call', $batch)", script)
         self.assertIn('$start.UseShellExecute = $false', script)

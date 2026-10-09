@@ -2,7 +2,9 @@ function Assert-CmdLiteral {
     param([Parameter(Mandatory=$true)][string]$Value)
     # CMD expansion/metacharacters, control characters and ambiguous encodings
     # are not valid in a reviewed toolchain path or the private temporary path.
-    if ($Value -match '[\x00-\x1f\x7f-\uffff"&|<>^%!]') {
+    # Case-sensitive matching prevents Unicode case folding of this range from
+    # rejecting ASCII letters such as S/K in an otherwise valid Windows path.
+    if ($Value -cmatch '[\x00-\x1f\x7f-\uffff"&|<>^%!]') {
         throw 'Developer-shell input contains an unsafe CMD character.'
     }
 }
@@ -18,7 +20,7 @@ function Set-DeveloperEnvironment {
         throw 'The reviewed developer batch file must be an existing local absolute path.'
     }
     foreach ($argument in $Arguments) {
-        if ($argument -notmatch '^-[a-z_]+(?:=[a-zA-Z0-9.]+)?$') {
+        if ($argument -cnotmatch '^-[a-z_]+(?:=[a-zA-Z0-9.]+)?$') {
             throw 'Developer-shell option is not a bounded literal argument.'
         }
     }
