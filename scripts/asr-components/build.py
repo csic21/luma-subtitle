@@ -29,6 +29,16 @@ MAX_ASSET = 2_000_000_000  # Below GitHub's individual release-asset limit.
 ALLOWED = {'github.com', 'files.pythonhosted.org', 'pypi.org'}
 
 
+def embed_nagisa(source, managed_worker=False):
+    marker = '# LUMA_NAGISA_COMPAT_SOURCE'
+    if source.count(marker) != 1:
+        raise ValueError('Expected exactly one reviewed Nagisa source marker')
+    helper = (ROOT.parent.parent / 'src-tauri/src/asr/nagisa_compat.py').read_text(encoding='utf-8')
+    if managed_worker:
+        helper += '\nLUMA_MANAGED_QWEN_RUNTIME = True\n'
+    return source.replace(marker, helper)
+
+
 def sha256(path):
     with path.open('rb') as f:
         return hashlib.file_digest(f, 'sha256').hexdigest()
@@ -379,7 +389,10 @@ def build(pack_id, output, cache, source_sha, native=True, installer='wheel'):
     prune_reviewed_files(root, pack_id)
     copy_runtime_licenses(root, pack['platform'])
     copy_supplemental_notices(root, pack)
-    shutil.copyfile(ROOT / 'self_test.py', root / 'self_test.py')
+    self_test = (ROOT / 'self_test.py').read_text(encoding='utf-8')
+    if pack['platform'] == 'windows-x64' and pack['backend'] == 'qwen3-asr':
+        self_test = embed_nagisa(self_test)
+    (root / 'self_test.py').write_text(self_test, encoding='utf-8', newline='\n')
     write_licenses(root, site, config['runtime'], lock['wheels'])
     dump(root / 'component.json', {'schema': 1, **pack, 'version': config['version'], 'source_sha': source_sha,
                                   'entrypoint': runtime['entrypoint'], 'python_version': config['runtime']['version'],

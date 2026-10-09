@@ -21,6 +21,8 @@ import time
 import unicodedata
 import wave
 
+# LUMA_NAGISA_COMPAT_SOURCE
+
 
 SAMPLE_RATE = 16000
 MAX_REQUEST_BYTES = 1024 * 1024
@@ -272,6 +274,8 @@ def runtime(backend, requested):
         return {"device": device, "module": module, "compute_type": compute, "warnings": warnings}
     if requested == "metal":
         raise WorkerError("device_unavailable", "Qwen3-ASR Metal is not supported in this version. Choose CPU or CUDA.")
+    if globals().get("LUMA_MANAGED_QWEN_RUNTIME", False):
+        luma_prepare_nagisa()
     torch = optional_import("torch", "qwen-asr and PyTorch")
     module = optional_import("qwen_asr", "qwen-asr")
     hip = bool(getattr(getattr(torch, "version", None), "hip", None))

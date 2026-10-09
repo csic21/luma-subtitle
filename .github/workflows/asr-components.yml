@@ -5,7 +5,7 @@ on:
     paths:
       - 'scripts/asr-components/**'
       - '!scripts/asr-components/ct2-cpu/**'
-      - 'src-tauri/src/asr/worker.py'
+      - 'src-tauri/src/asr/**'
       - 'src-tauri/src/asr_components.rs'
       - 'src-tauri/src/asr_components/**'
       - 'src-tauri/resources/asr/**'
@@ -36,6 +36,12 @@ on:
 
 permissions:
   contents: read
+
+# Superseded direct PR attempts may stop; exact-source/manual/reusable evidence
+# has its own run group and is never implicitly cancelled by a later push.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && !inputs.source_sha && format('asr-components-pr-{0}', github.event.pull_request.number) || format('asr-components-source-{0}-run-{1}', inputs.source_sha || github.sha, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.source_sha }}
 
 jobs:
   build:

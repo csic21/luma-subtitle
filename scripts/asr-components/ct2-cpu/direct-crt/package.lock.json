@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "purpose": "Report-only proof of exact direct upstream CRT delivery; no redistribution grant",
+  "version": "14.44.35211.0",
+  "architecture": "x86_64",
+  "source_url": "https://download.visualstudio.microsoft.com/download/pr/73aabf2e-9532-4f68-99f7-3247081a619c/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+  "source_manifest": "https://raw.githubusercontent.com/microsoft/winget-pkgs/master/manifests/m/Microsoft/VCRedist/2015%2B/x64/14.44.35211.0/Microsoft.VCRedist.2015%2B.x64.installer.yaml",
+  "installer": {
+    "bytes": 25635768,
+    "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
+  },
+  "containers": {
+    "ux.cab": {
+      "offset": 479744,
+      "bytes": 195988,
+      "sha256": "2f57cf2cd504bd100c9222bb123b9c3a40802cca73e89ca05c97885d91be3a78"
+    },
+    "attached.cab": {
+      "offset": 686152,
+      "bytes": 24939223,
+      "sha256": "468f1264d50b9e3b9d309ab9e13c02ff379fd95a2837383bf65c9616583013d6"
+    }
+  },
+  "minimum_cab": {
+    "parent": "attached.cab",
+    "member": "a12",
+    "original_path": "packages\\vcRuntimeMinimum_amd64\\cab1.cab",
+    "bytes": 987836,
+    "sha256": "640aa6c516c72444523b8fbe034db46ff4e118ed02705340e3ccb62d426ff040"
+  },
+  "dlls": {
+    "msvcp140.dll": {
+      "member": "msvcp140.dll_amd64",
+      "bytes": 557728,
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    "msvcp140_1.dll": {
+      "member": "msvcp140_1.dll_amd64",
+      "bytes": 35952,
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    }
+  },
+  "notices": {
+    "license-en.rtf": {
+      "parent": "ux.cab",
+      "member": "u4",
+      "bytes": 9235,
+      "sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b"
+    },
+    "license-zh-CN.rtf": {
+      "parent": "ux.cab",
+      "member": "u28",
+      "bytes": 18214,
+      "sha256": "a808b4933ce3b3e0893504dbef43ebf90b8b567f94bd6481b6315ed9141e1b11"
+    }
+  },
+  "terms_url": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/",
+  "eula_id": "Cpp_2015-2022_ENU.1033",
+  "binaries_in_repository": false,
+  "redistribution_permission_established": false
+}

@@ -269,7 +269,10 @@ fn self_test_script(backend: &str) -> Result<String, String> {
         "qwen3-asr" => "from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner; import torch; assert (torch.tensor([1.0])+1).item()==2",
         _ => return Err("Unsupported component self-test backend.".into()),
     };
-    Ok(format!("import sys, os\nsys.modules['vllm'] = None\ndef offline(event, args):\n    if event in ('socket.connect','socket.getaddrinfo','socket.bind','subprocess.Popen','os.system','os.posix_spawn','os.fork'):\n        raise RuntimeError('Private engine self-test is offline and cannot start child processes')\nsys.addaudithook(offline)\n{code}\n"))
+    let compatibility = if cfg!(windows) && backend == "qwen3-asr" {
+        format!("{}\nluma_prepare_nagisa()\n", include_str!("asr/nagisa_compat.py"))
+    } else { String::new() };
+    Ok(format!("import sys, os\nsys.modules['vllm'] = None\ndef offline(event, args):\n    if event in ('socket.connect','socket.getaddrinfo','socket.bind','subprocess.Popen','os.system','os.posix_spawn','os.fork'):\n        raise RuntimeError('Private engine self-test is offline and cannot start child processes')\nsys.addaudithook(offline)\n{compatibility}{code}\n"))
 }
 fn self_test_failure(status: std::process::ExitStatus) -> String {
     let detail = match status.code() {
@@ -323,6 +326,23 @@ fn required_free_space(download_bytes: u64, installed_bytes: u64) -> Result<u64,
 pub(crate) fn acquire_managed_use_leases(paths: &[&str]) -> Result<Vec<std::fs::File>, String> {
     let Some(root) = MANAGED_ROOT.get() else { return Ok(Vec::new()); };
     acquire_managed_use_leases_at(root, paths)
+}
+/// Called while the worker owns its shared use lease. A managed model alone is
+/// not authority to alter an external/manual Python environment.
+pub(crate) fn verified_managed_windows_qwen_runtime(python: &str) -> Result<bool, String> {
+    let Some(root) = MANAGED_ROOT.get() else { return Ok(false); };
+    verified_managed_windows_qwen_runtime_at(root, python, &catalog::embedded()?)
+}
+fn verified_managed_windows_qwen_runtime_at(root: &Path, python: &str, catalog: &catalog::Catalog) -> Result<bool, String> {
+    if !store::uses_managed_root(root, &[python])? { return Ok(false); }
+    let selected = std::fs::canonicalize(python).map_err(|e| e.to_string())?;
+    for runtime in &catalog.runtimes {
+        if runtime.platform == "windows-x64" && runtime.engine == "qwen3-asr" && runtime.backend == "qwen3-asr"
+            && store::matches_active_interpreter(root, runtime, &selected)? {
+            return Ok(true);
+        }
+    }
+    Err("The selected managed Qwen interpreter is not an active verified runtime. Select the installed component or use Repair.".into())
 }
 fn acquire_managed_use_leases_at(root: &Path, paths: &[&str]) -> Result<Vec<std::fs::File>, String> {
     if store::uses_managed_root(root, paths)? { Ok(vec![store::acquire_use_lease(root, false)?]) } else { Ok(Vec::new()) }

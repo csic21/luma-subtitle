@@ -386,6 +386,50 @@ fn recipe_runtime() -> catalog::Runtime {
     runtime.recipe.as_ref().unwrap().validate(&runtime).unwrap(); runtime
 }
 #[test]
+fn managed_qwen_compatibility_requires_active_interpreter_identity_not_model_lease() {
+    let fixture = Fixture::new();
+    let mut runtime = recipe_runtime();
+    runtime.engine = "qwen3-asr".into(); runtime.backend = "qwen3-asr".into();
+    let catalog = catalog::Catalog { schema: 1, platform: "windows-x64".into(), runtimes: vec![runtime.clone()], models: Vec::new() };
+    let component = Component::Runtime(runtime);
+    let stage = store::Staging::create(&fixture.root).unwrap();
+    fs::write(stage.payload().join("python.exe"), b"good").unwrap();
+    store::write_receipt(&stage.payload(), &component, vec![store::FileReceipt { path: "python.exe".into(), bytes: 4, sha256: digest(b"good") }]).unwrap();
+    let installed = store::commit(&fixture.root, &component, &stage).unwrap();
+    let python = installed.python_path.unwrap();
+    let _lease = acquire_managed_use_leases_at(&fixture.root, &[&python]).unwrap();
+    assert!(verified_managed_windows_qwen_runtime_at(&fixture.root, &python, &catalog).unwrap());
+
+    let external = fixture.base.join("manual-python.exe"); fs::write(&external, b"good").unwrap();
+    let managed_model = model();
+    let managed_model = store::commit(&fixture.root, &managed_model, &staged(&fixture.root, &managed_model)).unwrap().path.unwrap();
+    let mixed_leases = acquire_managed_use_leases_at(&fixture.root, &[external.to_str().unwrap(), &managed_model]).unwrap();
+    assert!(!mixed_leases.is_empty());
+    assert!(!verified_managed_windows_qwen_runtime_at(&fixture.root, external.to_str().unwrap(), &catalog).unwrap());
+    assert!(verified_managed_windows_qwen_runtime_at(&fixture.root, &managed_model, &catalog).is_err());
+    drop(mixed_leases);
+
+    fs::write(&python, b"evil").unwrap();
+    assert!(verified_managed_windows_qwen_runtime_at(&fixture.root, &python, &catalog).is_err());
+    fs::write(&python, b"good").unwrap();
+    let next = store::Staging::create(&fixture.root).unwrap();
+    fs::write(next.payload().join("python.exe"), b"good").unwrap();
+    store::write_receipt(&next.payload(), &component, vec![store::FileReceipt { path: "python.exe".into(), bytes: 4, sha256: digest(b"good") }]).unwrap();
+    store::commit(&fixture.root, &component, &next).unwrap();
+    assert!(verified_managed_windows_qwen_runtime_at(&fixture.root, &python, &catalog).is_err());
+}
+#[test]
+fn managed_qwen_self_test_embeds_shared_compatibility_only_on_windows() {
+    let qwen = self_test_script("qwen3-asr").unwrap();
+    assert_eq!(qwen.contains("def luma_prepare_nagisa()"), cfg!(windows));
+    if cfg!(windows) {
+        assert!(qwen.find("sys.addaudithook(offline)").unwrap() < qwen.find("def luma_prepare_nagisa()").unwrap());
+        assert!(qwen.find("\nluma_prepare_nagisa()\n").unwrap() < qwen.find("from qwen_asr import").unwrap());
+    }
+    assert!(!self_test_script("faster-whisper").unwrap().contains("luma_prepare_nagisa"));
+    assert!(!self_test_script("mlx-whisper").unwrap().contains("luma_prepare_nagisa"));
+}
+#[test]
 fn recipe_rejects_remote_trust_drift_missing_bounds_and_changed_displayed_terms() {
     let runtime = recipe_runtime(); let valid = runtime.recipe.as_ref().unwrap();
     let mut changed = valid.clone(); changed.python.pip_version = "latest".into(); assert!(changed.validate(&runtime).is_err());

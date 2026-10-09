@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from build import ROOT, ALLOWED, dump, fetch, safe_name, sha256
+from build import ROOT, ALLOWED, dump, embed_nagisa, fetch, safe_name, sha256
 
 
 def extract(archive, destination):
@@ -75,6 +75,14 @@ def terminate_idle_worker(command, env, cwd):
         assert idle.returncode is not None
 
 
+def nagisa_probe(executable, probe, env, cwd, *flags):
+    result = subprocess.run([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(probe), *flags],
+                            capture_output=True, text=True, encoding='utf-8', env=env, cwd=cwd, timeout=180)
+    if result.returncode:
+        raise RuntimeError(f'Native Nagisa probe failed ({result.returncode}):\n{result.stdout}\n{result.stderr}')
+    return json.loads(result.stdout.splitlines()[-1])
+
+
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--manifest', type=Path, required=True); p.add_argument('--worker', type=Path, required=True); p.add_argument('--cache', type=Path, required=True)
     a = p.parse_args(); manifest = json.loads(a.manifest.read_text()); output = a.manifest.parent
@@ -84,20 +92,35 @@ def main():
         work = Path(temp); unpacked = work / 'first-location'; extract(archive, unpacked)
         assert sum(p.stat().st_size for p in unpacked.rglob('*') if p.is_file()) == manifest['installed_bytes']
         assert len([p for p in unpacked.rglob('*') if p.is_file()]) == manifest['max_files']
+        env = clean_environment(work / 'clean-home')
+        nagisa = None; worker = a.worker.resolve()
+        managed_qwen = manifest['platform'] == 'windows-x64' and manifest['backend'] == 'qwen3-asr'
+        if managed_qwen:
+            probe = work / 'nagisa-probe.py'
+            probe.write_text(embed_nagisa((ROOT / 'probe_nagisa.py').read_text(encoding='utf-8')), encoding='utf-8')
+            baseline = nagisa_probe(unpacked / manifest['entrypoint'], probe, env, work)
+            worker = work / 'managed-worker.py'
+            worker.write_text(embed_nagisa(a.worker.read_text(encoding='utf-8'), managed_worker=True), encoding='utf-8')
         relocated = work / 'Relocated private runtime é 测试'; unpacked.rename(relocated)
-        env = clean_environment(work / 'clean-home'); executable = relocated / manifest['entrypoint']
+        executable = relocated / manifest['entrypoint']
+        if managed_qwen:
+            adapted = nagisa_probe(executable, probe, env, work, '--adapt')
+            assert baseline['words'] == adapted['words'] and baseline['postags'] == adapted['postags']
+            failure = nagisa_probe(executable, probe, env, work, '--adapt', '--forced-failure')
+            nagisa = {'baseline': baseline, 'unicode': adapted, 'failure': failure, 'japanese_tokens_match': True}
+            print('NAGISA_UNICODE_PROOF=' + json.dumps(nagisa, ensure_ascii=False), flush=True)
         result = subprocess.run([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(relocated / 'self_test.py')],
                                 capture_output=True, text=True, encoding='utf-8', env=env, cwd=work, timeout=240)
         if result.returncode:
             raise RuntimeError(f'Private self-test failed ({result.returncode}):\n{result.stdout}\n{result.stderr}')
         imports = json.loads(result.stdout.splitlines()[-1])
         requests = [{'id': 'offline-url', 'op': 'probe', 'engine': manifest['engine'], 'device': manifest['device'], 'model_path': 'https://invalid.example/never-download'}]
-        frames = worker_requests(executable, a.worker.resolve(), requests, env, work)
+        frames = worker_requests(executable, worker, requests, env, work)
         response = frames[-1]
         assert response['id'] == 'offline-url' and response['event'] == 'probe' and response['ready'] is False
         assert response['code'] == 'local_path_required', response
-        terminate_idle_worker([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(a.worker.resolve())], env, work)
-        recovered = worker_requests(executable, a.worker.resolve(), requests, env, work)
+        terminate_idle_worker([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(worker)], env, work)
+        recovered = worker_requests(executable, worker, requests, env, work)
         assert recovered[-1]['code'] == 'local_path_required'
         inference = {'tested': False, 'reason': 'Qwen imports/API only; model weights and memory fit are untested.' if manifest['backend'] == 'qwen3-asr' else 'MLX tiny fixture access is paused; no model inference performed.'}
         if manifest['backend'] == 'faster-whisper':
@@ -110,7 +133,7 @@ def main():
                 shutil.copyfile(fetch(item, a.cache), target)
             audio = work / 'jfk.wav'; shutil.copyfile(fetch(fixture['audio'], a.cache), audio)
             common = {'engine': 'whisper-accelerated', 'device': 'cpu', 'model_path': str(model), 'audio_path': str(audio), 'language': 'en'}
-            frames = worker_requests(executable, a.worker.resolve(), [dict(common, id='probe', op='probe'), dict(common, id='cold', op='transcribe'), dict(common, id='warm', op='transcribe')], env, work)
+            frames = worker_requests(executable, worker, [dict(common, id='probe', op='probe'), dict(common, id='cold', op='transcribe'), dict(common, id='warm', op='transcribe')], env, work)
             by_id = {f['id']: f for f in frames if f.get('event') in {'probe', 'result', 'error'}}
             assert by_id['probe']['ready'], by_id
             for key in ('cold', 'warm'):
@@ -130,6 +153,7 @@ def main():
                   'system_python_used': False, 'system_packages_used': False, 'offline_protocol_tested': True,
                   'worker_test': {'passed': True, 'checks': ['json-lines', 'offline-path-rejection', 'clean-eof-shutdown', 'idle-termination', 'recovery']},
                   'imports': imports, 'inference': inference,
+                  'nagisa_unicode': nagisa,
                   'limitations': ['No CUDA validation or CUDA redistribution.', 'No Developer ID signing, notarization, Gatekeeper bypass, or clean-GUI-machine validation.']}
         dump(output / f'{manifest["id"]}.smoke.json', report)
         print(json.dumps(report, indent=2, ensure_ascii=False))

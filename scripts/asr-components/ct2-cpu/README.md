@@ -149,6 +149,21 @@ The independent public-redistribution gate remains false. The proof still fails
 for any missing private dependency or host-global loaded CRT; no global install,
 DLL substitution or source/static-CRT workaround is used.
 
+## Direct upstream CRT package audit
+
+A separate short Windows job validates one exact Microsoft-hosted VC Redist
+14.44.35211.0 package without running its installer, DLLs or MSI, installing
+anything globally, or accepting an agreement. The helper in `direct-crt/`
+checks the whole package and fixed CAB slices/members before using Windows'
+existing system `expand.exe`. Native PowerShell then validates Authenticode for
+the original installer and the two extracted DLLs. Only extraction/signature
+JSON is uploaded; package, CAB, DLL and notice bytes remain private to CI.
+This audit does not integrate an app installer or clear public redistribution.
+
+PR proof runs supersede only the same PR's earlier proof run. Manual proofs,
+including explicit source-SHA proofs, have unique concurrency groups and are
+not automatically canceled by branch updates.
+
 ## Release hold
 
 Only JSON/log/CMake-cache test evidence is uploaded. Wheel, Python, model and CRT

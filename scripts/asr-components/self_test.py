@@ -17,6 +17,8 @@ import re
 import site
 import sys
 
+# LUMA_NAGISA_COMPAT_SOURCE
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -156,12 +158,14 @@ def main():
         packages = ['mlx-whisper', 'mlx', 'mlx-metal', 'torch', 'numpy']
         local_module('torch')
     elif backend == 'qwen3-asr':
-        torch = local_module('torch')
-        assert torch.version.cuda is None, 'CUDA libraries are outside this CPU pack'
         # A valid bundled file that Python can read but DyNet cannot open from
         # the Unicode relocation is materially different from missing data.
         # This is evidence only, never a path or dependency workaround.
         print(json.dumps(nagisa_data_diagnostic(), sort_keys=True), file=sys.stderr, flush=True)
+        if sys.platform == 'win32':
+            luma_prepare_nagisa()
+        torch = local_module('torch')
+        assert torch.version.cuda is None, 'CUDA libraries are outside this CPU pack'
         qwen = local_module('qwen_asr')
         for module in ('nagisa', 'dynet', 'soynlp', 'librosa', 'soundfile', 'transformers', 'qwen_omni_utils'):
             local_module(module)

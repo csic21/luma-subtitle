@@ -130,6 +130,8 @@ Settings and per-task configuration can explicitly select a persistent local MLX
 
 See the [offline setup guide](docs/OPTIONAL_ASR.md) for managed setup, model formats, storage planning, recovery and optional advanced external-runtime examples. The same guide is bundled in the settings screen. Optional engines are unbenchmarked in Luma and should be validated with your own sample audio before use. They do not replace the existing default.
 
+The app assembles pinned upstream binary wheels using its own private, offline pip. You review the sources and applicable terms before installation; no manual pip commands, dependency resolution over the network, or changes to system Python are required.
+
 ## Run
 
 ```powershell

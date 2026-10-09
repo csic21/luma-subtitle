@@ -244,6 +244,21 @@ fn current(root: &Path, component: &Component) -> Result<Option<PathBuf>, String
     if regular_file(&receipt)?.len() > 32 * 1024 * 1024 || activation.receipt_sha256.as_deref() != Some(hash_file(&receipt)?.as_str()) { return Err("Component file receipt has changed since activation. Use Repair.".into()); }
     Ok(Some(path))
 }
+/// The caller holds the managed use lease. Match an active runtime receipt and
+/// its exact interpreter, not merely a path somewhere in managed storage.
+pub(super) fn matches_active_interpreter(root: &Path, runtime: &super::catalog::Runtime, selected: &Path) -> Result<bool, String> {
+    let component = Component::Runtime(runtime.clone());
+    let Some(path) = current(root, &component)? else { return Ok(false); };
+    let interpreter = checked_path(&path, &runtime.entrypoint)?;
+    if fs::canonicalize(&interpreter).map_err(|e| e.to_string())?.as_path() != selected { return Ok(false); }
+    let receipt = read_receipt(&path, &component)?;
+    let entry = receipt.files.iter().find(|entry| entry.path == runtime.entrypoint)
+        .ok_or("Managed interpreter is missing from its verified receipt. Use Repair.")?;
+    if regular_file(&interpreter)?.len() != entry.bytes || hash_file(&interpreter)? != entry.sha256 {
+        return Err("Managed interpreter differs from its activation receipt. Use Repair.".into());
+    }
+    Ok(true)
+}
 pub(super) fn read_receipt(path: &Path, component: &Component) -> Result<Receipt, String> {
     let receipt_path = path.join(".luma-receipt.json");
     if regular_file(&receipt_path)?.len() > 32 * 1024 * 1024 { return Err("Oversized component file receipt.".into()); }

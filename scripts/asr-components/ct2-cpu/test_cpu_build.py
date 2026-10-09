@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 import struct
@@ -215,14 +216,29 @@ class SourceTests(unittest.TestCase):
             safe = [line for line in result.stderr.splitlines() if line.startswith('CT2_QUOTING_FAILURE ')]
             self.assertEqual(result.returncode, 0, '\n'.join(safe) or 'Native quoting regression failed without safe diagnostic')
 
+    def test_direct_crt_signatures_and_manual_proof_concurrency_are_bounded(self):
+        script = (build.HERE / 'verify_direct_crt_signatures.ps1').read_text()
+        self.assertIn('Get-AuthenticodeSignature -LiteralPath $path', script)
+        self.assertIn('[System.Management.Automation.SignatureStatus]::Valid', script)
+        self.assertIn("'cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b'", script)
+        self.assertIn('installer_executed=$false', script)
+        self.assertNotIn('Start-Process', script)
+        self.assertNotIn('Invoke-Expression', script)
+        workflow = (build.HERE.parents[2] / '.github/workflows/asr-ct2-cpu.yml').read_text()
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
+        self.assertIn("format('ct2-cpu-proof-{0}-{1}', inputs.source_sha || github.sha, github.run_id)", workflow)
+        self.assertIn('windows-direct-crt-signatures:', workflow)
+        self.assertIn('path: dist/direct-crt-reports/*.json', workflow)
+
     def test_workflow_publishes_no_binaries(self):
         workflow = (build.HERE.parents[2] / '.github/workflows/asr-ct2-cpu.yml').read_text()
         self.assertNotIn('contents: write', workflow)
         self.assertNotIn('packages: write', workflow)
-        paths = workflow.split('          path: |')[1]
-        self.assertNotIn('.whl', paths)
-        self.assertNotIn('.dll', paths)
-        self.assertNotIn('**', paths)
+        blocks = re.findall(r'(?m)^          path: (?:\|\n((?:            [^\n]+\n)+)|([^\n]+))', workflow)
+        self.assertEqual(len(blocks), 2)
+        paths = [line.strip() for block in blocks for text in block for line in text.splitlines() if line.strip()]
+        self.assertEqual(set(paths), {'dist/ct2-cpu-reports/*.json', 'dist/ct2-cpu-reports/*.log',
+                                     'dist/ct2-cpu-reports/*-CMakeCache.txt', 'dist/direct-crt-reports/*.json'})
 
 
 if __name__ == '__main__':

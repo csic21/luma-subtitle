@@ -27,6 +27,17 @@ const POLL: Duration = Duration::from_millis(100);
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 4096;
 const WORKER_SOURCE: &str = include_str!("worker.py");
+const NAGISA_COMPAT_SOURCE: &str = include_str!("nagisa_compat.py");
+const NAGISA_COMPAT_MARKER: &str = "# LUMA_NAGISA_COMPAT_SOURCE";
+
+fn prepared_worker_source(source: &str, managed_windows_qwen: bool) -> Result<String, String> {
+    if !managed_windows_qwen { return Ok(source.to_owned()); }
+    if source.matches(NAGISA_COMPAT_MARKER).count() != 1 {
+        return Err("Managed Qwen compatibility source marker is missing or ambiguous.".into());
+    }
+    Ok(source.replacen(NAGISA_COMPAT_MARKER,
+        &format!("{NAGISA_COMPAT_SOURCE}\nLUMA_MANAGED_QWEN_RUNTIME = True\n"), 1))
+}
 
 #[derive(Default)]
 pub(crate) struct AsrRuntime {
@@ -194,6 +205,10 @@ impl Worker {
         let managed_use_leases = crate::asr_components::acquire_managed_use_leases(
             &managed_config_paths(config),
         ).map_err(JobError::failed)?;
+        let managed_windows_qwen = cfg!(windows) && config.engine == "qwen3-asr"
+            && crate::asr_components::verified_managed_windows_qwen_runtime(&config.python_path)
+                .map_err(JobError::failed)?;
+        let source = prepared_worker_source(source, managed_windows_qwen).map_err(JobError::failed)?;
         // A file avoids Windows' 32K command-line limit. It contains only the
         // embedded application code, never user media, settings or credentials.
         let script_path =
@@ -373,6 +388,17 @@ fn check_cancel(cancel: &AtomicBool, stopping: &AtomicBool) -> JobResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compatibility_source_requires_explicit_managed_gate_and_unique_marker() {
+        assert_eq!(prepared_worker_source(WORKER_SOURCE, false).unwrap(), WORKER_SOURCE);
+        let prepared = prepared_worker_source(WORKER_SOURCE, true).unwrap();
+        assert!(prepared.contains("LUMA_MANAGED_QWEN_RUNTIME = True"));
+        assert!(prepared.contains("def luma_prepare_nagisa()"));
+        assert!(!prepared.contains(NAGISA_COMPAT_MARKER));
+        assert!(prepared.find("from __future__ import annotations").unwrap() < prepared.find("def luma_prepare_nagisa()").unwrap());
+        assert!(prepared_worker_source("print('manual')", true).is_err());
+        assert!(prepared_worker_source(&format!("{NAGISA_COMPAT_MARKER}\n{NAGISA_COMPAT_MARKER}"), true).is_err());
+    }
     fn python_config() -> AsrConfig {
         AsrConfig {
             python_path: which::which("python3")

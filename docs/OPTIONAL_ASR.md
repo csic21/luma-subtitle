@@ -3,15 +3,18 @@
 The default `whisper.cpp` engine and existing GGML models continue to work without
 Python. These additional engines are opt-in. Luma downloads verified private
 engine components and models only after an explicit install/download action.
-It does not install system Python, run pip on your computer, change PATH, read
-Hugging Face credentials, or silently switch engines.
+The app downloads pinned upstream Python and binary wheels, then runs its private,
+version-pinned pip entirely offline inside staging. There is no network dependency
+resolution or source build. You do not install Python, enter pip commands, or
+change the system environment. Luma does not read Hugging Face credentials or
+silently switch engines.
 
 ## One-click managed setup
 
 1. Select an optional engine in Settings or task configuration. The original
    whisper.cpp engine and its Turbo preset remain available without this setup.
-2. Select a compatible engine component, review download/install sizes and source,
-   then choose Install. The private runtime is kept in Luma's own data directory;
+2. Select a compatible engine component, review download/install sizes, exact
+   sources and applicable third-party terms, then choose Install. The private runtime is kept in Luma's own data directory;
    you do not need to install Python or enter terminal commands.
 3. Download a compatible model separately. Qwen needs both its ASR model and the
    distinct ForcedAligner model. Choose the installed components for this task and
@@ -64,8 +67,8 @@ claims. RAM/VRAM remains occupied while that worker stays warm.
 ## Advanced external-runtime setup examples
 
 The commands below are **user-run setup**, outside Luma. They install software or
-download weights only when you choose to run them. No setup commands were run as
-part of this feature's dependency-free tests. Use separate environments to avoid
+download weights only when you choose to run them. Dependency-free unit tests use
+fixtures; separate native tests execute the pinned private setup recipe. Use separate environments to avoid
 dependency conflicts. Python 3.12 is a practical starting point.
 
 The adapter was checked against the upstream APIs of `mlx-whisper==0.4.3`,
@@ -239,6 +242,11 @@ weight or detect every form of corruption.
 
 ## Validation boundary (2026-10-09)
 
+- **Native Apple Silicon setup proof passed:** MLX and Qwen private offline
+  installation reproduced exactly, relocated imports passed, and the actual
+  Rust installer exercised install, repair, cancellation and removal. The MLX
+  runner also executed a real Metal tensor. These checks do not perform Whisper
+  or Qwen speech-model inference and are not speed or quality benchmarks.
 - **Real Linux CPU functional smoke passed:** Python 3.12.14,
   faster-whisper 1.2.1, CTranslate2 4.8.2, and the official
   `Systran/faster-whisper-tiny` snapshot
@@ -271,9 +279,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked \
   real_optional_worker_transcribes_exports_reuses_and_cancels -- --ignored --nocapture
 ```
 
-The normal CI suite uses dependency-free adapter fixtures and real small Python
-subprocess lifecycle tests on Windows/macOS; it does not fetch ASR packages or
-model weights.
+The app regression jobs use dependency-free adapter fixtures and real small
+Python subprocess lifecycle tests on Windows/macOS. Separate engine-proof jobs
+download exact pinned runtime inputs and run private offline installation;
+model inference is separately identified and resource-gated.
 
 ## JSON-lines protocol and verification
 
@@ -290,8 +299,9 @@ Events always include `id`:
   Unsupported/invalid configurations can leave backend/device null and bytes 0.
 - `result`: `segments` with integral `start_ms`, `end_ms`, `text`; `backend`,
   `device`, `reused`, numeric `load_seconds`, numeric `inference_seconds`.
-- `error`: `code` and actionable `message`. A failed request does not terminate
-  the worker; cancellation/shutdown is handled by the Rust parent.
+- `error`: `code` and actionable `message`. Recoverable request errors leave the
+  worker available; an irrecoverable partial runtime initialization discards the
+  process. Cancellation/shutdown is handled by the Rust parent.
 
 Only JSON protocol records use stdout; Python and native library diagnostics go
 to stderr. Run adapter/protocol tests without optional dependencies:

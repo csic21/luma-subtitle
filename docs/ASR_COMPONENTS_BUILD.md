@@ -295,3 +295,27 @@ Guaranteed Windows OS libraries such as `msvcp_win.dll` are classified separatel
 The pinned PBS package does not itself supply every optional DLL used by the
 upstream engine wheels; clean-user readiness remains blocked until app-local
 dependencies and their exact upstream terms are reviewed and tested.
+
+
+## Managed Windows Nagisa initialization
+
+The reviewed Qwen dependency pins Nagisa 0.2.11 and DyNet38 2.2. Its default
+initializer passes an absolute model path to a native narrow-string file API,
+which fails in a Unicode Windows installation directory. The app-owned helper
+`src-tauri/src/asr/nagisa_compat.py` is embedded from one source into the managed
+worker and installer self-test; it is never loaded from a user-selected path.
+Manual Python environments are unchanged.
+
+Before any worker activity threads, the helper checks the exact private package
+versions, bounded metadata, every retained RECORD file and expected module origins.
+During official package initialization only, it supplies the supported relative
+`Tagger` file arguments for one default construction from Python's Unicode-aware
+working directory. It restores the original constructor, import loader and cwd in
+`finally`; a partial failure is fatal to that worker process. Wheel bytes and the
+upstream public API remain unchanged.
+
+Native Windows proof must compare actual Japanese tokens and POS tags from an
+ordinary ASCII-path initialization with the adapted Unicode-path initialization,
+and prove restoration after a deliberate post-import error. This check uses only
+Nagisa's already bundled data. It does not establish Qwen ASR inference, memory
+fit, or closure of the separate Windows app-local CRT requirement.
