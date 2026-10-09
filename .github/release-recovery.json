@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "controller_sha": "591e7766335eef5c576042a30d13679932c5a71a",
+  "source_sha": "2164eada02eab41e4f01302fe105e94c6269eaae",
+  "tag": "v1.1.15",
+  "release_id": 407627557,
+  "build_run_id": 37897199470,
+  "build_run_attempt": 1,
+  "assets": [
+    {
+      "name": "Luma-Subtitle_1.1.15_darwin_aarch64.app.tar.gz",
+      "id": 624212254,
+      "size": 6992592,
+      "digest": "sha256:da1aa0ddc204c4018a91778c8917117274f034ec2bb267aac0150d5240f54141"
+    },
+    {
+      "name": "Luma-Subtitle_1.1.15_darwin_aarch64.app.tar.gz.sig",
+      "id": 624212290,
+      "size": 412,
+      "digest": "sha256:894f24e45eb697d9b4c98efacccdabcabe64e21b3f38fe6007bdee6c7c3cb74a"
+    },
+    {
+      "name": "Luma-Subtitle_1.1.15_darwin_aarch64.dmg",
+      "id": 624212205,
+      "size": 6770818,
+      "digest": "sha256:fa4e8fd678aa39c38fc0d56e9f9f7059c0afa9dc8168136264dad95e39304504"
+    },
+    {
+      "name": "Luma-Subtitle_1.1.15_windows_x64-setup.exe",
+      "id": 624218320,
+      "size": 5078813,
+      "digest": "sha256:09f16e3a650f849055f7d6e1bac1ee5716e3030405d7107ea4c90ae099d7496c"
+    },
+    {
+      "name": "Luma-Subtitle_1.1.15_windows_x64-setup.exe.sig",
+      "id": 624218344,
+      "size": 428,
+      "digest": "sha256:072ffc935f7e54fca4131b9b28cbb9bf1d98e8cc1496ee8fe336502f85ba72fb"
+    },
+    {
+      "name": "Luma-Subtitle_1.1.15_windows_x64.msi",
+      "id": 624218272,
+      "size": 7290880,
+      "digest": "sha256:4b3db67cde54a3f34022194d807454b8ee30fc3832dea35ea192eaa7715198b1"
+    },
+    {
+      "name": "Luma-Subtitle_1.1.15_windows_x64.msi.sig",
+      "id": 624218314,
+      "size": 428,
+      "digest": "sha256:d1d872b1f7b4fb41ec01a4336ec5e15589a90541251e6dff13f567983ecbf4f1"
+    }
+  ]
+}
