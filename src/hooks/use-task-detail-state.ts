@@ -29,7 +29,9 @@ import {
   appendRealtimeLog,
   mergeTaskLogs,
   normalizeTaskSettings,
+  nextSubtitleView,
   shouldReplaceTaskSettingsDraft,
+  subtitleResultChanged,
   taskSettingsEqual,
   taskSettingsUpdatePayload,
 } from "@/lib/task-data";
@@ -46,7 +48,7 @@ import type {
 
 import { useAppResume } from "./use-app-resume";
 
-type SubtitleView = "translated" | "source";
+type SubtitleView = "translated" | "source" | "parallel";
 
 type FlowStep = {
   label: string;
@@ -63,6 +65,8 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null);
   const [subtitleView, setSubtitleView] = useState<SubtitleView>("source");
   const [notice, setNotice] = useState("");
+  const [commandPending, setCommandPending] = useState(false);
+  const commandPendingRef = useRef(false);
   const taskRef = useRef<TaskRecord | null>(null);
   const previewRequest = useRef(0);
   const settingsDraftRef = useRef<TaskSettingsSnapshot | null>(null);
@@ -108,13 +112,17 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
 
   const refreshPreview = useCallback(
     async (currentTask = taskRef.current) => {
-      if (!currentTask?.source_srt_path) return;
       const request = ++previewRequest.current;
+      if (!currentTask?.source_srt_path) {
+        setSubtitlePreview(null);
+        setSubtitleView("source");
+        return false;
+      }
       try {
         const preview = await loadSubtitlePreview(taskId);
         if (request !== previewRequest.current || taskRef.current?.id !== taskId) return false;
         setSubtitlePreview(preview);
-        setSubtitleView(preview.translated_srt?.trim() ? "translated" : "source");
+        setSubtitleView((current) => nextSubtitleView(current, Boolean(preview.translated_srt?.trim())));
         return true;
       } catch (error) {
         if (request === previewRequest.current) setNotice(errorText(error));
@@ -128,9 +136,10 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     async (options: { preview?: boolean } = {}) => {
       try {
         const [loaded, loadedLogs] = await Promise.all([getTask(taskId), getTaskLogs(taskId).catch(() => [])]);
+        const resultChanged = subtitleResultChanged(taskRef.current, loaded);
         syncTask(loaded);
         setLogs((current) => mergeTaskLogs(loadedLogs, current));
-        if ((options.preview ?? true) && loaded.source_srt_path) await refreshPreview(loaded);
+        if ((options.preview ?? true) || resultChanged) await refreshPreview(loaded);
       } catch (error) {
         setNotice(errorText(error));
       }
@@ -165,11 +174,9 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     listen<TaskRecord>("task-updated", (event) => {
       if (event.payload.id !== taskId) return;
       const previousTask = taskRef.current;
-      const subtitlePathsChanged =
-        previousTask?.source_srt_path !== event.payload.source_srt_path ||
-        previousTask?.translated_srt_path !== event.payload.translated_srt_path;
+      const resultChanged = subtitleResultChanged(previousTask, event.payload);
       syncTask(event.payload);
-      if (subtitlePathsChanged && event.payload.source_srt_path) void refreshPreview(event.payload);
+      if (resultChanged) void refreshPreview(event.payload);
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -209,20 +216,38 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
 
   const runOperation = useCallback(
     async (operation: TaskOperation) => {
+      if (commandPendingRef.current) return;
       const currentTask = taskRef.current;
-      if (currentTask && !canRunOperation(currentTask, operation, operationContext)) {
-        setNotice(operationRequirementSummary(operationRequirementIssues(currentTask, operation, operationContext), t));
+      if (!currentTask) return;
+      const draft = settingsDraftRef.current;
+      const effectiveTask = draft ? { ...currentTask, settings: draft } : currentTask;
+      if (!canRunOperation(effectiveTask, operation, operationContext)) {
+        setNotice(operationRequirementSummary(operationRequirementIssues(effectiveTask, operation, operationContext), t));
         return;
       }
+      commandPendingRef.current = true;
+      setCommandPending(true);
       try {
+        if (draft && !taskSettingsEqual(currentTask.settings, draft)) {
+          try {
+            const updated = await updateTaskSettings(taskId, taskSettingsUpdatePayload(draft));
+            syncTask(updated, true);
+          } catch (error) {
+            setNotice(t("notice.settingsSaveFailed", { error: errorText(error) }));
+            return;
+          }
+        }
         await runTaskOperation(taskId, operation);
         await refreshTask();
         setNotice(t("notice.addedToQueue", { operation: operationLabel(operation, t) }));
       } catch (error) {
         setNotice(errorText(error));
+      } finally {
+        commandPendingRef.current = false;
+        setCommandPending(false);
       }
     },
-    [operationContext, refreshTask, t, taskId],
+    [operationContext, refreshTask, syncTask, t, taskId],
   );
 
   const cancelTask = useCallback(async () => {
@@ -234,16 +259,21 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     }
   }, [refreshTask, taskId]);
 
-  const sourceSubtitlesSaved = useCallback(async (updated: TaskRecord) => {
+  const sourceSubtitlesSaved = useCallback(async (updated: TaskRecord, kind: "source" | "translated" = "source") => {
     syncTask(updated);
     previewRequest.current += 1;
     setSubtitlePreview(null);
     const [previewLoaded] = await Promise.all([refreshPreview(updated), refreshLogs()]);
-    setSubtitleView("source");
-    setNotice(t(previewLoaded ? "notice.sourceSubtitlesSaved" : "notice.sourceSavedPreviewFailed"));
+    setSubtitleView(kind);
+    setNotice(t(previewLoaded
+      ? kind === "source" ? "notice.sourceSubtitlesSaved" : "notice.translatedSubtitlesSaved"
+      : "notice.subtitlesSavedPreviewFailed"));
   }, [refreshLogs, refreshPreview, syncTask, t]);
 
   const applyCurrentSettings = useCallback(async () => {
+    if (commandPendingRef.current) return;
+    commandPendingRef.current = true;
+    setCommandPending(true);
     try {
       const updated = await applyCurrentSettingsToTask(taskId);
       syncTask(updated, true);
@@ -251,18 +281,26 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
       setNotice(t("notice.settingsApplied"));
     } catch (error) {
       setNotice(errorText(error));
+    } finally {
+      commandPendingRef.current = false;
+      setCommandPending(false);
     }
   }, [refreshLogs, syncTask, t, taskId]);
 
   const saveTaskSettings = useCallback(async () => {
-    if (!settingsDraft) return;
+    if (!settingsDraft || commandPendingRef.current) return;
+    commandPendingRef.current = true;
+    setCommandPending(true);
     try {
       const updated = await updateTaskSettings(taskId, taskSettingsUpdatePayload(settingsDraft));
       syncTask(updated, true);
       await refreshLogs();
       setNotice(t("notice.taskSettingsSaved"));
     } catch (error) {
-      setNotice(errorText(error));
+      setNotice(t("notice.settingsSaveFailed", { error: errorText(error) }));
+    } finally {
+      commandPendingRef.current = false;
+      setCommandPending(false);
     }
   }, [refreshLogs, settingsDraft, syncTask, t, taskId]);
 
@@ -345,6 +383,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     activeSubtitleFileName,
     applyCurrentSettings,
     cancelTask,
+    commandPending,
     flowSteps,
     hasTranslatedSubtitle,
     logs,
@@ -364,5 +403,6 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
     task,
     taskConfig,
     taskSettingsDirty,
+    operationTask: task && settingsDraft ? { ...task, settings: settingsDraft } : task,
   };
 }

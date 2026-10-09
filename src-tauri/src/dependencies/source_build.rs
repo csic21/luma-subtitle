@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use serde::Deserialize;
 use tauri::AppHandle;
 use tokio::process::Command;
 
@@ -13,8 +12,8 @@ use super::{
         build_parallelism, ensure_executable, extract_tar_archive, first_child_dir,
         fix_whisper_macos_rpaths, run_install_command,
     },
-    FFMPEG_SOURCE_ARCHIVE_NAME, FFMPEG_SOURCE_URL, HTTP_USER_AGENT, MACOS_ARM64_DEPLOYMENT_TARGET,
-    WHISPER_RELEASE_API_URL,
+    WhisperSourceRelease, FFMPEG_SOURCE_ARCHIVE_NAME, FFMPEG_SOURCE_URL, HTTP_USER_AGENT,
+    MACOS_ARM64_DEPLOYMENT_TARGET, WHISPER_LATEST_RELEASE_API_URL,
 };
 
 pub(super) async fn install_ffmpeg_from_official_source(app: &AppHandle) -> Result<String, String> {
@@ -268,12 +267,6 @@ struct WhisperCppSource {
     tarball_url: String,
 }
 
-#[derive(Deserialize)]
-struct SourceRelease {
-    tag_name: String,
-    tarball_url: String,
-}
-
 async fn latest_whisper_cpp_source() -> Result<WhisperCppSource, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -281,13 +274,13 @@ async fn latest_whisper_cpp_source() -> Result<WhisperCppSource, String> {
         .build()
         .map_err(|error| format!("创建 GitHub 客户端失败: {error}"))?;
     let release = client
-        .get(WHISPER_RELEASE_API_URL)
+        .get(WHISPER_LATEST_RELEASE_API_URL)
         .send()
         .await
         .map_err(|error| format!("查询 whisper.cpp 发布源码失败: {error}"))?
         .error_for_status()
         .map_err(|error| format!("查询 whisper.cpp 发布源码失败: {error}"))?
-        .json::<SourceRelease>()
+        .json::<WhisperSourceRelease>()
         .await
         .map_err(|error| format!("解析 whisper.cpp 发布源码失败: {error}"))?;
     Ok(WhisperCppSource {

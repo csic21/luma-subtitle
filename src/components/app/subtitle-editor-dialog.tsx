@@ -13,18 +13,19 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { errorText } from "@/lib/app-utils";
-import { saveSourceSubtitles } from "@/lib/tauri-api";
+import { saveSourceSubtitles, saveTranslatedSubtitles } from "@/lib/tauri-api";
 import type { SubtitlePreview, TaskRecord, TFunction } from "@/types";
 
 export function SubtitleEditorDialog({
-  taskId, preview, busy, t, onClose, onSaved, onReturnFocus,
+  taskId, preview, kind = "source", busy, t, onClose, onSaved, onReturnFocus,
 }: {
   taskId: string;
   preview: SubtitlePreview;
+  kind?: "source" | "translated";
   busy: boolean;
   t: TFunction;
   onClose: () => void;
-  onSaved: (task: TaskRecord) => Promise<void>;
+  onSaved: (task: TaskRecord, kind: "source" | "translated") => Promise<void>;
   onReturnFocus: () => void;
 }) {
   // The preview is captured when editing starts. Incoming task updates must not
@@ -34,9 +35,11 @@ export function SubtitleEditorDialog({
   const [error, setError] = useState("");
   const [discardOpen, setDiscardOpen] = useState(false);
   const savingRef = useRef(false);
+  const segments = kind === "source" ? preview.source_segments : preview.translated_segments ?? [];
+  const referenceSegments = kind === "source" ? preview.translated_segments : preview.source_segments;
   const originals = useMemo(
-    () => new Map(preview.source_segments.map((segment) => [segment.id, segment.text])),
-    [preview],
+    () => new Map(segments.map((segment) => [segment.id, segment.text])),
+    [segments],
   );
   const editedCount = Object.keys(edits).length;
   const invalid = Object.values(edits).some((text) => !text.trim());
@@ -80,12 +83,11 @@ export function SubtitleEditorDialog({
     setSaving(true);
     setError("");
     try {
-      const updated = await saveSourceSubtitles(
-        taskId,
-        preview.source_srt,
-        preview.source_segments.map(({ id, text }) => ({ id, text: edits[id] ?? text })),
-      );
-      await onSaved(updated);
+      const payload = segments.map(({ id, text }) => ({ id, text: edits[id] ?? text }));
+      const updated = kind === "source"
+        ? await saveSourceSubtitles(taskId, preview.source_srt, payload)
+        : await saveTranslatedSubtitles(taskId, preview.source_srt, preview.translated_srt ?? "", payload);
+      await onSaved(updated, kind);
       onClose();
     } catch (cause) {
       setError(errorText(cause));
@@ -99,13 +101,13 @@ export function SubtitleEditorDialog({
     <>
       <Dialog open onOpenChange={(open) => { if (!open) requestClose(); }}>
         <DialogContent
-          className="max-h-[94dvh] sm:max-w-3xl"
+          className="max-h-[94dvh] overflow-y-auto sm:max-w-3xl"
           showCloseButton={false}
           onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}
         >
           <DialogHeader>
-            <DialogTitle>{t("subtitle.editSource")}</DialogTitle>
-            <DialogDescription>{t("subtitle.editDescription")}</DialogDescription>
+            <DialogTitle>{t(kind === "source" ? "subtitle.editSource" : "subtitle.editTranslated")}</DialogTitle>
+            <DialogDescription>{t(kind === "source" ? "subtitle.editDescription" : "subtitle.editTranslatedDescription")}</DialogDescription>
           </DialogHeader>
           {(error || busy) && (
             <Alert variant="destructive">
@@ -114,7 +116,9 @@ export function SubtitleEditorDialog({
             </Alert>
           )}
           <SubtitleSourceEditor
-            segments={preview.source_segments}
+            segments={segments}
+            referenceSegments={referenceSegments ?? undefined}
+            referenceLabel={t(kind === "source" ? "common.translated" : "common.source")}
             edits={edits}
             onTextChange={changeText}
             disabled={saving || busy}
@@ -127,7 +131,7 @@ export function SubtitleEditorDialog({
             <Button variant="outline" onClick={requestClose} disabled={saving}>{t("common.cancel")}</Button>
             <Button onClick={() => void save()} disabled={saving || busy || invalid || !editedCount}>
               {saving ? <Loader2 data-icon="inline-start" className="animate-spin" /> : <Save data-icon="inline-start" />}
-              {t(saving ? "subtitle.saving" : "subtitle.saveSource")}
+              {t(saving ? "subtitle.saving" : kind === "source" ? "subtitle.saveSource" : "subtitle.saveTranslated")}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -166,6 +166,7 @@ pub(crate) struct SubtitlePreview {
     pub(crate) source_srt: String,
     pub(crate) source_segments: Vec<crate::subtitles::SubtitleSegment>,
     pub(crate) translated_srt: Option<String>,
+    pub(crate) translated_segments: Option<Vec<crate::subtitles::SubtitleSegment>>,
     pub(crate) source_file_name: String,
     pub(crate) translated_file_name: Option<String>,
 }

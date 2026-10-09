@@ -138,6 +138,7 @@ export type TaskRecord = {
   exported_translated_srt?: string | null;
   exported_output_dir?: string | null;
   translation_completed_count?: number | null;
+  result_revision?: number;
   error?: string | null;
   created_at: number;
   updated_at: number;
@@ -155,6 +156,7 @@ export type SourceSubtitleEdit = Pick<SourceSubtitleSegment, "id" | "text">;
 export type SubtitlePreview = {
   source_srt: string;
   source_segments: SourceSubtitleSegment[];
+  translated_segments?: SourceSubtitleSegment[] | null;
   translated_srt?: string | null;
   source_file_name: string;
   translated_file_name?: string | null;

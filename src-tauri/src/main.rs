@@ -61,6 +61,7 @@ fn main() {
             jobs::save_queue_settings,
             jobs::subtitle_preview,
             jobs::save_source_subtitles,
+            jobs::save_translated_subtitles,
             commands::open_path
         ])
         .run(tauri::generate_context!())

@@ -36,7 +36,9 @@ pub(crate) async fn check_environment(app: AppHandle) -> Result<EnvironmentRespo
 fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
     let (gpu_name, cuda_driver) = gpu_info();
     let llama_path = locate_binary(&app, "llama-server");
-    let llama_backend = llama_path.as_ref().and_then(|path| llama_backend_label(path));
+    let llama_backend = llama_path
+        .as_ref()
+        .and_then(|path| llama_backend_label(path));
     EnvironmentResponse {
         ffmpeg_path: locate_binary(&app, "ffmpeg").map(display_path_to_string),
         whisper_path: locate_binary(&app, "whisper-cli").map(display_path_to_string),
@@ -68,10 +70,7 @@ fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
 #[cfg(target_os = "macos")]
 fn gpu_info() -> (Option<String>, Option<String>) {
     if std::env::consts::ARCH != "aarch64" {
-        return (
-            Some("Intel Mac".to_string()),
-            Some("Metal 未启用".to_string()),
-        );
+        return (Some("Intel Mac".to_string()), None);
     }
     let chip = std::process::Command::new("sysctl")
         .args(["-n", "machdep.cpu.brand_string"])
@@ -81,7 +80,9 @@ fn gpu_info() -> (Option<String>, Option<String>) {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "Apple Silicon".to_string());
-    (Some(chip), Some("Metal".to_string()))
+    // A chip name is not evidence that the selected whisper binary uses Metal.
+    // Actual backend selection is reported from each transcription process.
+    (Some(chip), None)
 }
 
 #[cfg(not(target_os = "macos"))]

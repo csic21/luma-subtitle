@@ -8,7 +8,11 @@ use std::{
 };
 
 use serde::Serialize;
-use tokio::time::timeout;
+use tokio::{
+    io::AsyncReadExt,
+    task::JoinSet,
+    time::{timeout_at, Instant},
+};
 
 use crate::{
     process_utils::hide_tokio_command_window,
@@ -20,6 +24,7 @@ use super::{
     normalize_translation_cli_tool,
     parser::parse_translation_content,
     prompt::{shard_translation_prompt, translation_system_prompt},
+    runtime::cancellable,
     TranslationConfig,
 };
 
@@ -218,8 +223,8 @@ async fn run_opencode_cli(
 ) -> JobResult<String> {
     let command = config.cli_command.trim();
     let model = config.cli_model.trim();
-    let resolved =
-        resolve_cli_path(command).ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
+    let resolved = resolve_cli_path(command)
+        .ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
     let mut cmd = tokio::process::Command::new(resolved);
     hide_tokio_command_window(&mut cmd);
     cmd.args(["run", "-m", model, "--format", "json", full_prompt]);
@@ -254,8 +259,8 @@ async fn run_custom_cli(
 ) -> JobResult<String> {
     let command = config.cli_command.trim();
     let args = build_custom_args(config, full_prompt);
-    let resolved =
-        resolve_cli_path(command).ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
+    let resolved = resolve_cli_path(command)
+        .ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
     let mut cmd = tokio::process::Command::new(resolved);
     hide_tokio_command_window(&mut cmd);
     cmd.args(&args);
@@ -363,22 +368,55 @@ async fn run_cli_command(
     cmd: &mut tokio::process::Command,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<String> {
-    cmd.stdout(std::process::Stdio::piped())
+    crate::state::ensure_not_cancelled(&cancel)?;
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|error| JobError::failed(format!("启动 CLI 失败: {error}")))?;
-    let output = timeout(
-        Duration::from_secs(CLI_SHARD_TIMEOUT_SECS),
-        child.wait_with_output(),
-    )
-    .await
-    .map_err(|_| JobError::failed(format!("CLI 调用超时（{CLI_SHARD_TIMEOUT_SECS}s）")))?
-    .map_err(|error| JobError::failed(format!("等待 CLI 结束失败: {error}")))?;
-    if cancel.load(Ordering::SeqCst) {
-        return Err(JobError::Cancelled);
+    let mut readers = JoinSet::new();
+    if let Some(stdout) = child.stdout.take() {
+        readers.spawn(async move { (true, read_cli_pipe(stdout).await) });
     }
+    if let Some(stderr) = child.stderr.take() {
+        readers.spawn(async move { (false, read_cli_pipe(stderr).await) });
+    }
+    let deadline = Instant::now() + Duration::from_secs(CLI_SHARD_TIMEOUT_SECS);
+    let result = cancellable(&cancel, async {
+        timeout_at(deadline, async {
+            let status = child
+                .wait()
+                .await
+                .map_err(|error| JobError::failed(format!("等待 CLI 结束失败: {error}")))?;
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            while let Some(reader) = readers.join_next().await {
+                let (is_stdout, bytes) = reader
+                    .map_err(|error| JobError::failed(format!("读取 CLI 输出失败: {error}")))?;
+                let bytes = bytes?;
+                if is_stdout {
+                    stdout = bytes;
+                } else {
+                    stderr = bytes;
+                }
+            }
+            Ok(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            })
+        })
+        .await
+        .map_err(|_| JobError::failed(format!("CLI 调用超时（{CLI_SHARD_TIMEOUT_SECS}s）")))?
+    })
+    .await;
+    if result.is_err() {
+        let _ = child.kill().await;
+    }
+    readers.shutdown().await;
+    let output = result?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -396,6 +434,32 @@ async fn run_cli_command(
         )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn read_cli_pipe(mut pipe: impl tokio::io::AsyncRead + Unpin) -> JobResult<Vec<u8>> {
+    // Continue draining even on excessive output, but never retain unbounded
+    // subprocess output or silently parse a truncated translation.
+    const MAX_BYTES: usize = 8 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    let mut chunk = [0; 8192];
+    let mut overflow = false;
+    loop {
+        let count = pipe
+            .read(&mut chunk)
+            .await
+            .map_err(|error| JobError::failed(format!("读取 CLI 输出失败: {error}")))?;
+        if count == 0 {
+            break;
+        }
+        let keep = count.min(MAX_BYTES.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&chunk[..keep]);
+        overflow |= keep != count;
+    }
+    if overflow {
+        Err(JobError::failed("CLI 输出超过 8 MiB 限制"))
+    } else {
+        Ok(bytes)
+    }
 }
 
 pub(crate) fn extract_opencode_text_output(stdout: &str) -> String {
@@ -636,10 +700,7 @@ mod tests {
     #[test]
     fn resolves_existing_path_command_as_is() {
         let exe = std::env::current_exe().expect("test binary should exist");
-        assert_eq!(
-            resolve_cli_path(&exe.to_string_lossy()),
-            Some(exe)
-        );
+        assert_eq!(resolve_cli_path(&exe.to_string_lossy()), Some(exe));
     }
 
     #[test]
@@ -722,5 +783,65 @@ mod tests {
             build_custom_args(&config, "PROMPT"),
             vec!["--json", "PROMPT"]
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_kills_cli_and_joins_readers_promptly() {
+        tauri::async_runtime::block_on(async {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let marker =
+                std::env::temp_dir().join(format!("luma-cli-cancel-{}", uuid::Uuid::new_v4()));
+            let mut command = tokio::process::Command::new("sh");
+            command
+                .args(["-c", "echo $$ > \"$1\"; exec sleep 30", "sh"])
+                .arg(&marker);
+            let trigger = cancel.clone();
+            let task = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                trigger.store(true, Ordering::SeqCst);
+            });
+            let start = Instant::now();
+            let result = run_cli_command(&mut command, cancel).await;
+            assert!(matches!(result, Err(JobError::Cancelled)));
+            assert!(start.elapsed() < Duration::from_secs(2));
+            task.await.unwrap();
+            let pid = std::fs::read_to_string(&marker).unwrap();
+            let alive = std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            let _ = std::fs::remove_file(marker);
+            assert!(
+                !alive,
+                "CLI process must be reaped before cancellation returns"
+            );
+        });
+    }
+
+    #[test]
+    fn drains_both_cli_pipes_while_waiting_for_exit() {
+        tauri::async_runtime::block_on(async {
+            let mut command = tokio::process::Command::new("sh");
+            command.args([
+                "-c",
+                "head -c 262144 /dev/zero; head -c 262144 /dev/zero >&2",
+            ]);
+            let result = tokio::time::timeout(
+                Duration::from_secs(3),
+                run_cli_command(&mut command, Arc::new(AtomicBool::new(false))),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(result.len(), 262144);
+        });
     }
 }

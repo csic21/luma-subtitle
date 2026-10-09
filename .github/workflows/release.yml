@@ -2,14 +2,13 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
-  release:
-    types: [published]
+    branches: [main]
+    paths: ['.github/release-request.json']
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Existing tag to build and upload artifacts for
+        description: Existing version tag to build and publish after both platforms pass
         required: true
         type: string
       release_name:
@@ -23,11 +22,47 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+# Serialize tag, request and manual entry points, including reruns of a draft.
+concurrency:
+  group: luma-release-pipeline
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Validate pinned source and prepare draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      version: ${{ steps.prepare.outputs.version }}
+      release_id: ${{ steps.prepare.outputs.release_id }}
+      prerelease: ${{ steps.prepare.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Release guard regression tests
+        run: node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs
+      - name: Validate request or existing tag and create draft
+        id: prepare
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { prepareRelease } = require('./scripts/prepare-release.cjs');
+            await prepareRelease({ github, context, core });
+
   build:
     name: Build ${{ matrix.label }}
+    needs: prepare
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -40,49 +75,78 @@ jobs:
             platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
             tauri-args: --target x86_64-pc-windows-msvc --bundles nsis,msi
-
     runs-on: ${{ matrix.platform }}
-
     steps:
-      - name: Checkout
+      - name: Checkout exact validated source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
-
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 9.9.0
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}
-
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Build and upload Tauri bundle
+      - name: Frontend regression tests
+        run: pnpm test
+      - name: Rust regression tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Build and upload to the private draft
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MACOSX_DEPLOYMENT_TARGET: "11.0"
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          releaseId: ${{ github.event_name == 'release' && github.event.release.id || '' }}
-          tagName: ${{ github.event_name == 'release' && github.event.release.tag_name || github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
-          releaseName: ${{ github.event_name == 'release' && github.event.release.name || github.event_name == 'workflow_dispatch' && (inputs.release_name || inputs.tag_name) || format('Luma Subtitle {0}', github.ref_name) }}
-          releaseBody: See the assets below to download and install this version.
-          releaseDraft: false
-          prerelease: ${{ github.event_name == 'release' && github.event.release.prerelease || github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          releaseId: ${{ needs.prepare.outputs.release_id }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseCommitish: ${{ needs.prepare.outputs.source_sha }}
+          releaseDraft: true
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
           args: ${{ matrix.tauri-args }}
-          assetNamePattern: Luma-Subtitle_[version]_[platform]_[arch][setup].[ext]
-          includeUpdaterJson: true
-          updaterJsonPreferNsis: true
+          assetNamePattern: Luma-Subtitle_[version]_[platform]_[arch][setup][ext]
+          # Only publish writes the complete, signature-verified updater manifest.
+          includeUpdaterJson: false
+
+  publish:
+    name: Verify all assets and publish once
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact validated source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          persist-credentials: false
+      - name: Install official minisign verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes minisign
+      - name: Verify downloads and signatures, create manifest, then publish
+        id: publish
+        uses: actions/github-script@v7
+        env:
+          RELEASE_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        with:
+          script: |
+            const { publishRelease } = require('./scripts/publish-release.cjs');
+            const config = require('./src-tauri/tauri.conf.json');
+            await publishRelease({ github, context, core, config,
+              sourceSha: process.env.RELEASE_SOURCE_SHA,
+              tag: process.env.RELEASE_TAG,
+              releaseId: process.env.RELEASE_ID });

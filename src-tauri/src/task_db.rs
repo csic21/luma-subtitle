@@ -13,6 +13,7 @@ mod models;
 mod preferences;
 mod schema;
 mod source_edit;
+mod translation_edit;
 
 #[cfg(test)]
 use crate::translation::DEFAULT_TRANSLATION_SHARD_SIZE;
@@ -27,6 +28,7 @@ pub(crate) use preferences::{
 };
 use schema::{app_data_dir, connection, enable_wal, migrate, task_from_row};
 pub(crate) use source_edit::save_source_subtitles;
+pub(crate) use translation_edit::save_translated_subtitles;
 
 pub(crate) fn init(app: &AppHandle) -> Result<(), String> {
     {
@@ -150,20 +152,80 @@ pub(crate) fn update_task_settings(
     task_id: &str,
     settings: TaskSettingsSnapshot,
 ) -> Result<TaskRecord, String> {
-    let conn = connection(app)?;
+    let mut conn = connection(app)?;
+    let task = update_settings_in_connection(&mut conn, task_id, settings)?;
+    emit_task(app, task_id);
+    Ok(task)
+}
+
+fn translation_settings_changed(
+    previous: &TaskSettingsSnapshot,
+    next: &TaskSettingsSnapshot,
+) -> bool {
+    previous.target_language != next.target_language
+        || previous.translation_provider != next.translation_provider
+        || previous.base_url != next.base_url
+        || previous.base_url_is_complete != next.base_url_is_complete
+        || previous.model != next.model
+        || previous.temperature != next.temperature
+        || previous.translation_cli_tool != next.translation_cli_tool
+        || previous.translation_cli_command != next.translation_cli_command
+        || previous.translation_cli_model != next.translation_cli_model
+        || previous.translation_cli_args != next.translation_cli_args
+        || previous.translation_local_model_path != next.translation_local_model_path
+}
+
+fn update_settings_in_connection(
+    conn: &mut rusqlite::Connection,
+    task_id: &str,
+    settings: TaskSettingsSnapshot,
+) -> Result<TaskRecord, String> {
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let previous = tx
+        .query_row(
+            "SELECT * FROM tasks WHERE id = ?1",
+            params![task_id],
+            task_from_row,
+        )
+        .map_err(|error| error.to_string())?;
+    if matches!(previous.status.as_str(), "queued" | "running") {
+        return Err("任务正在运行或排队中，稍后再修改配置".to_string());
+    }
+    let invalidate = translation_settings_changed(&previous.settings, &settings);
     let settings_json = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
-    let now = now_ts();
-    conn.execute(
-        "UPDATE tasks SET
-            settings_json = ?1,
-            updated_at = ?2
-        WHERE id = ?3",
-        params![settings_json, now, task_id],
+    tx.execute(
+        "UPDATE tasks SET settings_json = ?1, updated_at = ?2 WHERE id = ?3",
+        params![settings_json, now_ts(), task_id],
     )
     .map_err(|error| error.to_string())?;
-    append_log(app, task_id, "settings · 任务配置已更新")?;
-    emit_task(app, task_id);
-    require_task(app, task_id)
+    if invalidate {
+        tx.execute(
+            "UPDATE tasks SET translated_srt_path = NULL, translated_file_name = NULL,
+             translation_completed_count = NULL, exported_source_srt = NULL,
+             exported_translated_srt = NULL, exported_output_dir = NULL,
+             result_revision = result_revision + 1,
+             status = CASE WHEN source_srt_path IS NOT NULL THEN 'completed' ELSE status END,
+             stage = CASE WHEN source_srt_path IS NOT NULL THEN 'source-ready' ELSE stage END,
+             message = '翻译配置已变更，请重新翻译', error = NULL
+             WHERE id = ?1",
+            params![task_id],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    tx.execute(
+        "INSERT INTO task_logs(task_id, created_at, line) VALUES(?1, ?2, ?3)",
+        params![task_id, now_ts(), "settings · 任务配置已更新"],
+    )
+    .map_err(|error| error.to_string())?;
+    let saved = tx
+        .query_row(
+            "SELECT * FROM tasks WHERE id = ?1",
+            params![task_id],
+            task_from_row,
+        )
+        .map_err(|error| error.to_string())?;
+    tx.commit().map_err(|error| error.to_string())?;
+    Ok(saved)
 }
 
 pub(crate) fn task_work_dir(app: &AppHandle, task_id: &str) -> Result<PathBuf, String> {
@@ -507,6 +569,56 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    fn settings_fixture() -> (Connection, TaskSettingsSnapshot) {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let json = r#"{"output_dir":null,"target_language":"简体中文","whisper_model_path":"old.bin","whisper_language":"auto","base_url":"https://example.test","model":"one","temperature":0.2}"#;
+        conn.execute("INSERT INTO tasks(id, source_type, file_name, status, stage, message, progress,
+            settings_json, source_srt_path, translated_srt_path, translation_completed_count,
+            exported_translated_srt, created_at, updated_at)
+            VALUES('task', 'video', 'clip', 'exported', 'exported', '', 1, ?1, 'source', 'translation',
+            20, 'export', 1, 1)", params![json]).unwrap();
+        (conn, serde_json::from_str(json).unwrap())
+    }
+
+    #[test]
+    fn changing_translation_config_invalidates_results_and_resume() {
+        let (mut conn, mut settings) = settings_fixture();
+        settings.model = "two".into();
+        let saved = update_settings_in_connection(&mut conn, "task", settings).unwrap();
+        assert_eq!(saved.source_srt_path.as_deref(), Some("source"));
+        assert!(saved.translated_srt_path.is_none());
+        assert!(saved.exported_translated_srt.is_none());
+        assert!(saved.translation_completed_count.is_none());
+        assert_eq!(saved.result_revision, 1);
+        assert_eq!(saved.stage, "source-ready");
+    }
+
+    #[test]
+    fn tuning_shard_size_or_future_transcription_preserves_existing_translation() {
+        let (mut conn, mut settings) = settings_fixture();
+        settings.translation_shard_size = 60;
+        settings.whisper_model_path = "new.bin".into();
+        let saved = update_settings_in_connection(&mut conn, "task", settings).unwrap();
+        assert_eq!(saved.translated_srt_path.as_deref(), Some("translation"));
+        assert_eq!(saved.translation_completed_count, Some(20));
+        assert_eq!(saved.result_revision, 0);
+    }
+
+    #[test]
+    fn failed_settings_transaction_keeps_previous_results() {
+        let (mut conn, mut settings) = settings_fixture();
+        settings.target_language = "English".into();
+        conn.execute_batch("CREATE TRIGGER fail_log BEFORE INSERT ON task_logs BEGIN SELECT RAISE(ABORT, 'no log'); END;").unwrap();
+        assert!(update_settings_in_connection(&mut conn, "task", settings).is_err());
+        let saved = conn
+            .query_row("SELECT * FROM tasks", [], task_from_row)
+            .unwrap();
+        assert_eq!(saved.translated_srt_path.as_deref(), Some("translation"));
+        assert_eq!(saved.settings.target_language, "简体中文");
+        assert_eq!(saved.result_revision, 0);
+    }
+
     #[test]
     fn migrates_task_schema_with_default_queue_settings() {
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
@@ -691,6 +803,8 @@ mod tests {
             exported_translated_srt: Some("exports/clip.zh.srt".to_string()),
             exported_output_dir: Some("exports".to_string()),
             translation_completed_count: None,
+            result_revision: 0,
+            run_generation: 0,
             error: None,
             created_at: 1,
             updated_at: 1,
@@ -751,6 +865,8 @@ mod tests {
             exported_translated_srt: None,
             exported_output_dir: None,
             translation_completed_count: None,
+            result_revision: 0,
+            run_generation: 0,
             error: None,
             created_at: 1,
             updated_at: 1,

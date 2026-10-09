@@ -24,6 +24,8 @@ export function TaskDetailPage() {
     activeSubtitleFileName,
     applyCurrentSettings,
     cancelTask,
+    commandPending,
+    operationTask,
     flowSteps,
     hasTranslatedSubtitle,
     logs,
@@ -45,7 +47,7 @@ export function TaskDetailPage() {
     taskSettingsDirty,
   } = useTaskDetailState(taskId, t);
 
-  if (!task || !taskConfig) {
+  if (!task || !taskConfig || !operationTask) {
     return (
       <>
         <NoticeAlert message={notice} />
@@ -78,7 +80,9 @@ export function TaskDetailPage() {
         <div className="left-column">
           <TaskSummaryCard
             locale={locale}
-            task={task}
+            task={operationTask}
+            commandPending={commandPending}
+            taskSettingsDirty={taskSettingsDirty}
             t={t}
             onCancelTask={cancelTask}
             onRunOperation={runOperation}
@@ -88,6 +92,7 @@ export function TaskDetailPage() {
             task={task}
             taskConfig={taskConfig}
             taskSettingsDirty={taskSettingsDirty}
+            commandPending={commandPending}
             t={t}
             onApplyCurrentSettings={applyCurrentSettings}
             onPickTranslationModel={pickTaskTranslationModel}
@@ -99,7 +104,9 @@ export function TaskDetailPage() {
 
         <div className="right-column">
           <TaskProgressCard
-            task={task}
+            task={operationTask}
+            commandPending={commandPending}
+            taskSettingsDirty={taskSettingsDirty}
             t={t}
             onOpenOutputDir={openOutputDir}
             onRunOperation={runOperation}
@@ -117,6 +124,7 @@ export function TaskDetailPage() {
             onRefreshPreview={() => { void refreshPreview(); }}
             setSubtitleView={setSubtitleView}
             onSourceSaved={sourceSubtitlesSaved}
+            commandPending={commandPending}
           />
           <TaskLogsCard logs={logs} t={t} />
         </div>

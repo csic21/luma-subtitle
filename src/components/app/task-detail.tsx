@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 
 import { SectionTitle, StatusBadge } from "@/components/app/shared";
+import { SubtitleSourceEditor } from "@/components/app/subtitle-source-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
@@ -52,6 +53,8 @@ type FlowStep = {
 };
 
 type OperationHandler = (operation: TaskOperation) => void | Promise<void>;
+const NO_EDITS = {};
+const ignoreTextChange = () => {};
 
 const SubtitleEditorDialog = lazy(() => import("@/components/app/subtitle-editor-dialog")
   .then((module) => ({ default: module.SubtitleEditorDialog })));
@@ -80,6 +83,8 @@ export function TaskSummaryCard({
   onCancelTask,
   onRunOperation,
   operationContext,
+  commandPending = false,
+  taskSettingsDirty = false,
 }: {
   locale: Locale;
   task: TaskRecord;
@@ -87,12 +92,15 @@ export function TaskSummaryCard({
   onCancelTask: () => void | Promise<void>;
   onRunOperation: OperationHandler;
   operationContext: OperationReadinessContext;
+  commandPending?: boolean;
+  taskSettingsDirty?: boolean;
 }) {
   const transcribeIssues = operationRequirementIssues(task, "transcribe", operationContext);
   const translateIssues = operationRequirementIssues(task, "translate", operationContext);
   const resumeTranslateIssues = operationRequirementIssues(task, "resume_translate", operationContext);
   const exportIssues = operationRequirementIssues(task, "export", operationContext);
   const showResumeTranslate = hasPartialTranslationProgress(task);
+  const runLabel = (key: string) => taskSettingsDirty ? t("settings.saveAndRun", { operation: t(key) }) : t(key);
   const materialIcon =
     task.source_type === "audio" ? (
       <FileAudio />
@@ -129,26 +137,26 @@ export function TaskSummaryCard({
           <Button
             variant="secondary"
             onClick={() => onRunOperation("transcribe")}
-            disabled={!canRunOperation(task, "transcribe", operationContext)}
+            disabled={commandPending || !canRunOperation(task, "transcribe", operationContext)}
             title={transcribeIssues.length ? operationRequirementSummary(transcribeIssues, t) : t("common.transcribe")}
           >
             <Play data-icon="inline-start" />
-            {t("common.transcribe")}
+            {runLabel("common.transcribe")}
           </Button>
           <Button
             variant="secondary"
             onClick={() => onRunOperation("translate")}
-            disabled={!canRunOperation(task, "translate", operationContext)}
+            disabled={commandPending || !canRunOperation(task, "translate", operationContext)}
             title={translateIssues.length ? operationRequirementSummary(translateIssues, t) : t("common.translate")}
           >
             <Languages data-icon="inline-start" />
-            {t("common.translate")}
+            {runLabel("common.translate")}
           </Button>
           {showResumeTranslate && (
             <Button
               variant="secondary"
               onClick={() => onRunOperation("resume_translate")}
-              disabled={!canRunOperation(task, "resume_translate", operationContext)}
+              disabled={commandPending || !canRunOperation(task, "resume_translate", operationContext)}
               title={
                 resumeTranslateIssues.length
                   ? operationRequirementSummary(resumeTranslateIssues, t)
@@ -156,7 +164,7 @@ export function TaskSummaryCard({
               }
             >
               <RefreshCw data-icon="inline-start" />
-              {t("common.resumeTranslate")}
+              {runLabel("common.resumeTranslate")}
               {typeof task.translation_completed_count === "number" && task.segment_count
                 ? ` (${task.translation_completed_count}/${task.segment_count})`
                 : ""}
@@ -164,11 +172,11 @@ export function TaskSummaryCard({
           )}
           <Button
             onClick={() => onRunOperation("export")}
-            disabled={!canRunOperation(task, "export", operationContext)}
+            disabled={commandPending || !canRunOperation(task, "export", operationContext)}
             title={exportIssues.length ? operationRequirementSummary(exportIssues, t) : t("common.export")}
           >
             <Download data-icon="inline-start" />
-            {t("common.export")}
+            {runLabel("common.export")}
           </Button>
           <Button variant="destructive" onClick={onCancelTask} disabled={!taskBusy(task)}>
             <CircleStop data-icon="inline-start" />
@@ -186,12 +194,16 @@ export function TaskProgressCard({
   onOpenOutputDir,
   onRunOperation,
   operationContext,
+  commandPending = false,
+  taskSettingsDirty = false,
 }: {
   task: TaskRecord;
   t: Translate;
   onOpenOutputDir: () => void | Promise<void>;
   onRunOperation: OperationHandler;
   operationContext: OperationReadinessContext;
+  commandPending?: boolean;
+  taskSettingsDirty?: boolean;
 }) {
   const statusIcon: ReactNode =
     task.status === "completed" || task.status === "exported" ? (
@@ -218,9 +230,9 @@ export function TaskProgressCard({
         <Progress className="hotdog-progress large" value={progressValue(task.progress)} />
         {(task.source_file_name || task.translated_file_name) && (
           <div className="outputs">
-            <Button onClick={() => onRunOperation("export")} disabled={!canRunOperation(task, "export", operationContext)}>
+            <Button onClick={() => onRunOperation("export")} disabled={commandPending || !canRunOperation(task, "export", operationContext)}>
               <Download data-icon="inline-start" />
-              {t("common.exportSubtitles")}
+              {taskSettingsDirty ? t("settings.saveAndRun", { operation: t("common.exportSubtitles") }) : t("common.exportSubtitles")}
             </Button>
             {task.source_file_name && <code>{task.source_file_name}</code>}
             {task.translated_file_name && <code>{task.translated_file_name}</code>}
@@ -248,20 +260,24 @@ export function SubtitlePreviewCard({
   onRefreshPreview,
   setSubtitleView,
   onSourceSaved,
+  commandPending = false,
 }: {
   task: TaskRecord;
   activeSubtitleBody?: string | null;
   activeSubtitleFileName?: string | null;
   hasTranslatedSubtitle: boolean;
   subtitlePreview: SubtitlePreview | null;
-  subtitleView: "translated" | "source";
+  subtitleView: "translated" | "source" | "parallel";
   t: Translate;
   onRefreshPreview: () => void | Promise<void>;
-  setSubtitleView: Dispatch<SetStateAction<"translated" | "source">>;
-  onSourceSaved: (task: TaskRecord) => Promise<void>;
+  setSubtitleView: Dispatch<SetStateAction<"translated" | "source" | "parallel">>;
+  onSourceSaved: (task: TaskRecord, kind: "source" | "translated") => Promise<void>;
+  commandPending?: boolean;
 }) {
   const [editorPreview, setEditorPreview] = useState<SubtitlePreview | null>(null);
+  const [editorKind, setEditorKind] = useState<"source" | "translated">("source");
   const editButtonRef = useRef<HTMLButtonElement>(null);
+  const editTranslationButtonRef = useRef<HTMLButtonElement>(null);
   return (
     <Card>
       <CardHeader>
@@ -271,13 +287,23 @@ export function SubtitlePreviewCard({
             ref={editButtonRef}
             variant="outline"
             size="sm"
-            disabled={!subtitlePreview?.source_segments.length || taskBusy(task)}
+            disabled={commandPending || !subtitlePreview?.source_segments.length || taskBusy(task)}
             title={taskBusy(task) ? t("subtitle.editBusy") : undefined}
-            onClick={() => setEditorPreview(subtitlePreview)}
+            onClick={() => { setEditorKind("source"); setEditorPreview(subtitlePreview); }}
           >
             <Pencil data-icon="inline-start" />
             {t("subtitle.editSource")}
           </Button>
+          {hasTranslatedSubtitle && <Button
+            ref={editTranslationButtonRef}
+            variant="outline"
+            size="sm"
+            disabled={commandPending || !subtitlePreview?.translated_segments?.length || taskBusy(task)}
+            onClick={() => { setEditorKind("translated"); setEditorPreview(subtitlePreview); }}
+          >
+            <Pencil data-icon="inline-start" />
+            {t("subtitle.editTranslated")}
+          </Button>}
           <Button variant="secondary" size="sm" onClick={onRefreshPreview}>
             <RefreshCw data-icon="inline-start" />
             {t("common.refresh")}
@@ -287,21 +313,33 @@ export function SubtitlePreviewCard({
       <CardContent>
         <Tabs
           value={subtitleView}
-          onValueChange={(value) => setSubtitleView(value as "translated" | "source")}
+          onValueChange={(value) => setSubtitleView(value as "translated" | "source" | "parallel")}
           className="subtitle-tabs"
         >
           <TabsList>
             <TabsTrigger value="source">{t("common.source")}</TabsTrigger>
             {hasTranslatedSubtitle && <TabsTrigger value="translated">{t("common.translated")}</TabsTrigger>}
+            {Boolean(subtitlePreview?.translated_segments?.length) && <TabsTrigger value="parallel">{t("subtitle.parallel")}</TabsTrigger>}
           </TabsList>
         </Tabs>
 
         {subtitlePreview ? (
           <>
+            {subtitleView === "parallel" ? <SubtitleSourceEditor
+              segments={subtitlePreview.translated_segments ?? []}
+              referenceSegments={subtitlePreview.source_segments}
+              referenceLabel={t("common.source")}
+              edits={NO_EDITS}
+              onTextChange={ignoreTextChange}
+              disabled={false}
+              readOnly
+              t={t}
+            /> : <>
             <code className="subtitle-file">{activeSubtitleFileName}</code>
             <ScrollArea className="subtitle-preview">
               <pre>{activeSubtitleBody || t("subtitle.noContent")}</pre>
             </ScrollArea>
+            </>}
           </>
         ) : (
           <div className="subtitle-empty">{t("subtitle.empty")}</div>
@@ -312,11 +350,12 @@ export function SubtitlePreviewCard({
           <SubtitleEditorDialog
             taskId={task.id}
             preview={editorPreview}
-            busy={taskBusy(task)}
+            kind={editorKind}
+            busy={commandPending || taskBusy(task)}
             t={t}
             onClose={() => setEditorPreview(null)}
             onSaved={onSourceSaved}
-            onReturnFocus={() => editButtonRef.current?.focus()}
+            onReturnFocus={() => (editorKind === "source" ? editButtonRef : editTranslationButtonRef).current?.focus()}
           />
         </Suspense>
       )}
