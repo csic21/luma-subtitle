@@ -1,15 +1,28 @@
 import os
+import io
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 
-from smoke import terminate_idle_worker, clean_environment
+from smoke import terminate_idle_worker, clean_environment, diagnostic_json
 from unittest.mock import patch
 
 
 class SmokeHarnessTests(unittest.TestCase):
+    def test_unicode_evidence_survives_windows_legacy_log_encoding(self):
+        evidence = {'words': ['Python', 'で', '簡単', 'に', '使える', 'ツール', 'です'],
+                    'cwd_before': 'runtime é 测试', 'finder_removed': True}
+        for value in (evidence, {'smoke': {'nagisa_unicode': evidence},
+                                 'path': 'C:/runtime é 测试/final-report.json'}):
+            with self.subTest(final_report='smoke' in value):
+                buffer = io.BytesIO(); stream = io.TextIOWrapper(buffer, encoding='cp1252')
+                stream.write(diagnostic_json(value, indent=2)); stream.flush()
+                self.assertEqual(json.loads(buffer.getvalue().decode('cp1252')), value)
+                stream.close()
+
     def test_clean_environment_keeps_case_insensitive_windows_os_vars_only(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {
             'SYSTEMROOT': 'C:\\Windows', 'Processor_Architecture': 'AMD64',

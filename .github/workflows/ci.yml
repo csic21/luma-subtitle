@@ -23,6 +23,9 @@ jobs:
         os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 9.9.0
@@ -50,3 +53,5 @@ jobs:
         run: pnpm build
       - name: Rust regression tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Native application build without distributable packaging
+        run: pnpm tauri build --no-bundle

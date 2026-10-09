@@ -42,6 +42,11 @@ def dump(path, value):
     Path(path).write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
 
 
+def print_host_status(status):
+    # Host Windows consoles can use cp1252 even though report files are UTF-8.
+    print(json.dumps(status, indent=2, ensure_ascii=True), flush=True)
+
+
 def load(path):
     return json.loads(Path(path).read_text(encoding='utf-8-sig'))
 
@@ -137,6 +142,8 @@ def validate_lock(lock):
     dn = lock['onednn_cmake']
     if (dn['DNNL_CPU_RUNTIME'], dn['DNNL_GPU_RUNTIME'], dn['DNNL_LIBRARY_TYPE'], dn['DNNL_BLAS_VENDOR']) != ('SEQ', 'NONE', 'STATIC', 'NONE'):
         raise ValueError('Unreviewed oneDNN runtime')
+    if dn['DNNL_ENABLE_PRIMITIVE'] != 'MATMUL;CONVOLUTION;REORDER':
+        raise ValueError('oneDNN must retain the reviewed GEMM and speech-convolution primitives')
     for options in (ct, dn):
         if options['CMAKE_MSVC_RUNTIME_LIBRARY'] != 'MultiThreadedDLL':
             raise ValueError('CRT flags must match the supported upstream Python extension')
@@ -287,6 +294,37 @@ def deterministic_environment(work, env, lock):
                 _LINK_='/Brepro /INCREMENTAL:NO', CTRANSLATE2_ROOT=str(work / 'ct2-install'))
 
 
+def validate_primitive_coverage(ct_source, options):
+    """Inventory every oneDNN API in pinned CT2 library sources before compiling."""
+    expected = {
+        'src/cpu/primitives.cc': {
+            'sha256': 'b1385185fab673357e482604e06cbaed57017580b1cd4e931b5361ba50f864a6',
+            'cpp': [], 'c': ['dnnl_gemm_s8s8s32', 'dnnl_gemm_u8s8s32', 'dnnl_sgemm']},
+        'src/ops/conv1d_cpu.cc': {
+            'sha256': '40649222865eb74df6be6433c7b58466da9670827342ebeba67c0577691e1637',
+            'cpp': ['algorithm', 'convolution_forward', 'engine', 'memory', 'prop_kind', 'reorder', 'stream'], 'c': []}}
+    found = {}
+    for directory in ('src', 'include'):
+        for path in sorted((Path(ct_source) / directory).rglob('*')):
+            if path.is_file() and path.suffix in {'.cc', '.h', '.cpp', '.hpp', '.c'}:
+                data = path.read_bytes(); source = data.decode('utf-8')
+                cpp = sorted(set(re.findall(r'\bdnnl::([A-Za-z_]\w*)', source)))
+                c = sorted(set(re.findall(r'\b(dnnl_[A-Za-z_]\w*)\s*\(', source)))
+                if cpp or c:
+                    found[path.relative_to(ct_source).as_posix()] = {'sha256': hashlib.sha256(data).hexdigest(), 'cpp': cpp, 'c': c}
+    if found != expected:
+        raise ValueError('Pinned CT2 oneDNN source/API inventory changed; review primitive coverage')
+    enabled = set(options['DNNL_ENABLE_PRIMITIVE'].split(';'))
+    for primitive in ('MATMUL', 'CONVOLUTION', 'REORDER'):
+        if primitive not in enabled:
+            raise ValueError('Required CT2 oneDNN speech primitive is missing: ' + primitive)
+    return {'schema': 1, 'files': found, 'selected_primitives': sorted(enabled),
+            'direct_cpp_primitives': ['CONVOLUTION', 'REORDER'],
+            'low_level_gemm_apis': expected['src/cpu/primitives.cc']['c'],
+            'independent_post_op_primitives': [],
+            'activation': 'CT2 applies its own activation after oneDNN convolution; no fused post-op is requested.'}
+
+
 def probe_path_mapping(args, env, lock):
     work = args.work / 'compiler-probe'; work.mkdir()
     source = work / 'probe.cpp'
@@ -318,14 +356,41 @@ def enforce_independent_proofs(status, functional_proof):
         raise error
 
 
+def prepare_native_root(work):
+    native = Path(work) / 'native-build'
+    if native.exists() or native.is_symlink():
+        raise ValueError('Canonical native root must be absent before each fresh build')
+    native.mkdir()
+    return native
+
+
+def retire_native_root(work, native, retained_wheel):
+    """Discard every native source/intermediate only after retaining exact output."""
+    work, native, retained_wheel = map(Path, (work, native, retained_wheel))
+    if (native != work / 'native-build' or native.is_symlink() or not native.is_dir()
+            or retained_wheel.is_symlink() or not retained_wheel.is_file()
+            or retained_wheel.parent not in (work / 'build-1', work / 'build-2')
+            or retained_wheel.parent.is_symlink()):
+        raise ValueError('Unsafe native cleanup or missing independently retained wheel')
+    before = digest(retained_wheel)
+    shutil.rmtree(native)
+    if native.exists() or native.is_symlink() or digest(retained_wheel) != before:
+        raise RuntimeError('Native cleanup did not preserve the retained wheel')
+
+
 def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
-    work = args.work / f'build-{number}'; work.mkdir()
+    if number not in (1, 2):
+        raise ValueError('Exactly two independent native builds are required')
+    retained = args.work / f'build-{number}'; retained.mkdir()
+    work = prepare_native_root(args.work)
     sources = work / 'sources'; sources.mkdir()
     for item in lock['sources']:
         destination = (sources / 'ctranslate2/third_party' / item['name']) if item['name'] in {'cpu_features', 'spdlog'} else sources / item['name']
         extract_source(fetch(item, args.cache), destination)
     ct = sources / 'ctranslate2'; dn = sources / 'onednn'
     validate_source_version((ct / 'python/ctranslate2/version.py').read_text(encoding='utf-8'))
+    coverage = validate_primitive_coverage(ct, lock['onednn_cmake'])
+    dump(args.reports / f'build-{number}-primitive-coverage.json', coverage)
     local_env = deterministic_environment(work, env, lock)
     common = ['-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_MAKE_PROGRAM={ninja}',
               '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl', '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
@@ -351,10 +416,10 @@ def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
     expected = 'ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl'
     if len(wheels) != 1 or wheels[0].name != expected:
         raise ValueError('Unexpected wheel build tag')
-    destination = work / expected
+    destination = retained / expected
     canonical_wheel(wheels[0], destination, provenance, runtime)
     # Inventory CT2's payload independently of the surrounding Python runtime.
-    payload = work / 'wheel-payload'; payload.mkdir()
+    payload = retained / 'wheel-payload'; payload.mkdir()
     with zipfile.ZipFile(destination) as archive:
         for item in archive.infolist():
             if Path(item.filename).suffix.lower() not in {'.dll', '.pyd', '.exe'}:
@@ -367,6 +432,14 @@ def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
     dump(args.reports / f'wheel-{number}-native.json', native)
     if native['forbidden_files'] or any(d['resolution'] == 'forbidden' for d in native['dependencies']):
         raise ValueError('CPU wheel contains/imports a forbidden runtime')
+    retire_native_root(args.work, work, destination)
+    dump(args.reports / f'build-{number}-freshness.json', {
+        'schema': 1, 'build': number, 'canonical_native_root': str(work),
+        'fresh_native_root': True, 'sources_reextracted': True,
+        'native_object_cache_reused': False, 'native_root_removed': True,
+        'retained_wheel_sha256': digest(destination),
+        'scope': 'Two clean builds at the same native source/build path and pinned toolchain only',
+        'path_independence_claim': False, 'cross_machine_claim': False})
     return destination
 
 
@@ -424,14 +497,18 @@ def main():
     for field in ('work', 'reports', 'cache', 'worker'):
         parser.add_argument('--' + field, type=Path, required=True)
     parser.add_argument('--source-sha', required=True)
+    parser.add_argument('--publication-output', type=Path)
     args = parser.parse_args()
     for field in ('work', 'reports', 'cache', 'worker'):
         setattr(args, field, getattr(args, field).resolve())
+    if args.publication_output is not None:
+        args.publication_output = args.publication_output.resolve()
     args.reports.mkdir(parents=True, exist_ok=True)
     status = {'schema': 1, 'source_sha': args.source_sha, 'publication_authorized': False,
               'wheel_reproduced': False, 'native_inference_passed': False,
               'limitations': ['Sequential oneDNN GEMMs may be slower than upstream MKL/OpenMP builds.',
                              'No CPU/GPU performance claim; no clean GUI-machine or non-AVX hardware claim.',
+                             'Repeatability is limited to fresh builds at one fixed native root and pinned toolchain; no path-independence or cross-machine claim.',
                              'Hosted runner OS is not hermetically pinned; tool versions and hashes are reported.']}
     try:
         if sys.platform != 'win32' or sys.maxsize <= 2**32:
@@ -476,6 +553,9 @@ def main():
                       'source_date_epoch': lock['source_date_epoch'], 'toolchain': toolchain,
                       'native_compile_flags': '/Brepro /Z7 /experimental:deterministic /pathmap:<build-root>=C:\\luma-ct2-build',
                       'native_link_flags': '/Brepro /INCREMENTAL:NO',
+                      'build_strategy': {'kind': 'fresh-fixed-native-root', 'native_root_relative': 'native-build',
+                                         'builds': 2, 'native_object_cache_reused': False,
+                                         'path_independence_claim': False, 'cross_machine_claim': False},
                       'notices': load(HERE / 'notices.lock.json'), 'publication_authorized': False,
                       'packaging_changes': ['PE executable payloads are not modified.', 'Wheel build tag: 1lumacpu.',
                                             'Remove GPU classifier; add native licenses and provenance; normalize ZIP and RECORD.']}
@@ -495,12 +575,17 @@ def main():
         # retained even if that exact first wheel works correctly.
         enforce_independent_proofs(status, lambda: private_proof(args, lock, first, runtime_archive, env))
         status['passed'] = True
+        dump(args.reports / 'result.json', status)
+        from package_publication import package_publication
+        package_publication(source_sha=args.source_sha, wheel=first, second_wheel=second,
+                            reports=args.reports, cache=args.cache, work=args.work,
+                            publication_output=args.publication_output)
     except BaseException as error:
         status.update(passed=False, error=f'{type(error).__name__}: {error}')
         raise
     finally:
         dump(args.reports / 'result.json', status)
-        print(json.dumps(status, indent=2, ensure_ascii=False), flush=True)
+        print_host_status(status)
 
 
 if __name__ == '__main__':

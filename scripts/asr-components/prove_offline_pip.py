@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from build import ROOT, build, dump, sha256
+from smoke import diagnostic_json
 
 
 def owned(command, timeout=900, env=None):
@@ -91,7 +92,7 @@ def main():
               'app_helper_test': app_helper,
               'native_installer_test': native_installer, 'publication_authorized': False}
     destination = output / (args.pack + '.offline-pip-proof.json')
-    dump(destination, report); print(json.dumps(report, indent=2, ensure_ascii=False))
+    dump(destination, report); print(diagnostic_json(report, indent=2))
     print('OFFLINE_PIP_PROOF_SHA256=' + sha256(destination))
     # The proof's binaries were reclaimed above and are never uploaded.
 

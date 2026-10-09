@@ -69,7 +69,7 @@ impl Recipe {
                 return Err("Duplicate pinned wheel identity or filename.".into());
             }
             if relative_path(&wheel.filename)?.components().count() != 1 || !wheel.filename.ends_with(".whl") { return Err("Recipe contains an unsupported wheel filename.".into()); }
-            catalog::validate_download(&wheel.url, wheel.bytes, &wheel.sha256, Source::Wheel)?;
+            wheel_source(wheel, &runtime.platform)?;
             if !url::Url::parse(&wheel.url).map_err(|e| e.to_string())?.path().ends_with(&format!("/{}", wheel.filename)) { return Err("Pinned wheel URL filename differs from the recipe.".into()); }
             bounds(wheel.installed_bytes, wheel.max_files)?;
             total = total.checked_add(wheel.installed_bytes).ok_or("Recipe extraction size overflow")?;
@@ -97,6 +97,22 @@ impl Recipe {
         Ok(())
     }
 }
+/// One audited CPU-only wheel is delivered from the app's exact release asset.
+/// Every other wheel retains the existing PyPI-only origin policy.
+pub(super) fn wheel_source(wheel: &Wheel, platform: &str) -> Result<Source, String> {
+    let normalized_name = wheel.name.to_ascii_lowercase().replace('_', "-").replace('.', "-");
+    if platform == "windows-x64" && normalized_name == "ctranslate2" && wheel.url != catalog::CPU_WHEEL_URL {
+        return Err("Managed Windows CTranslate2 requires the reviewed CPU-only wheel, not the upstream vendor wheel.".into());
+    }
+    let source = if wheel.url == catalog::CPU_WHEEL_URL {
+        if platform != "windows-x64" || wheel.name != "ctranslate2" || wheel.version != "4.8.2" || wheel.filename != catalog::CPU_WHEEL_FILENAME {
+            return Err("The fixed CPU-only wheel source does not match its reviewed package or platform.".into());
+        }
+        Source::CpuWheel
+    } else { Source::Wheel };
+    catalog::validate_download(&wheel.url, wheel.bytes, &wheel.sha256, source)?;
+    Ok(source)
+}
 fn bounds(bytes: u64, files: usize) -> Result<(), String> {
     if bytes == 0 || bytes > catalog::MAX_INSTALLED_BYTES || files == 0 || files > 100_000 { return Err("Missing or excessive artifact extraction bounds.".into()); }
     Ok(())
@@ -118,4 +134,72 @@ pub(super) fn validate_acknowledgement(runtime: &Runtime, request: &ComponentReq
     let mut terms = request.acknowledged_terms.clone(); terms.sort();
     if terms != recipe.acknowledgements() { return Err("Explicit acceptance of every displayed upstream terms ID, version and SHA-256 is required before any download.".into()); }
     Ok(Some(Consent { component_id: runtime.id.clone(), plan_sha256: plan, terms }))
+}
+
+
+#[cfg(test)]
+mod cpu_source_tests {
+    use super::*;
+    fn wheel() -> Wheel {
+        Wheel { name: "ctranslate2".into(), version: "4.8.2".into(), filename: catalog::CPU_WHEEL_FILENAME.into(), url: catalog::CPU_WHEEL_URL.into(), bytes: 4, sha256: "a".repeat(64), installed_bytes: 4, max_files: 1 }
+    }
+    #[test]
+    fn own_cpu_wheel_requires_the_exact_identity_and_windows_platform() {
+        let pin = wheel();
+        assert!(matches!(wheel_source(&pin, "windows-x64").unwrap(), Source::CpuWheel));
+        for platform in ["macos-arm64", "windows-arm64", "unsupported"] { assert!(wheel_source(&pin, platform).is_err()); }
+        for field in ["name", "version", "filename"] {
+            let mut value = serde_json::to_value(&pin).unwrap(); value[field] = serde_json::json!("changed");
+            let changed: Wheel = serde_json::from_value(value).unwrap(); assert!(wheel_source(&changed, "windows-x64").is_err(), "accepted changed {field}");
+        }
+        let mut changed = pin.clone(); changed.bytes = 0; assert!(wheel_source(&changed, "windows-x64").is_err());
+        let mut changed = pin; changed.sha256.clear(); assert!(wheel_source(&changed, "windows-x64").is_err());
+    }
+    #[test]
+    fn original_vendor_ctranslate2_wheel_is_rejected_for_managed_windows() {
+        // Genuine original PyPI lock entry: trusted transport alone is not the
+        // reviewed CPU-only build identity, including case-normalized aliases.
+        let mut vendor = wheel();
+        vendor.filename = "ctranslate2-4.8.2-cp312-cp312-win_amd64.whl".into();
+        vendor.url = "https://files.pythonhosted.org/packages/4e/23/e3b5322ff7368fcbed181ea4c209149416e7940b5b04971d5ee4084afe1a/ctranslate2-4.8.2-cp312-cp312-win_amd64.whl".into();
+        vendor.bytes = 19_222_069;
+        vendor.sha256 = "d94421d565d0de61c032998f737a18942b0f2bef40c0424b1846ec6f67300105".into();
+        assert!(catalog::validate_download(&vendor.url, vendor.bytes, &vendor.sha256, Source::Wheel).is_ok());
+        for name in ["ctranslate2", "CTranslate2", "CTRANSLATE2"] {
+            vendor.name = name.into(); assert!(wheel_source(&vendor, "windows-x64").is_err());
+        }
+    }
+    #[test]
+    fn own_cpu_source_rejects_release_owner_tag_asset_and_url_drift() {
+        for url in [
+            catalog::CPU_WHEEL_URL.replace("csic21", "other-owner"),
+            catalog::CPU_WHEEL_URL.replace("luma-subtitle/", "other-repository/"),
+            catalog::CPU_WHEEL_URL.replace("asr-ct2-cpu-4.8.2-1/", "asr-ct2-cpu-4.8.2-2/"),
+            catalog::CPU_WHEEL_URL.replace("download/asr-ct2-cpu-4.8.2-1", "latest/download"),
+            catalog::CPU_WHEEL_URL.replace("1lumacpu", "2lumacpu"),
+            catalog::CPU_WHEEL_URL.replace("https://", "http://"),
+            catalog::CPU_WHEEL_URL.replace("github.com", "github.com.evil.invalid"),
+            catalog::CPU_WHEEL_URL.replace("https://", "https://user@"),
+            format!("{}?asset=changed", catalog::CPU_WHEEL_URL),
+            format!("{}#changed", catalog::CPU_WHEEL_URL),
+        ] {
+            let mut pin = wheel(); pin.url = url;
+            assert!(wheel_source(&pin, "windows-x64").is_err(), "accepted {}", pin.url);
+            assert!(catalog::validate_download(&pin.url, pin.bytes, &pin.sha256, Source::CpuWheel).is_err());
+        }
+    }
+    #[test]
+    fn other_wheels_remain_pypi_only_and_cpu_redirects_stay_separate() {
+        let mut pin = wheel(); pin.name = "example".into(); pin.version = "1.0".into(); pin.filename = "example-1.0-py3-none-any.whl".into();
+        pin.url = format!("https://files.pythonhosted.org/packages/aa/bb/{}/{}", "a".repeat(64), pin.filename);
+        assert!(matches!(wheel_source(&pin, "macos-arm64").unwrap(), Source::Wheel));
+        assert!(catalog::validate_download(&pin.url, pin.bytes, &pin.sha256, Source::CpuWheel).is_err());
+        assert!(catalog::validate_download(catalog::CPU_WHEEL_URL, pin.bytes, &pin.sha256, Source::Wheel).is_err());
+        for raw in ["https://github.com/csic21/luma-subtitle/releases/download/asr-ct2-cpu-4.8.2-1/asset", "https://release-assets.githubusercontent.com/exact-asset?signed=1"] {
+            let url = url::Url::parse(raw).unwrap(); assert!(catalog::allowed_redirect(&url, Source::CpuWheel)); assert!(!catalog::allowed_redirect(&url, Source::Wheel));
+        }
+        for raw in ["https://files.pythonhosted.org/asset", "https://objects.githubusercontent.com/asset", "https://raw.githubusercontent.com/asset", "http://release-assets.githubusercontent.com/asset", "https://release-assets.githubusercontent.com.evil.invalid/asset", "https://user@release-assets.githubusercontent.com/asset", "https://release-assets.githubusercontent.com:444/asset"] {
+            assert!(!catalog::allowed_redirect(&url::Url::parse(raw).unwrap(), Source::CpuWheel), "accepted {raw}");
+        }
+    }
 }

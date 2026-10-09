@@ -10,6 +10,24 @@ on:
       - 'scripts/asr-components/locks/faster-whisper-cpu-windows-x64.json'
       - 'src-tauri/src/asr/worker.py'
       - '.github/workflows/asr-ct2-cpu.yml'
+  push:
+    branches: [feat/optional-asr-engines]
+    paths: ['.github/requests/ct2-cpu-proof.json']
+  workflow_call:
+    inputs:
+      source_sha:
+        description: Exact reviewed source commit
+        required: true
+        type: string
+      publication:
+        description: Export candidates only for the validated request-only publisher
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      candidate_artifact_id:
+        description: Exact same-run candidate artifact created after all proof gates
+        value: ${{ jobs.windows-cpu-proof.outputs.candidate_artifact_id }}
   workflow_dispatch:
     inputs:
       source_sha:
@@ -20,21 +38,67 @@ on:
 permissions:
   contents: read
 
-# PR revisions replace only that PR's speculative proof. Manual/explicit-source
-# proofs have unique groups and are never canceled by a later branch push.
+# PR revisions replace only cheap source checks. Native work requires an explicit
+# proof request or pinned manual/reusable invocation and survives later PR pushes.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ct2-cpu-pr-{0}', github.event.pull_request.number) || format('ct2-cpu-proof-{0}-{1}', inputs.source_sha || github.sha, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  source-tests:
+    name: CPU proof source guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12.10'
+      - run: python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_*.py' -v
+      - run: node --test scripts/asr-components/ct2-cpu/publish.node-test.cjs scripts/asr-components/ct2-cpu/proof_request.node-test.cjs
+
+  request:
+    name: Validate request-only CPU proof
+    if: github.event_name == 'push' && !inputs.source_sha
+    needs: source-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.request.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - id: request
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7.0.1
+        with:
+          script: |
+            const { prepareCpuProof } = require('./scripts/asr-components/ct2-cpu/proof_request.cjs');
+            await prepareCpuProof({ github, context, core });
+
   windows-cpu-proof:
+    needs: [source-tests, request]
+    if: always() && !cancelled() && needs.source-tests.result == 'success' && (needs.request.result == 'success' || inputs.source_sha || github.event_name == 'workflow_dispatch')
     runs-on: windows-2022
     timeout-minutes: 120
+    outputs:
+      candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}
     env:
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || inputs.source_sha || github.sha }}
+      SOURCE_SHA: ${{ inputs.source_sha || needs.request.outputs.source_sha || github.sha }}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
+      CPU_PUBLICATION_REQUESTED: ${{ inputs.publication || false }}
+      CPU_CANDIDATE_EXPORT: ${{ inputs.publication && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && github.workflow == 'Publish reviewed CPU wheel' && startsWith(github.workflow_ref, 'csic21/luma-subtitle/.github/workflows/asr-cpu-wheel-publish.yml@') }}
     steps:
+      - name: Restrict candidate export to the reviewed publisher caller
+        shell: pwsh
+        run: |
+          if ($env:CPU_PUBLICATION_REQUESTED -eq 'true' -and $env:CPU_CANDIDATE_EXPORT -ne 'true') {
+            throw 'Candidate exports require the dedicated validated request-only publisher.'
+          }
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -52,22 +116,26 @@ jobs:
         run: |
           $orchestrator = Join-Path $env:pythonLocation 'python.exe'
           $reports = Join-Path $env:GITHUB_WORKSPACE 'dist/ct2-cpu-reports'
+          $publicationArgs = @()
+          if ($env:CPU_CANDIDATE_EXPORT -eq 'true') {
+            $publicationArgs = @('--publication-output', (Join-Path $env:GITHUB_WORKSPACE 'dist/ct2-cpu-candidate'))
+          }
           . ./scripts/asr-components/ct2-cpu/prepare_toolchain.ps1 -Reports $reports -Lock 'scripts/asr-components/ct2-cpu/sources.lock.json'
           & $orchestrator -B scripts/asr-components/ct2-cpu/build_cpu.py `
             --source-sha "$env:SOURCE_SHA" `
             --work "$env:RUNNER_TEMP/luma-ct2-cpu-proof" `
             --cache "$env:RUNNER_TEMP/luma-ct2-cpu-downloads" `
             --reports "$reports" `
-            --worker 'src-tauri/src/asr/worker.py'
+            --worker 'src-tauri/src/asr/worker.py' @publicationArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # Deliberately no wheel/CRT/runtime artifact upload, release, or write token.
+      # Proof runs upload metadata only; no runtime/CRT/model upload.
       # The independent provenance, CRT license, hash and native inference review
       # must finish before a separate immutable non-app component release exists.
       - name: Upload test reports only (binary redistribution hold)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ct2-cpu-proof-${{ env.SOURCE_SHA }}
+          name: ct2-cpu-proof-${{ env.SOURCE_SHA }}${{ inputs.publication && format('-{0}-{1}', github.run_id, github.run_attempt) || '' }}
           if-no-files-found: warn
           retention-days: 14
           path: |
@@ -75,11 +143,27 @@ jobs:
             dist/ct2-cpu-reports/*.log
             dist/ct2-cpu-reports/*-CMakeCache.txt
 
+      - name: Export the three reviewed candidate assets and proof only
+        id: candidate-upload
+        if: success() && env.CPU_CANDIDATE_EXPORT == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ct2-cpu-candidate-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/ct2-cpu-candidate/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl
+            dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-sources.zip
+            dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-notices.zip
+            dist/ct2-cpu-candidate/publication-proof.json
+
   windows-direct-crt-signatures:
+    needs: [source-tests, request]
+    if: always() && !cancelled() && needs.source-tests.result == 'success' && (needs.request.result == 'success' || inputs.source_sha || github.event_name == 'workflow_dispatch')
     runs-on: windows-2022
     timeout-minutes: 15
     env:
-      SOURCE_SHA: ${{ github.event.pull_request.head.sha || inputs.source_sha || github.sha }}
+      SOURCE_SHA: ${{ inputs.source_sha || needs.request.outputs.source_sha || github.sha }}
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
     steps:
@@ -111,7 +195,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: direct-crt-proof-${{ env.SOURCE_SHA }}
+          name: direct-crt-proof-${{ env.SOURCE_SHA }}${{ inputs.publication && format('-{0}-{1}', github.run_id, github.run_attempt) || '' }}
           if-no-files-found: warn
           retention-days: 14
           path: dist/direct-crt-reports/*.json

@@ -186,18 +186,19 @@ mod tests {
     }
     #[cfg(unix)]
     extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
+    #[derive(Debug)]
     struct ProcessProbe {
+        pid: u32,
         #[cfg(windows)] handle: usize,
-        #[cfg(unix)] pid: i32,
     }
     impl ProcessProbe {
         fn new(pid: u32) -> Self {
             #[cfg(windows)] {
                 let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) }; // SYNCHRONIZE only
                 assert!(!handle.is_null(), "open the live native setup child");
-                Self { handle: handle as usize }
+                Self { pid, handle: handle as usize }
             }
-            #[cfg(unix)] { Self { pid: pid.try_into().unwrap() } }
+            #[cfg(unix)] { Self { pid } }
         }
         fn exited(&self) -> bool {
             #[cfg(windows)] {
@@ -206,7 +207,7 @@ mod tests {
                 state == 0
             }
             #[cfg(unix)] {
-                if unsafe { kill(self.pid, 0) } == 0 { return false; }
+                if unsafe { kill(self.pid.try_into().unwrap(), 0) } == 0 { return false; }
                 assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(3)); // ESRCH, including no zombie
                 true
             }
@@ -243,10 +244,23 @@ mod tests {
         }
         staging_removed && temporary_removed && unlocked
     }
+    fn lease_diagnostic(root: &Path) -> String {
+        // Tests retain the raw OS error that the user-facing lease message
+        // intentionally abstracts. Open only the existing private lock file.
+        match fs::OpenOptions::new().read(true).write(true).open(root.join(".setup.lock")) {
+            Ok(file) => match fs2::FileExt::try_lock_exclusive(&file) {
+                Ok(()) => "raw OS lease probe available".into(),
+                Err(error) => format!("raw OS lease probe: {error}; code={:?}; kind={:?}", error.raw_os_error(), error.kind()),
+            },
+            Err(error) => format!("raw OS lease open: {error}"),
+        }
+    }
     async fn await_cleanup(fixture: &Fixture, staging: &Path, temporary: &Path, process: &ProcessProbe) {
         let started = Instant::now();
         while !cleanup_finished(fixture, staging, temporary, process) {
-            assert!(started.elapsed() < Duration::from_secs(10), "native setup child or retained cleanup did not finish");
+            assert!(started.elapsed() < Duration::from_secs(10),
+                "native setup cleanup incomplete: {process:?}; exited={}; staging_exists={}; temp_exists={}; lease_error={:?}; {}",
+                process.exited(), staging.exists(), temporary.exists(), store::acquire_setup_lease(&fixture.root).err(), lease_diagnostic(&fixture.root));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
@@ -360,7 +374,15 @@ mod tests {
         assert!(store::acquire_setup_lease(&fixture.root).is_err());
         drop(retained);
         assert!(!staging_path.exists());
-        assert!(store::acquire_setup_lease(&fixture.root).is_ok());
+        // Observe release within a bound instead of assuming an immediate OS
+        // lock probe. Other parallel Unix launches can briefly inherit a
+        // CLOEXEC descriptor between fork and exec; no owner may remain here.
+        let started = Instant::now();
+        loop {
+            let Err(error) = store::acquire_setup_lease(&fixture.root) else { break; };
+            assert!(started.elapsed() < Duration::from_secs(10), "final setup lease did not release: {error}; staging_exists={}; {}", staging_path.exists(), lease_diagnostic(&fixture.root));
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -446,7 +468,7 @@ mod tests {
                 let error = task.await.unwrap().unwrap_err();
                 assert!(error.contains(if cancel_requested { "cancelled" } else { "timed out" }));
                 assert!(process.exited(), "ordinary cancellation/timeout must await kill and reap");
-                assert!(cleanup_finished(&fixture, &staging_path, &temp_path, &process));
+                await_cleanup(&fixture, &staging_path, &temp_path, &process).await;
                 assert_eq!(cleanup_observed.load(Ordering::SeqCst), 1);
             }
         });

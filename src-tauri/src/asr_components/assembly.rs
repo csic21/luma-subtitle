@@ -20,7 +20,8 @@ pub(super) async fn prepare(app: &AppHandle, manager: &ComponentManager, root: &
         archive::cancelled(cancel)?;
         let artifact = Archive { url: wheel.url.clone(), bytes: wheel.bytes, sha256: wheel.sha256.clone() };
         let mut high_water = 0;
-        let source = download::cached(root, &runtime.id, &artifact, Source::Wheel, cancel, |bytes| {
+        let source_kind = super::recipe::wheel_source(wheel, &runtime.platform)?;
+        let source = download::cached(root, &runtime.id, &artifact, source_kind, cancel, |bytes| {
             high_water = high_water.max(bytes);
             manager.report(app, "downloading", completed + high_water, "Downloading exact, hash-verified upstream wheels");
         }).await?;

@@ -61,6 +61,17 @@ describe("exact runtime consent", () => {
     expect(componentDownloadBytes(recipeRuntime)).toBe(120);
     expect(componentSources(recipeRuntime)).toEqual(["https://example.test/python.zip", "https://example.test/engine.whl"]);
   });
+  it("displays the exact separately reviewed CPU wheel source in the consent plan", () => {
+    const url = "https://github.com/csic21/luma-subtitle/releases/download/asr-ct2-cpu-4.8.2-1/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl";
+    const withCpuWheel: AsrRuntimeComponent = { ...recipeRuntime, recipe: { ...recipeRuntime.recipe!, wheels: [
+      ...recipeRuntime.recipe!.wheels,
+      { name: "ctranslate2", version: "4.8.2", filename: url.split("/").slice(-1)[0], url, bytes: 30, sha256: "6".repeat(64), installed_bytes: 60, max_files: 3 },
+    ] } };
+    expect(componentSources(withCpuWheel)).toContain(url);
+    expect(componentDownloadBytes(withCpuWheel)).toBe(150);
+    expect(runtimeAcknowledgement(withCpuWheel)).not.toBeNull();
+    expect(runtimeConfirmationKey(withCpuWheel)).not.toBe(runtimeConfirmationKey(recipeRuntime));
+  });
   it("includes the exact optional Microsoft package in declared sources and bytes", () => {
     const withCrt: AsrRuntimeComponent = { ...recipeRuntime, recipe: { ...recipeRuntime.recipe!, windows_crt: "msvc-14.44.35211-x64" } };
     expect(componentDownloadBytes(withCrt)).toBe(120 + 25_635_768);

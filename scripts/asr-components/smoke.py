@@ -13,6 +13,12 @@ import zipfile
 from build import ROOT, ALLOWED, dump, embed_nagisa, fetch, safe_name, sha256
 
 
+def diagnostic_json(value, **kwargs):
+    # The build host's redirected Windows stdout can still be cp1252. Keep log
+    # transport ASCII-safe; the proof files themselves retain exact UTF-8 text.
+    return json.dumps(value, ensure_ascii=True, **kwargs)
+
+
 def extract(archive, destination):
     destination.mkdir(parents=True)
     with zipfile.ZipFile(archive) as z:
@@ -110,7 +116,7 @@ def main():
             failure = nagisa_probe(executable, probe, env, work, '--adapt', '--forced-failure')
             assert baseline['upstream_finders_added'] == failure['upstream_finders_added']
             nagisa = {'baseline': baseline, 'unicode': adapted, 'failure': failure, 'japanese_tokens_match': True}
-            print('NAGISA_UNICODE_PROOF=' + json.dumps(nagisa, ensure_ascii=False), flush=True)
+            print('NAGISA_UNICODE_PROOF=' + diagnostic_json(nagisa), flush=True)
         native_inventory = None
         if manifest['platform'] == 'windows-x64':
             from windows_native_inventory import inventory
@@ -167,7 +173,7 @@ def main():
                   'windows_native_inventory': native_inventory,
                   'limitations': ['No CUDA validation or CUDA redistribution.', 'No Developer ID signing, notarization, Gatekeeper bypass, or clean-GUI-machine validation.']}
         dump(output / f'{manifest["id"]}.smoke.json', report)
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        print(diagnostic_json(report, indent=2))
 
 
 if __name__ == '__main__':

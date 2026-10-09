@@ -41,6 +41,48 @@ def pe(normal='kernel32.dll', delayed='msvcp140_1.dll', pe32=False):
 
 
 class NativeTests(unittest.TestCase):
+    def test_fixed_native_root_is_fresh_and_first_output_survives_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            first = work / 'build-1'; first.mkdir()
+            wheel = first / 'result.whl'; wheel.write_bytes(b'exact retained wheel')
+            native = build.prepare_native_root(work)
+            (native / 'stale.obj').write_bytes(b'must not be reused')
+            with self.assertRaisesRegex(ValueError, 'must be absent'):
+                build.prepare_native_root(work)
+            build.retire_native_root(work, native, wheel)
+            self.assertEqual(wheel.read_bytes(), b'exact retained wheel')
+            second = build.prepare_native_root(work)
+            self.assertEqual(second, native)
+            self.assertEqual(list(second.iterdir()), [])
+            self.assertEqual(wheel.read_bytes(), b'exact retained wheel')
+
+    def test_fixed_native_cleanup_rejects_wrong_root_or_unretained_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory); native = build.prepare_native_root(work)
+            (native / 'output.whl').write_bytes(b'not safely retained')
+            with self.assertRaisesRegex(ValueError, 'Unsafe native cleanup'):
+                build.retire_native_root(work, native, native / 'output.whl')
+            first = work / 'build-1'; first.mkdir(); wheel = first / 'result.whl'; wheel.write_bytes(b'ok')
+            other = work / 'other'; other.mkdir()
+            with self.assertRaisesRegex(ValueError, 'Unsafe native cleanup'):
+                build.retire_native_root(work, other, wheel)
+            self.assertTrue((native / 'output.whl').is_file())
+
+    def test_unicode_failure_status_survives_host_cp1252_console(self):
+        status = {'passed': False, 'error': 'RuntimeError: Relocated private Python é 测试/failed.dll'}
+        raw = io.BytesIO()
+        with io.TextIOWrapper(raw, encoding='cp1252', errors='strict') as console:
+            with patch('sys.stdout', console):
+                build.print_host_status(status)
+            self.assertEqual(json.loads(raw.getvalue().decode('cp1252')), status)
+            self.assertTrue(raw.getvalue().isascii())
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / 'result.json'
+            build.dump(path, status)
+            self.assertIn('测试'.encode('utf-8'), path.read_bytes())
+            self.assertEqual(build.load(path), status)
+
     def read(self, data):
         with tempfile.TemporaryDirectory() as work:
             path = Path(work) / 'test.dll'; path.write_bytes(data)
@@ -170,6 +212,25 @@ class SourceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build.validate_source_version(source)
 
+    def test_pinned_speech_convolution_source_requires_both_primitives(self):
+        source = build.HERE / 'fixtures/ctranslate2'
+        options = build.load(build.HERE / 'sources.lock.json')['onednn_cmake']
+        inventory = build.validate_primitive_coverage(source, options)
+        self.assertEqual(inventory['direct_cpp_primitives'], ['CONVOLUTION', 'REORDER'])
+        self.assertEqual(inventory['independent_post_op_primitives'], [])
+        self.assertEqual(len(inventory['low_level_gemm_apis']), 3)
+        for selected in ('MATMUL', 'MATMUL;CONVOLUTION', 'MATMUL;REORDER'):
+            with self.assertRaisesRegex(ValueError, 'primitive is missing'):
+                build.validate_primitive_coverage(source, dict(options, DNNL_ENABLE_PRIMITIVE=selected))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in source.rglob('*.cc'):
+                target = root / path.relative_to(source); target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(path.read_bytes())
+            (root / 'src/new.cc').write_text('dnnl::eltwise_forward extra;', encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'source/API inventory changed'):
+                build.validate_primitive_coverage(root, options)
+
     def test_gpu_or_openmp_lock_cannot_be_enabled(self):
         original = build.load(build.HERE / 'sources.lock.json')
         for field in ('WITH_CUDA', 'WITH_CUDNN', 'WITH_MKL'):
@@ -278,15 +339,31 @@ class SourceTests(unittest.TestCase):
         self.assertIn('windows-direct-crt-signatures:', workflow)
         self.assertIn('path: dist/direct-crt-reports/*.json', workflow)
 
-    def test_workflow_publishes_no_binaries(self):
+    def test_workflow_defaults_to_metadata_and_guards_exact_candidates(self):
         workflow = (build.HERE.parents[2] / '.github/workflows/asr-ct2-cpu.yml').read_text()
         self.assertNotIn('contents: write', workflow)
         self.assertNotIn('packages: write', workflow)
         blocks = re.findall(r'(?m)^          path: (?:\|\n((?:            [^\n]+\n)+)|([^\n]+))', workflow)
-        self.assertEqual(len(blocks), 2)
+        self.assertEqual(len(blocks), 3)
         paths = [line.strip() for block in blocks for text in block for line in text.splitlines() if line.strip()]
         self.assertEqual(set(paths), {'dist/ct2-cpu-reports/*.json', 'dist/ct2-cpu-reports/*.log',
-                                     'dist/ct2-cpu-reports/*-CMakeCache.txt', 'dist/direct-crt-reports/*.json'})
+                                     'dist/ct2-cpu-reports/*-CMakeCache.txt', 'dist/direct-crt-reports/*.json',
+                                     'dist/ct2-cpu-candidate/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl',
+                                     'dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-sources.zip',
+                                     'dist/ct2-cpu-candidate/luma-ct2-cpu-4.8.2-1-notices.zip',
+                                     'dist/ct2-cpu-candidate/publication-proof.json'})
+        self.assertIn("if: success() && env.CPU_CANDIDATE_EXPORT == 'true'", workflow)
+        self.assertIn("github.workflow == 'Publish reviewed CPU wheel'", workflow)
+        self.assertIn("github.event_name == 'push'", workflow)
+        self.assertIn("github.ref == 'refs/heads/feat/optional-asr-engines'", workflow)
+        self.assertIn('asr-cpu-wheel-publish.yml@', workflow)
+        self.assertIn('name: ct2-cpu-candidate-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}', workflow)
+        self.assertIn('value: ${{ jobs.windows-cpu-proof.outputs.candidate_artifact_id }}', workflow)
+        self.assertIn('candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}', workflow)
+        self.assertIn('        id: candidate-upload', workflow)
+        for name in ('ct2-cpu-proof', 'direct-crt-proof'):
+            self.assertIn("name: " + name + "-${{ env.SOURCE_SHA }}${{ inputs.publication && format('-{0}-{1}', github.run_id, github.run_attempt) || '' }}", workflow)
+        self.assertIn('        default: false', workflow)
 
 
 if __name__ == '__main__':
