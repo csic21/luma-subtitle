@@ -41,6 +41,22 @@ class InstalledLicenseTests(unittest.TestCase):
             self.assertTrue(report['truncated'])
             self.assertTrue(all('text' not in x for x in report['documents']))
 
+    def test_observed_visual_studio_redist_stub_is_pointer_only(self):
+        stub = (b'Distributable Code for Microsoft Visual Studio 2022 (Includes Utilities & BuildServer Files)\r\n\r\n'
+                b'For the latest version of this Redist file, please visit https://aka.ms/vs/17/redist.txt.\r\n')
+        self.assertEqual(len(stub), 187)
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work); redist = root / 'Redist'; redist.mkdir()
+            path = root / 'Redist.txt'; path.write_bytes(stub)
+            report = discover(root, redist, 'Microsoft.VisualStudio.Product.Enterprise', 'pinned')
+            doc, = report['documents']
+            self.assertTrue(doc['link_only'])
+            self.assertFalse(doc['terms_recovered'])
+            self.assertEqual(doc['pointer_text'], stub.decode())
+            self.assertEqual(doc['sha256'], 'da53b097e02b08e0fc69706102a60bc384fe756426ae4dc4a855e96f95cb2b9c')
+            self.assertNotIn('text', doc)
+            self.assertFalse(report['redistribution_grant_verified'])
+
     def test_credential_labels_prevent_text_copying(self):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work); redist = root / 'Redist'; redist.mkdir()

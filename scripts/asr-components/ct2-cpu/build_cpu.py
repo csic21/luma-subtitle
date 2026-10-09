@@ -7,6 +7,7 @@ builds the extension and performs all runtime checks.
 """
 from __future__ import annotations
 import argparse
+import ast
 import base64
 import csv
 import email
@@ -231,6 +232,23 @@ def canonical_wheel(original, destination, provenance, runtime):
             archive.writestr(item, value)
 
 
+def validate_source_version(source):
+    """Read the pinned module's literal version without executing upstream code."""
+    try:
+        statements = ast.parse(source).body
+    except SyntaxError as error:
+        raise ValueError('Source version module is not valid Python') from error
+    if statements and isinstance(statements[0], ast.Expr) and isinstance(statements[0].value, ast.Constant) and isinstance(statements[0].value.value, str):
+        statements = statements[1:]  # An optional module docstring is metadata.
+    if len(statements) != 1 or not isinstance(statements[0], ast.Assign):
+        raise ValueError('Source version module must contain exactly one literal assignment')
+    assignment = statements[0]
+    if (len(assignment.targets) != 1 or not isinstance(assignment.targets[0], ast.Name)
+            or assignment.targets[0].id != '__version__' or not isinstance(assignment.value, ast.Constant)
+            or assignment.value.value != '4.8.2'):
+        raise ValueError('Source version is not literal 4.8.2')
+
+
 def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
     work = args.work / f'build-{number}'; work.mkdir()
     sources = work / 'sources'; sources.mkdir()
@@ -238,8 +256,7 @@ def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
         destination = (sources / 'ctranslate2/third_party' / item['name']) if item['name'] in {'cpu_features', 'spdlog'} else sources / item['name']
         extract_source(fetch(item, args.cache), destination)
     ct = sources / 'ctranslate2'; dn = sources / 'onednn'
-    if (ct / 'python/ctranslate2/version.py').read_text().strip() != '__version__ = "4.8.2"':
-        raise ValueError('Source version is not 4.8.2')
+    validate_source_version((ct / 'python/ctranslate2/version.py').read_text(encoding='utf-8'))
     local_env = dict(env, SOURCE_DATE_EPOCH=str(lock['source_date_epoch']),
                      _CL_=f'/Brepro /Z7 /pathmap:{work}=C:\\luma-ct2-build',
                      _LINK_='/Brepro /INCREMENTAL:NO', CTRANSLATE2_ROOT=str(work / 'ct2-install'))

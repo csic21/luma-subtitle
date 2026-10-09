@@ -4,6 +4,8 @@ This deliberately does not download/load model weights or claim inference proof.
 """
 from __future__ import annotations
 import ctypes
+import base64
+import hashlib
 import importlib
 import importlib.metadata
 import inspect
@@ -30,6 +32,44 @@ def optional_vc_runtime(filename):
     # numbered Visual C++ redistributables. Never equate the whole prefix with
     # optional app-local CRT libraries.
     return re.fullmatch(r'(?:msvcp|vcruntime|concrt|vcomp|vccorlib)[0-9][a-z0-9_]*\.dll', name) is not None
+
+
+def data_file_diagnostic(path, root, record_sha256=None):
+    """Read-only evidence for a bundled data file; never import/alter its package."""
+    path = Path(path); root = Path(root).resolve()
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError('Bundled diagnostic path escaped the private runtime')
+    result = {'relative_path': resolved.relative_to(root).as_posix(),
+              'path_contains_non_ascii': not str(resolved).isascii(),
+              'exists': path.exists(), 'regular_file': path.is_file() and not path.is_symlink(),
+              'record_sha256_available': record_sha256 is not None, 'readable': False}
+    if result['regular_file']:
+        result['bytes'] = path.stat().st_size
+        if result['bytes'] > 256 * 1024 * 1024:
+            result['hash_skipped'] = 'diagnostic byte limit'
+        else:
+            with path.open('rb') as stream:
+                digest = hashlib.file_digest(stream, 'sha256').digest()
+            result.update(readable=True, sha256=digest.hex(),
+                          record_sha256_match=base64.urlsafe_b64encode(digest).decode().rstrip('=') == record_sha256 if record_sha256 is not None else None)
+    return result
+
+
+def nagisa_data_diagnostic():
+    distribution = importlib.metadata.distribution('nagisa')
+    name = 'nagisa/data/nagisa_v001.model'
+    entries = [entry for entry in distribution.files or () if entry.as_posix() == name]
+    expected = entries[0].hash if len(entries) == 1 else None
+    record_hash = expected.value if expected is not None and expected.mode == 'sha256' else None
+    result = data_file_diagnostic(distribution.locate_file(name), ROOT, record_hash)
+    result.update(schema=1, kind='bundled-nagisa-data-diagnostic', metadata_entry_present=len(entries) == 1,
+                  python_filesystem_encoding=sys.getfilesystemencoding())
+    if sys.platform == 'win32':
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.GetACP.restype = ctypes.c_uint
+        result['windows_ansi_code_page'] = kernel.GetACP()
+    return result
 
 
 def local_module(name):
@@ -118,6 +158,10 @@ def main():
     elif backend == 'qwen3-asr':
         torch = local_module('torch')
         assert torch.version.cuda is None, 'CUDA libraries are outside this CPU pack'
+        # A valid bundled file that Python can read but DyNet cannot open from
+        # the Unicode relocation is materially different from missing data.
+        # This is evidence only, never a path or dependency workaround.
+        print(json.dumps(nagisa_data_diagnostic(), sort_keys=True), file=sys.stderr, flush=True)
         qwen = local_module('qwen_asr')
         for module in ('nagisa', 'dynet', 'soynlp', 'librosa', 'soundfile', 'transformers', 'qwen_omni_utils'):
             local_module(module)

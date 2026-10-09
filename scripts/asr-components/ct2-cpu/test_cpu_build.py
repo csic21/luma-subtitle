@@ -98,6 +98,16 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(any(x['component'] == 'thread-pool' for x in lock['files']))
         self.assertTrue(any(x['component'] == 'pybind11' for x in lock['files']))
 
+    def test_source_version_accepts_upstream_docstring_without_execution(self):
+        build.validate_source_version('"""Version information."""\n\n__version__ = "4.8.2"\n')
+        build.validate_source_version("# metadata\r\n__version__ = '4.8.2'\r\n")
+        for source in ('__version__ = "4.8.1"', '__version__ = str("4.8.2")',
+                       '__version__ = "4.8.2"\nprint("not allowed")',
+                       '__version__ = "4.8.2"\n__version__ = "4.8.2"',
+                       'other = __version__ = "4.8.2"', 'invalid python !'):
+            with self.assertRaises(ValueError):
+                build.validate_source_version(source)
+
     def test_gpu_or_openmp_lock_cannot_be_enabled(self):
         original = build.load(build.HERE / 'sources.lock.json')
         for field in ('WITH_CUDA', 'WITH_CUDNN', 'WITH_MKL'):

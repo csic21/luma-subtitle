@@ -106,8 +106,18 @@ def discover(installation, redist, product_id, version, *, max_files=100_000, ma
                 credential_label = re.search(r'(?i)(?:product.?key|license.?key|activation.?code|password|secret|token)\s*[:=]|\b[A-Z0-9]{5}(?:-[A-Z0-9]{5}){4}\b', normalized)
                 recognizable = bool(re.search(r'(?i)Microsoft.{0,80}(?:software license terms|visual.{0,20}c\+\+|visual studio)', normalized)
                                     and re.search(r'(?i)(?:redistribut|distributable code|license terms|licensed.{0,30}software)', normalized))
-                link_only = bool(re.fullmatch(r'https?://\S+', normalized))
+                redist_pointer = len(normalized) < 512 and bool(re.fullmatch(
+                    r'Distributable Code for Microsoft Visual Studio 2022 \(Includes Utilities & BuildServer Files\) '
+                    r'For the latest version of this Redist file, please visit https://aka\.ms/vs/17/redist\.txt\.', normalized))
+                link_only = bool(re.fullmatch(r'https?://\S+', normalized)) or redist_pointer
                 item['link_only'] = link_only
+                if redist_pointer:
+                    # Preserve this observed vendor stub as pointer evidence only.
+                    # It is not the distribution list or any redistribution grant.
+                    if text_total + len(text) <= max_text_total:
+                        item['pointer_text'] = text; text_total += len(text)
+                    item['text_omitted_reason'] = 'Online Redist pointer only; no license terms recovered'
+                    continue
                 if not recognizable or link_only or credential_label:
                     item['text_omitted_reason'] = 'Not recognizable vendor terms, link-only, or possible credential label'; continue
                 if text_total + len(text) > max_text_total:

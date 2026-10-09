@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'scripts/asr-components/**'
+      - '!scripts/asr-components/ct2-cpu/**'
       - 'src-tauri/src/asr/worker.py'
       - 'src-tauri/src/asr_components.rs'
       - 'src-tauri/src/asr_components/**'

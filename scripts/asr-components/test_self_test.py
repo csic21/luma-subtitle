@@ -1,10 +1,28 @@
 import unittest
+import base64
+import hashlib
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
-from self_test import platform_description, optional_vc_runtime
+from self_test import platform_description, optional_vc_runtime, data_file_diagnostic
 
 
 class SelfTestReportingTests(unittest.TestCase):
+    def test_bundled_data_diagnostics_distinguish_missing_and_unicode_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve(); path = root / 'private runtime 测试' / 'nagisa.model'
+            expected = base64.urlsafe_b64encode(hashlib.sha256(b'fixture-data').digest()).decode().rstrip('=')
+            missing = data_file_diagnostic(path, root, expected)
+            self.assertFalse(missing['exists']); self.assertFalse(missing['readable'])
+            path.parent.mkdir(); path.write_bytes(b'fixture-data')
+            present = data_file_diagnostic(path, root, expected)
+            self.assertTrue(present['path_contains_non_ascii']); self.assertTrue(present['readable'])
+            self.assertTrue(present['record_sha256_match']); self.assertEqual(present['bytes'], 12)
+            self.assertFalse(data_file_diagnostic(path, root, 'incorrect-hash')['record_sha256_match'])
+            with self.assertRaisesRegex(ValueError, 'escaped'):
+                data_file_diagnostic(root.parent / 'outside', root)
+
     def test_optional_visual_cpp_dlls_are_not_misclassified_as_windows_os(self):
         for name in ['MSVCP140.dll', 'MSVCP140_ATOMIC_WAIT.dll', 'VCRUNTIME140.dll', 'vcruntime140_1.dll', 'concrt140.dll', 'vcomp140.dll', 'vccorlib140.dll']:
             self.assertTrue(optional_vc_runtime(name), name)
