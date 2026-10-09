@@ -67,11 +67,16 @@ def pe_imports(path):
         at = offset(rva)
         end = data.find(b'\0', at, min(at + 260, len(data)))
         if end < 0:
-            raise ValueError('Unterminated PE import name')
+            raise ValueError(f'Unterminated PE import name at RVA 0x{rva:x}')
         offset(rva, end - at + 1)
-        name = data[at:end].decode('ascii').lower()
+        raw_name = data[at:end]
+        diagnostic = repr(raw_name[:96]) + (' (truncated)' if len(raw_name) > 96 else '')
+        try:
+            name = raw_name.decode('ascii').lower()
+        except UnicodeDecodeError:
+            raise ValueError(f'Non-ASCII PE import name at RVA 0x{rva:x}: {diagnostic}') from None
         if not re.fullmatch(r'[a-z0-9_.+-]+\.(dll|drv)', name):
-            raise ValueError('Unsafe PE import name')
+            raise ValueError(f'Unsafe PE import name at RVA 0x{rva:x}: {diagnostic}')
         return name
     def directory(index, size, delayed):
         if count <= index:
@@ -92,7 +97,11 @@ def pe_imports(path):
                     raise ValueError('Unsupported delay-import attributes')
                 if fields[0] == 0:
                     name_rva -= image_base
-            imports.append(name_at(name_rva))
+            try:
+                imports.append(name_at(name_rva))
+            except ValueError as error:
+                kind = 'delay' if delayed else 'normal'
+                raise ValueError(f'{kind} import: {error}') from None
         raise ValueError('Unterminated PE import directory')
     return {'machine': hex(machine), 'normal': directory(1, 20, False),
             'delay': directory(13, 32, True)}
@@ -105,8 +114,15 @@ def inventory(root):
         if path.is_file() and path.suffix.lower() in {'.dll', '.pyd', '.exe'}:
             if path.is_symlink():
                 raise ValueError('Native symlink is forbidden')
-            result.append({'path': path.relative_to(root).as_posix(), 'bytes': path.stat().st_size,
-                           'sha256': digest(path), **pe_imports(path)})
+            relative = path.relative_to(root).as_posix()
+            sha256 = digest(path)
+            try:
+                imports = pe_imports(path)
+            except ValueError as error:
+                identity = ascii(relative[:240]) + (' (truncated)' if len(relative) > 240 else '')
+                raise ValueError(f'PE inventory failed for {identity} sha256={sha256}: {error}') from None
+            result.append({'path': relative, 'bytes': path.stat().st_size,
+                           'sha256': sha256, **imports})
     return result
 
 

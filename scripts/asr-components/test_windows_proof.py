@@ -1,11 +1,11 @@
 import hashlib
 import json
 from pathlib import Path
-import tempfile
 import struct
 import sys
 import unittest
 from unittest.mock import patch
+from fixture_paths import temporary_root
 
 import windows_crt_proof as crt
 from windows_native_inventory import closure
@@ -14,6 +14,20 @@ from generate_recipes import REPO, verified_term
 
 
 class WindowsProofTests(unittest.TestCase):
+    def test_native_workflow_test_batches_fail_on_each_command(self):
+        for name in ('ci.yml', 'release.yml'):
+            workflow = (REPO / '.github/workflows' / name).read_text(encoding='utf-8')
+            block = workflow.split('- name: Managed ASR packaging and publication guard tests', 1)[1].split('- name:', 1)[0]
+            self.assertIn('shell: bash', block, 'Python failures must not be masked by a later Node success')
+        cpu = (REPO / '.github/workflows/asr-ct2-cpu.yml').read_text(encoding='utf-8')
+        for name in ('Test input locks and binary inventory logic', 'Test the fixed non-executing CRT extraction helper'):
+            block = cpu.split('- name: ' + name, 1)[1].split('- name:', 1)[0]
+            self.assertIn('shell: pwsh', block)
+            lines = block.splitlines()
+            for index, line in enumerate(lines):
+                if line.strip().startswith('python '):
+                    self.assertEqual(lines[index + 1].strip(), 'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }')
+
     def test_qwen_keeps_reviewed_private_openmp_but_not_host_fallback(self):
         def image(path, normal=(), delay=()): return {'path': path, 'normal': normal, 'delay': delay}
         torch = image('torch/torch_cpu.dll', ['libiomp5md.dll', 'kernel32.dll'], ['msvcp140.dll'])
@@ -26,8 +40,8 @@ class WindowsProofTests(unittest.TestCase):
             self.assertFalse(closure(files + [image(gpu)])['passed'], gpu)
 
     def test_crt_copy_preserves_companions_and_never_overwrites(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp); runtime = base / 'runtime'; runtime.mkdir(); source = base / 'source'; source.mkdir()
+        with temporary_root() as tmp:
+            base = tmp; runtime = base / 'runtime'; runtime.mkdir(); source = base / 'source'; source.mkdir()
             def pin(data): return {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
             (runtime / 'vcruntime140.dll').write_bytes(b'companion')
             (source / 'msvcp140.dll').write_bytes(b'original')
@@ -65,8 +79,8 @@ class WindowsProofTests(unittest.TestCase):
             self.assertNotIn('\ufffd', term['text'])
 
     def test_real_app_gui_header_and_exact_helper_output_are_required(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'app.exe'; data = bytearray(512)
+        with temporary_root() as tmp:
+            path = tmp / 'app.exe'; data = bytearray(512)
             data[:2] = b'MZ'; struct.pack_into('<I', data, 0x3c, 128); data[128:132] = b'PE\0\0'
             struct.pack_into('<H', data, 132, 0x8664); struct.pack_into('<H', data, 128 + 24 + 68, 2)
             path.write_bytes(data); self.assertEqual(crt.gui_subsystem(path), 2)
@@ -80,7 +94,7 @@ class WindowsProofTests(unittest.TestCase):
             with self.assertRaises(ValueError): crt.signature_result(invalid, 'installer', 'online', lock)
 
     def test_helper_child_is_reaped_and_output_bounded(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_root() as tmp:
             code, out, err = crt.helper_process([sys.executable, '-I', '-B', '-c', 'print("fixture")'], None, tmp)
             self.assertEqual((code,out.strip(),err), (0,'fixture',''))
             with self.assertRaisesRegex(ValueError, 'output bound'):

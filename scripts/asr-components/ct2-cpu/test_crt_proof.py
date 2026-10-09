@@ -2,18 +2,19 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import tempfile
+import sys
 import unittest
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_paths import temporary_root
 
 import crt_proof as crt
 
 
 class PrivateCrtTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.work = Path(temporary.name)
+        self.work = self.enterContext(temporary_root())
         self.runtime = self.work / 'private'; self.runtime.mkdir()
         self.reports = self.work / 'reports'; self.reports.mkdir()
         self.installation = self.work / 'Visual Studio'

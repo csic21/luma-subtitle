@@ -10,11 +10,14 @@ import subprocess
 from pathlib import Path
 import struct
 import tarfile
-import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_paths import temporary_root
 
 import build_cpu as build
 import native_inventory as native
@@ -42,7 +45,7 @@ def pe(normal='kernel32.dll', delayed='msvcp140_1.dll', pe32=False):
 
 class NativeTests(unittest.TestCase):
     def test_fixed_native_root_is_fresh_and_first_output_survives_cleanup(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with temporary_root() as directory:
             work = Path(directory)
             first = work / 'build-1'; first.mkdir()
             wheel = first / 'result.whl'; wheel.write_bytes(b'exact retained wheel')
@@ -58,7 +61,7 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(wheel.read_bytes(), b'exact retained wheel')
 
     def test_fixed_native_cleanup_rejects_wrong_root_or_unretained_output(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with temporary_root() as directory:
             work = Path(directory); native = build.prepare_native_root(work)
             (native / 'output.whl').write_bytes(b'not safely retained')
             with self.assertRaisesRegex(ValueError, 'Unsafe native cleanup'):
@@ -77,14 +80,14 @@ class NativeTests(unittest.TestCase):
                 build.print_host_status(status)
             self.assertEqual(json.loads(raw.getvalue().decode('cp1252')), status)
             self.assertTrue(raw.getvalue().isascii())
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             path = Path(work) / 'result.json'
             build.dump(path, status)
             self.assertIn('测试'.encode('utf-8'), path.read_bytes())
             self.assertEqual(build.load(path), status)
 
     def read(self, data):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             path = Path(work) / 'test.dll'; path.write_bytes(data)
             return native.pe_imports(path)
 
@@ -154,7 +157,7 @@ class SourceTests(unittest.TestCase):
     def test_path_mapping_probe_rejects_ignored_compiler_flag(self):
         for diagnostic, valid in [('const char* source_file = "C:\\\\luma-ct2-build\\\\probe.cpp";\n', True),
                                   ("cl : warning D9007 : '/pathmap:' option ignored\n", False)]:
-            with tempfile.TemporaryDirectory() as work:
+            with temporary_root() as work:
                 root = Path(work); reports = root / 'reports'; reports.mkdir()
                 args = SimpleNamespace(work=root, reports=reports)
                 def fake_command(*args, **kwargs):
@@ -188,7 +191,7 @@ class SourceTests(unittest.TestCase):
             build.enforce_independent_proofs({'wheel_reproduced': True}, fail)
 
     def test_build_tool_scripts_scheme_requires_exact_private_payload(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); archive = root / 'ninja.whl'
             member = 'ninja-1.11.1.4.data/scripts/ninja.exe'
             target = root / 'Scripts/ninja.exe'
@@ -222,7 +225,7 @@ class SourceTests(unittest.TestCase):
         for selected in ('MATMUL', 'MATMUL;CONVOLUTION', 'MATMUL;REORDER'):
             with self.assertRaisesRegex(ValueError, 'primitive is missing'):
                 build.validate_primitive_coverage(source, dict(options, DNNL_ENABLE_PRIMITIVE=selected))
-        with tempfile.TemporaryDirectory() as directory:
+        with temporary_root() as directory:
             root = Path(directory)
             for path in source.rglob('*.cc'):
                 target = root / path.relative_to(source); target.parent.mkdir(parents=True, exist_ok=True)
@@ -248,7 +251,7 @@ class SourceTests(unittest.TestCase):
 
     def test_source_archive_links_and_duplicates_rejected(self):
         for bad in ('symlink', 'duplicate'):
-            with tempfile.TemporaryDirectory() as work:
+            with temporary_root() as work:
                 root = Path(work); archive = root / 'source.tgz'
                 with tarfile.open(archive, 'w:gz') as tar:
                     member = tarfile.TarInfo('source/file')
@@ -260,7 +263,7 @@ class SourceTests(unittest.TestCase):
                     build.extract_source(archive, root / 'out')
 
     def test_source_archive_extracts_regular_files(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); archive = root / 'source.tgz'
             with tarfile.open(archive, 'w:gz') as tar:
                 member = tarfile.TarInfo('source/file'); member.size = 2; tar.addfile(member, io.BytesIO(b'ok'))
@@ -268,7 +271,7 @@ class SourceTests(unittest.TestCase):
             self.assertEqual((root / 'out/file').read_bytes(), b'ok')
 
     def test_canonical_wheel_is_repeatable_and_preserves_payload(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); original = root / 'original.whl'
             info = 'ctranslate2-4.8.2.dist-info'
             with zipfile.ZipFile(original, 'w') as archive:
@@ -313,7 +316,7 @@ class SourceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'Actual CMD/PowerShell quoting is a native Windows check')
     def test_native_developer_shell_quotes_spaces_and_rejects_injection(self):
-        with tempfile.TemporaryDirectory(prefix='luma quoting test ') as work:
+        with temporary_root(prefix='luma quoting test ') as work:
             batch = Path(work) / 'fake developer environment.cmd'
             batch.write_text('@echo off\nset LUMA_CT2_QUOTING_TEST=passed\nexit /b 0\n', encoding='ascii')
             result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File',

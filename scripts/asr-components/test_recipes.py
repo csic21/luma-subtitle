@@ -1,8 +1,8 @@
 import hashlib
 import json
 from pathlib import Path
-import tempfile
 import unittest
+from fixture_paths import temporary_root
 
 from generate_recipes import ROOT, generate, inventory_text, verified_term
 
@@ -18,8 +18,8 @@ class RecipeCandidateTests(unittest.TestCase):
         self.assertEqual(result['status'], 'review-only-not-active')
 
     def test_embedded_display_bytes_are_exact_and_paths_are_confined(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp); data = 'Exact upstream text.\n'.encode()
+        with temporary_root() as tmp:
+            directory = tmp; data = 'Exact upstream text.\n'.encode()
             (directory / 'license.txt').write_bytes(data)
             source = {'id': 'license', 'version': '1', 'url': 'https://example.org/license',
                       'path': 'license.txt', 'sha256': hashlib.sha256(data).hexdigest()}

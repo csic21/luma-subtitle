@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'scripts/asr-components/ct2-cpu/**'
+      - 'scripts/asr-components/fixture_paths.py'
+      - 'scripts/asr-components/test_fixture_paths.py'
       - 'scripts/asr-components/assemble.py'
       - 'scripts/asr-components/packs.json'
       - 'scripts/asr-components/fixtures.json'
@@ -57,7 +59,9 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12.10'
-      - run: python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_*.py' -v
+      - run: |
+          python -B -m unittest discover -s scripts/asr-components -p 'test_fixture_paths.py' -v
+          python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_*.py' -v
       - run: node --test scripts/asr-components/ct2-cpu/publish.node-test.cjs scripts/asr-components/ct2-cpu/proof_request.node-test.cjs
 
   request:
@@ -108,9 +112,14 @@ jobs:
           python-version: '3.12.10'
           architecture: x64
       - name: Test input locks and binary inventory logic
+        shell: pwsh
         run: |
           python -c "import sys; assert sys.version_info[:3] == (3, 12, 10) and sys.maxsize > 2**32"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest discover -s scripts/asr-components -p 'test_fixture_paths.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Inventory official toolchain and build two CPU wheels
         shell: pwsh
         run: |
@@ -176,9 +185,12 @@ jobs:
           python-version: '3.12.10'
           architecture: x64
       - name: Test the fixed non-executing CRT extraction helper
+        shell: pwsh
         run: |
           python -c "import sys; assert sys.version_info[:3] == (3, 12, 10) and sys.maxsize > 2**32"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B -m unittest discover -s scripts/asr-components/ct2-cpu/direct-crt -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Extract exact official package members and verify native signatures
         shell: pwsh
         run: |

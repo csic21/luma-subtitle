@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import stat
 import tarfile
-import tempfile
 import unittest
 import zipfile
+from fixture_paths import temporary_root
 
 SPEC = importlib.util.spec_from_file_location('component_build', Path(__file__).with_name('build.py'))
 b = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(b)
@@ -19,9 +19,9 @@ class ComponentBuildTests(unittest.TestCase):
         self.assertEqual(str(b.safe_name('lib/python3.12/a.py')), 'lib/python3.12/a.py')
 
     def test_deterministic_zip_regular_files(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / 'root'; root.mkdir(); p = root / 'python'; p.write_bytes(b'bytes'); p.chmod(0o755)
-            a, c = Path(tmp) / 'a.zip', Path(tmp) / 'b.zip'
+        with temporary_root() as tmp:
+            root = tmp / 'root'; root.mkdir(); p = root / 'python'; p.write_bytes(b'bytes'); p.chmod(0o755)
+            a, c = tmp / 'a.zip', tmp / 'b.zip'
             b.archive_tree(root, a); p.touch(); b.archive_tree(root, c)
             self.assertEqual(a.read_bytes(), c.read_bytes())
             with zipfile.ZipFile(a) as z:
@@ -31,8 +31,8 @@ class ComponentBuildTests(unittest.TestCase):
                 self.assertEqual((i.external_attr >> 16) & 0o777, expected_mode)
 
     def test_runtime_link_dereferenced(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); arc = root / 'p.tar.gz'
+        with temporary_root() as tmp:
+            root = tmp; arc = root / 'p.tar.gz'
             with tarfile.open(arc, 'w:gz') as tar:
                 i = tarfile.TarInfo('python/bin/python3.12'); i.size = 4; i.mode = 0o755; tar.addfile(i, io.BytesIO(b'test'))
                 link = tarfile.TarInfo('python/bin/python3'); link.type = tarfile.SYMTYPE; link.linkname = 'python3.12'; tar.addfile(link)
@@ -40,15 +40,15 @@ class ComponentBuildTests(unittest.TestCase):
             p = root / 'out/bin/python3'; self.assertFalse(p.is_symlink()); self.assertEqual(p.read_bytes(), b'test')
 
     def test_runtime_link_escape_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            arc = Path(tmp) / 'p.tar.gz'
+        with temporary_root() as tmp:
+            arc = tmp / 'p.tar.gz'
             with tarfile.open(arc, 'w:gz') as tar:
                 link = tarfile.TarInfo('python/x'); link.type = tarfile.SYMTYPE; link.linkname = '../../escape'; tar.addfile(link)
-            with self.assertRaises(ValueError): b.unpack_runtime(arc, Path(tmp) / 'out')
+            with self.assertRaises(ValueError): b.unpack_runtime(arc, tmp / 'out')
 
     def test_wheel_skips_scripts_and_preserves_licenses(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); arc = root / 'w.whl'; site = root / 'out/Lib/site-packages'
+        with temporary_root() as tmp:
+            root = tmp; arc = root / 'w.whl'; site = root / 'out/Lib/site-packages'
             with zipfile.ZipFile(arc, 'w') as z:
                 z.writestr('thing/__init__.py', 'x = 1\n'); z.writestr('thing-1.dist-info/licenses/LICENSE', 'test license')
                 z.writestr('thing-1.data/scripts/launcher', '#!CI-path\n'); z.writestr('thing-1.data/data/share/a', 'a')
@@ -86,16 +86,16 @@ class CompliancePackagingTests(unittest.TestCase):
         return bytes(data)
 
     def test_pe_import_parser_rejects_unreviewed_delay_loading(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'code.dll'; path.write_bytes(self.pe_image())
+        with temporary_root() as tmp:
+            path = tmp / 'code.dll'; path.write_bytes(self.pe_image())
             self.assertEqual(b.pe_imports(path), ['libiomp5md.dll'])
             path.write_bytes(self.pe_image(delay=True))
             with self.assertRaisesRegex(ValueError, 'delayed'): b.pe_imports(path)
 
     def test_cpu_pruning_requires_exact_reviewed_bytes_and_no_cuda_import(self):
         from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); payload = root / 'payload'; payload.mkdir()
+        with temporary_root() as tmp:
+            root = tmp; payload = root / 'payload'; payload.mkdir()
             library = payload / 'code.dll'; library.write_bytes(self.pe_image())
             omitted = payload / 'cudnn64_9.dll'; omitted.write_bytes(b'unused')
             policy = {'verify_pe_imports': 'code.dll', 'native_library_sha256': b.sha256(library),

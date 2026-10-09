@@ -2,14 +2,19 @@ import copy
 import gzip
 import io
 import json
+import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import tarfile
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_paths import temporary_root, windows_short_path_alias
 
 import package_publication as package
 
@@ -34,10 +39,8 @@ def source_tar(entries):
 
 class PackagingTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
+        self.root = self.enterContext(temporary_root())
         self.addCleanup(patch.stopall)
-        self.root = Path(self.temp.name)
         self.repo = self.root / 'repo'
         self.here = self.repo / 'scripts/asr-components/ct2-cpu'
         self.here.mkdir(parents=True)
@@ -322,6 +325,47 @@ class PackagingTests(unittest.TestCase):
     def test_unsafe_archive_member_paths_are_rejected(self):
         for name in ('../secret', '/root/file', 'C:/file', 'a\\b', 'a//b', 'a/./b'):
             with self.subTest(name=name), self.assertRaises(ValueError): package.safe_name(name)
+
+
+class TemporaryRootAliasTests(unittest.TestCase):
+    def assert_packaging_through_parent_alias(self, alias, actual):
+        # The real factory creates/owns the nested temporary child through the
+        # alias; the shared helper must canonicalize it before fixture setup.
+        real_temporary_directory = tempfile.TemporaryDirectory
+        def through_alias(**kwargs):
+            return real_temporary_directory(**dict(kwargs, dir=alias))
+        case = PackagingTests('test_exact_four_files_and_default_metadata_only_export')
+        result = unittest.TestResult()
+        with patch.object(tempfile, 'TemporaryDirectory', side_effect=through_alias):
+            case.run(result)
+        self.assertEqual(case.root.parent, actual)
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.failures, [])
+        self.assertEqual(result.testsRun, 1)
+        self.assertTrue(result.wasSuccessful())
+        self.assertFalse(case.root.exists(), 'Only the owned child should be cleaned')
+        self.assertTrue(actual.exists())
+
+    def test_packaging_fixture_canonicalizes_an_aliased_temp_root(self):
+        with temporary_root() as root:
+            actual = root / 'long temporary directory'; actual.mkdir()
+            alias = root / 'SHORT~1'
+            try:
+                alias.symlink_to(actual, target_is_directory=True)
+            except OSError as error:
+                self.skipTest('Directory aliases unavailable on this test host: ' + str(error))
+            self.assert_packaging_through_parent_alias(alias, actual)
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires native Windows GetShortPathNameW')
+    def test_packaging_through_actual_windows_short_path_alias(self):
+        with temporary_root(prefix='Luma native long packaging fixture ') as actual:
+            try:
+                alias = windows_short_path_alias(actual)
+            except OSError as error:
+                self.skipTest('Native short-path probe unavailable: ' + str(error))
+            if alias is None:
+                self.skipTest('This filesystem does not expose a distinct 8.3 alias')
+            self.assert_packaging_through_parent_alias(alias, actual)
 
 
 if __name__ == '__main__':

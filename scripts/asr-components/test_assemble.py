@@ -3,17 +3,17 @@ import csv
 import json
 import os
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
+from fixture_paths import temporary_root
 
 from assemble import local_file_uri, normalize_removed_records, offline_guard, remove_bootstrap_installer, wheel_requirements, PIP_VERSION, PYTHON_VERSION
 
 
 class OfflineAssemblyTests(unittest.TestCase):
     def test_verified_wheel_becomes_hash_only_pinned_requirement(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); path = root / 'example-1.0-py3-none-any.whl'; path.write_bytes(b'example wheel')
+        with temporary_root() as tmp:
+            root = tmp; path = root / 'example-1.0-py3-none-any.whl'; path.write_bytes(b'example wheel')
             wheel = {'name': 'example', 'version': '1.0', 'filename': path.name,
                      'bytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
             result = wheel_requirements({'wheels': [wheel]}, root)
@@ -30,8 +30,8 @@ class OfflineAssemblyTests(unittest.TestCase):
                 wheel_requirements({'wheels': [wheel]}, root)
 
     def test_unapproved_extra_wheels_and_option_injection_rejected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); path = root / 'example-1.0-py3-none-any.whl'; path.write_bytes(b'wheel')
+        with temporary_root() as tmp:
+            root = tmp; path = root / 'example-1.0-py3-none-any.whl'; path.write_bytes(b'wheel')
             wheel = {'name': 'example', 'version': '1.0', 'filename': path.name, 'bytes': 5,
                      'sha256': hashlib.sha256(b'wheel').hexdigest()}
             (root / 'surprise.whl').write_bytes(b'unapproved')
@@ -51,8 +51,8 @@ class OfflineAssemblyTests(unittest.TestCase):
         self.assertEqual(PIP_VERSION, '26.2.1'); self.assertEqual(PYTHON_VERSION, '3.12.15')
 
     def test_bootstrap_vendor_provenance_is_removed_only_with_pinned_installer(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            site = Path(tmp)
+        with temporary_root() as tmp:
+            site = tmp
             (site / 'pip').mkdir()
             bootstrap = site / f'pip-{PIP_VERSION}.dist-info'; bootstrap.mkdir()
             (bootstrap / 'direct_url.json').write_text('{"url":"file:///vendor-build/pip.whl"}')
@@ -73,8 +73,8 @@ class OfflineAssemblyTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == 'nt', 'Native Windows filesystem regression')
     def test_native_extended_wheelhouse(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path('\\\\?\\' + str(Path(tmp).resolve()))
+        with temporary_root() as tmp:
+            root = Path('\\\\?\\' + str(tmp))
             path = root / 'example-1.0-py3-none-any.whl'; path.write_bytes(b'wheel')
             wheel = {'name': 'example', 'version': '1.0', 'filename': path.name,
                      'bytes': 5, 'sha256': hashlib.sha256(b'wheel').hexdigest()}
@@ -84,8 +84,8 @@ class OfflineAssemblyTests(unittest.TestCase):
     def test_removed_generated_record_rows_do_not_retain_staging_hashes(self):
         records = []
         for staging_hash in ('first-stage-hash', 'second-stage-hash'):
-            with tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp).resolve(); site = root / 'lib/python3.12/site-packages'
+            with temporary_root() as tmp:
+                root = tmp; site = root / 'lib/python3.12/site-packages'
                 metadata = site / 'example-1.0.dist-info'; metadata.mkdir(parents=True)
                 record = metadata / 'RECORD'
                 rows = [['../../../bin/example', staging_hash, '100'],

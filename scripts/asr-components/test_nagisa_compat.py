@@ -7,10 +7,10 @@ import io
 import json
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from fixture_paths import temporary_root
 
 SOURCE = Path(__file__).resolve().parents[2] / 'src-tauri/src/asr/nagisa_compat.py'
 WORKER = SOURCE.with_name('worker.py')
@@ -24,8 +24,7 @@ def load_helper():
 
 class NagisaCompatibilityTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve() / 'runtime é 测试'; self.root.mkdir()
+        self.root = self.enterContext(temporary_root()) / 'runtime é 测试'; self.root.mkdir()
         self.package = self.root / 'nagisa'; self.package.mkdir(); (self.package / 'data').mkdir()
         (self.package / 'data/nagisa_v001.model').write_text('good', encoding='utf-8')
         (self.package / 'tagger.py').write_text('''from pathlib import Path
@@ -134,8 +133,7 @@ sys.meta_path.append(upstream_finder)
 
 class NagisaValidationTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name).resolve(); self.site = self.root / 'Lib/site-packages'; self.site.mkdir(parents=True)
+        self.root = self.enterContext(temporary_root()); self.site = self.root / 'Lib/site-packages'; self.site.mkdir(parents=True)
         self.helper = load_helper()
         self.original_find_spec = self.helper._luma_machinery.PathFinder.find_spec
         self.paths = {'nagisa': ['nagisa/__init__.py', 'nagisa/tagger.py', 'nagisa/model.py',

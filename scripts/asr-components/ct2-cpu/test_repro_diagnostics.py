@@ -1,8 +1,11 @@
 from pathlib import Path
 import struct
-import tempfile
+import sys
 import unittest
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_paths import temporary_root
 
 import repro_diagnostics as diagnostic
 from test_cpu_build import pe
@@ -26,7 +29,7 @@ class ReproDiagnosticsTests(unittest.TestCase):
         self.assertEqual(len(report['sections'][0]['sha256']), 64)
 
     def test_per_member_comparison_preserves_mismatch_without_binary_output(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); paths = [root / 'one.whl', root / 'two.whl']
             for index, path in enumerate(paths):
                 native = pe(); struct.pack_into('<I', native, 0x88, index)

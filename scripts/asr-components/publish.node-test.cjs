@@ -12,7 +12,7 @@ const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const error404 = () => Object.assign(new Error('Not found'), { status: 404 });
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luma-components-test-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'luma-components-test-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const request = { schema_version: 1, source_sha: SOURCE, tag: p.TAG, pr_run_id: 123, pr_run_attempt: 1, packs: [] };
   for (const pack of p.PACKS) {

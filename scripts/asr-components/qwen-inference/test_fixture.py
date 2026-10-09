@@ -4,11 +4,13 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-import tempfile
 import hashlib
 import io
 import sys
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_paths import temporary_root
 
 spec = importlib.util.spec_from_file_location('qwen_smoke_draft', Path(__file__).with_name('fixture.py'))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -34,15 +36,15 @@ class Gates(unittest.TestCase):
         for size, digest, expected in [(len(payload), hashlib.sha256(payload).hexdigest(), True),
                                        (1, hashlib.sha256(payload).hexdigest(), False),
                                        (len(payload), 'a'*64, False)]:
-            with tempfile.TemporaryDirectory() as tmp:
+            with temporary_root() as tmp:
                 item = {'url': 'https://huggingface.co/Qwen/reviewed', 'bytes': size, 'sha256': digest}
                 opener = SimpleNamespace(open=lambda *a, **kw: Response(payload))
                 with patch.object(m.urllib.request, 'build_opener', return_value=opener):
                     if expected:
-                        m.download(item, Path(tmp)/'file', m.time.monotonic()+30)
-                        self.assertEqual((Path(tmp)/'file').read_bytes(), payload)
+                        m.download(item, tmp/'file', m.time.monotonic()+30)
+                        self.assertEqual((tmp/'file').read_bytes(), payload)
                     else:
-                        with self.assertRaises(ValueError): m.download(item, Path(tmp)/'file', m.time.monotonic()+30)
+                        with self.assertRaises(ValueError): m.download(item, tmp/'file', m.time.monotonic()+30)
 
     def test_download_child_has_a_hard_deadline(self):
         with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps({'downloaded_files':19,'model_bytes':m.MODEL_BYTES}))) as run:
@@ -55,19 +57,19 @@ class Gates(unittest.TestCase):
         measurement={'available_ram_bytes':13*m.GIB,'total_ram_bytes':16*m.GIB,'free_disk_bytes':20*m.GIB}
         audio=json.loads((Path(__file__).resolve().parents[1]/'fixtures.json').read_text())['audio']
         report={}
-        with tempfile.TemporaryDirectory() as tmp, patch.object(m.subprocess,'run',return_value=SimpleNamespace(stdout=json.dumps(measurement))), patch.object(m,'download_child'):
+        with temporary_root() as tmp, patch.object(m.subprocess,'run',return_value=SimpleNamespace(stdout=json.dumps(measurement))), patch.object(m,'download_child'):
             with self.assertRaises(RuntimeError):
                 m.run('private','worker',{},tmp,CATALOG,audio,lambda *a,**kw: (_ for _ in ()).throw(RuntimeError('fixture failure')), report=report)
             self.assertEqual(report['resources_before_download'], measurement)
             self.assertTrue(report['fixture_cache_removed'])
-            self.assertEqual(list(Path(tmp).iterdir()), [])
+            self.assertEqual(list(tmp.iterdir()), [])
 
     def test_owned_worker_output_is_capped_and_timeout_is_reaped(self):
         real_popen=m.subprocess.Popen
         for code, timeout, limit, error in [("print('x'*2048)", 5, 128, ValueError),
                                              ('import time;time.sleep(60)', 0.1, 1024, TimeoutError)]:
-            with tempfile.TemporaryDirectory() as tmp:
-                worker=Path(tmp)/'worker.py';worker.write_text(code,encoding='utf-8')
+            with temporary_root() as tmp:
+                worker=tmp/'worker.py';worker.write_text(code,encoding='utf-8')
                 children=[]
                 def launch(*args,**kwargs):
                     child=real_popen(*args,**kwargs);children.append(child);return child
@@ -77,8 +79,8 @@ class Gates(unittest.TestCase):
                 self.assertIsNotNone(children[0].poll())
 
     def test_owned_worker_preserves_utf8_protocol(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            worker=Path(tmp)/'worker.py'
+        with temporary_root() as tmp:
+            worker=tmp/'worker.py'
             worker.write_text("import json;print(json.dumps({'text':'日本語'},ensure_ascii=False))",encoding='utf-8')
             self.assertEqual(m.bounded_worker_requests(sys.executable,worker,[],None,tmp), [{'text':'日本語'}])
 

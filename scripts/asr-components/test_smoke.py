@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import unittest
+from fixture_paths import temporary_root
 
 from smoke import terminate_idle_worker, clean_environment, diagnostic_json
 from unittest.mock import patch
@@ -24,12 +24,12 @@ class SmokeHarnessTests(unittest.TestCase):
                 stream.close()
 
     def test_clean_environment_keeps_case_insensitive_windows_os_vars_only(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {
+        with temporary_root() as tmp, patch.dict(os.environ, {
             'SYSTEMROOT': 'C:\\Windows', 'Processor_Architecture': 'AMD64',
             'PROCESSOR_IDENTIFIER': 'Intel64 Family 6', 'PATH': 'unsafe-path',
             'PIP_INDEX_URL': 'https://invalid.example', 'SECRET_TOKEN': 'never-copy',
         }, clear=True):
-            env = clean_environment(Path(tmp) / 'home')
+            env = clean_environment(tmp / 'home')
         self.assertEqual(env['SYSTEMROOT'], 'C:\\Windows')
         # Windows os.environ uppercases keys even when the fixture supplies
         # mixed case. The preserved OS value, not spelling, is the contract.
@@ -38,13 +38,13 @@ class SmokeHarnessTests(unittest.TestCase):
         self.assertNotIn('PIP_INDEX_URL', env); self.assertNotIn('SECRET_TOKEN', env)
 
     def test_idle_stdin_stays_open_until_terminated(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            terminate_idle_worker([sys.executable, '-I', '-B', '-c', 'import sys; sys.stdin.readline()'], os.environ.copy(), Path(tmp))
+        with temporary_root() as tmp:
+            terminate_idle_worker([sys.executable, '-I', '-B', '-c', 'import sys; sys.stdin.readline()'], os.environ.copy(), tmp)
 
     def test_early_exit_is_not_accepted_as_idle_termination(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with temporary_root() as tmp:
             with self.assertRaisesRegex(AssertionError, 'exited without EOF'):
-                terminate_idle_worker([sys.executable, '-I', '-B', '-c', 'pass'], os.environ.copy(), Path(tmp))
+                terminate_idle_worker([sys.executable, '-I', '-B', '-c', 'pass'], os.environ.copy(), tmp)
 
 
 if __name__ == '__main__': unittest.main()

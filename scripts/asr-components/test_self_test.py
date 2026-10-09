@@ -2,16 +2,16 @@ import unittest
 import base64
 import hashlib
 from pathlib import Path
-import tempfile
 from unittest.mock import patch
+from fixture_paths import temporary_root
 
 from self_test import platform_description, optional_vc_runtime, private_openmp_runtime, data_file_diagnostic
 
 
 class SelfTestReportingTests(unittest.TestCase):
     def test_bundled_data_diagnostics_distinguish_missing_and_unicode_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve(); path = root / 'private runtime 测试' / 'nagisa.model'
+        with temporary_root() as tmp:
+            root = tmp; path = root / 'private runtime 测试' / 'nagisa.model'
             expected = base64.urlsafe_b64encode(hashlib.sha256(b'fixture-data').digest()).decode().rstrip('=')
             missing = data_file_diagnostic(path, root, expected)
             self.assertFalse(missing['exists']); self.assertFalse(missing['readable'])

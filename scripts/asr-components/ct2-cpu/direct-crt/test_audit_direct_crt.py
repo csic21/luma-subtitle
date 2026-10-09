@@ -4,10 +4,13 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
-import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 import urllib.request
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from fixture_paths import temporary_root
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('audit_direct_crt', HERE / 'audit_direct_crt.py')
@@ -21,11 +24,7 @@ def pin(data):
 
 class AuditTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-
-    def tearDown(self):
-        self.tmp.cleanup()
+        self.root = self.enterContext(temporary_root())
 
     def test_lock_agrees_with_helper(self):
         lock = json.loads((HERE / 'package.lock.json').read_text())

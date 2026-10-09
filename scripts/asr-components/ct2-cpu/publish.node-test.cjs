@@ -11,7 +11,7 @@ const clone = x => JSON.parse(JSON.stringify(x));
 const error404 = () => Object.assign(new Error('Not found'), { status: 404 });
 const pin = (name, bytes) => ({ name, bytes: bytes.length, sha256: p.hash(bytes) });
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luma-cpu-publisher-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'luma-cpu-publisher-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const sourceBytes = fs.readFileSync(path.join(__dirname, 'sources.lock.json'));
   const noticeBytes = fs.readFileSync(path.join(__dirname, 'notices.lock.json'));

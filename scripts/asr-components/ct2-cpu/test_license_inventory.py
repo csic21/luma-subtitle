@@ -1,7 +1,10 @@
 from pathlib import Path
-import tempfile
+import sys
 import unittest
 import zipfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from fixture_paths import temporary_root
 
 from license_inventory import discover, text_from_document
 
@@ -10,7 +13,7 @@ TERMS = 'MICROSOFT SOFTWARE LICENSE TERMS\nMicrosoft Visual Studio. Distributabl
 
 class InstalledLicenseTests(unittest.TestCase):
     def test_only_actual_recognizable_vendor_terms_are_copied(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); redist = root / 'VC/Redist'; redist.mkdir(parents=True)
             (redist / 'EULA.txt').write_text(TERMS)
             (redist / 'LICENSE-LINK.txt').write_text('https://example.invalid/terms')
@@ -27,13 +30,13 @@ class InstalledLicenseTests(unittest.TestCase):
             self.assertFalse(report['downloads'])
 
     def test_rejects_a_redist_root_outside_installation(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); (root / 'vs').mkdir(); (root / 'other').mkdir()
             with self.assertRaises(ValueError):
                 discover(root / 'vs', root / 'other', 'product', 'version')
 
     def test_file_and_text_bounds(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); redist = root / 'Redist'; redist.mkdir()
             for i in range(4):
                 (redist / f'license-{i}.txt').write_text(TERMS)
@@ -45,7 +48,7 @@ class InstalledLicenseTests(unittest.TestCase):
         stub = (b'Distributable Code for Microsoft Visual Studio 2022 (Includes Utilities & BuildServer Files)\r\n\r\n'
                 b'For the latest version of this Redist file, please visit https://aka.ms/vs/17/redist.txt.\r\n')
         self.assertEqual(len(stub), 187)
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); redist = root / 'Redist'; redist.mkdir()
             path = root / 'Redist.txt'; path.write_bytes(stub)
             report = discover(root, redist, 'Microsoft.VisualStudio.Product.Enterprise', 'pinned')
@@ -58,14 +61,14 @@ class InstalledLicenseTests(unittest.TestCase):
             self.assertFalse(report['redistribution_grant_verified'])
 
     def test_credential_labels_prevent_text_copying(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             root = Path(work); redist = root / 'Redist'; redist.mkdir()
             (redist / 'LICENSE.txt').write_text(TERMS + '\nProduct key: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX')
             report = discover(root, redist, 'product', 'version')
             self.assertNotIn('text', report['documents'][0])
 
     def test_existing_docx_is_read_without_external_entities(self):
-        with tempfile.TemporaryDirectory() as work:
+        with temporary_root() as work:
             path = Path(work) / 'EULA.docx'
             with zipfile.ZipFile(path, 'w') as archive:
                 archive.writestr('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>' + TERMS + '</w:t></w:r></w:p></w:document>')

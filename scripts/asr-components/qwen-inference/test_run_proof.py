@@ -3,11 +3,12 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
-import tempfile
 import json
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from fixture_paths import temporary_root
 sys.path.insert(0, str(HERE))
 spec = importlib.util.spec_from_file_location('qwen_run_proof', HERE / 'run_proof.py')
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -38,8 +39,8 @@ class Readiness(unittest.TestCase):
 
     def test_early_native_failure_is_reported_and_cache_removed(self):
         pack,_=fixture()
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);output=root/'fresh';request=root/'request.json'
+        with temporary_root() as tmp:
+            root=tmp;output=root/'fresh';request=root/'request.json'
             request.write_text(json.dumps({'source_sha':'a'*40,'pack_id':pack,
                 'purpose':'one-time-feature-branch-qwen-inference-proof','prior_native_evidence':{}}))
             def fail(*args,**kwargs):
