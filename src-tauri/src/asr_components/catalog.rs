@@ -163,7 +163,7 @@ fn safe_version(value: &str) -> bool {
     !value.is_empty() && value.len() <= 64 && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') && !value.starts_with('.')
 }
 #[derive(Clone, Copy)]
-pub(super) enum Source { Runtime, Model, Python, Wheel }
+pub(super) enum Source { Runtime, Model, Python, Wheel, MicrosoftCrt }
 pub(super) fn validate_download(raw: &str, bytes: u64, hash: &str, source: Source) -> Result<(), String> {
     if bytes == 0 || bytes > MAX_DOWNLOAD_BYTES || hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err("Embedded download is missing an exact size or SHA-256 digest.".into());
@@ -173,6 +173,7 @@ pub(super) fn validate_download(raw: &str, bytes: u64, hash: &str, source: Sourc
     if url.query().is_some() || url.fragment().is_some() { return Err("Embedded source URLs must be immutable and have no query or fragment.".into()); }
     let parts: Vec<_> = url.path().split('/').filter(|s| !s.is_empty()).collect();
     let trusted = match source {
+        Source::MicrosoftCrt => raw == super::direct_crt::URL && bytes == super::direct_crt::DOWNLOAD_BYTES && hash == super::direct_crt::INSTALLER_SHA,
         Source::Runtime => url.host_str() == Some("github.com") && parts.len() == 6 && parts[..4] == ["csic21", "luma-subtitle", "releases", "download"] && parts[4].starts_with("asr-components-") && parts[5].ends_with(".zip"),
         Source::Python => url.host_str() == Some("github.com") && parts.len() == 6 && parts[..4] == ["astral-sh", "python-build-standalone", "releases", "download"] && parts[4] == "20261003" && parts[5].starts_with("cpython-3.12.15") && parts[5].ends_with("-install_only_stripped.tar.gz"),
         Source::Wheel => url.host_str() == Some("files.pythonhosted.org") && parts.len() == 5 && parts[0] == "packages" && parts[1].len() == 2 && parts[2].len() == 2 && parts[3].len() >= 32 && parts[1..4].iter().all(|s| s.bytes().all(|b| b.is_ascii_hexdigit())) && parts[4].ends_with(".whl"),
@@ -193,6 +194,7 @@ pub(super) fn allowed_redirect(url: &Url, source: Source) -> bool {
     match source {
         Source::Runtime | Source::Python => matches!(host, "github.com" | "release-assets.githubusercontent.com" | "objects.githubusercontent.com"),
         Source::Wheel => host == "files.pythonhosted.org",
+        Source::MicrosoftCrt => host == "download.visualstudio.microsoft.com",
         Source::Model => matches!(host, "huggingface.co" | "cdn-lfs.huggingface.co" | "cdn-lfs.hf.co" | "cdn-lfs-us-1.hf.co" | "cdn-lfs-eu-1.hf.co") || host.ends_with(".xethub.hf.co"),
     }
 }

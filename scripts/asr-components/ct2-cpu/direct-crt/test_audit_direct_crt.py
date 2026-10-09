@@ -37,8 +37,13 @@ class AuditTests(unittest.TestCase):
         for n, (size, sha) in m.DLLS.items():
             self.assertEqual(lock['dlls'][n], {'member': n + '_amd64', 'bytes': size, 'sha256': sha})
         for n, (member, size, sha) in m.LICENSES.items():
-            self.assertEqual(lock['notices'][n], {'parent': 'ux.cab', 'member': member, 'bytes': size, 'sha256': sha})
+            self.assertEqual({key: lock['notices'][n][key] for key in ['parent', 'member', 'bytes', 'sha256']}, {'parent': 'ux.cab', 'member': member, 'bytes': size, 'sha256': sha})
         self.assertFalse(lock['redistribution_permission_established'])
+        self.assertIn('/3956ea1dc1086c62fa6d2d05484952caee010646/', lock['source_manifest'])
+        self.assertEqual(lock['source_manifest_provenance']['blob_sha1'], '6cdab74037d685cf44e9f811043cb9fc3a44cb80')
+        self.assertEqual(lock['source_manifest_provenance']['sha256'], 'de0d58bf1227acee24c6a920f31fc0f3f922d263725ccfec2bc5fe7553875f60')
+        self.assertEqual(lock['notices']['license-en.rtf']['eula_id'], 'Cpp_2015-2022_ENU.1033')
+        self.assertEqual(lock['notices']['license-zh-CN.rtf']['eula_id'], 'Cpp_2015-2022_CHS.2052')
 
     def test_identity_rejects_size(self):
         f = self.root / 'payload'; f.write_bytes(b'x')

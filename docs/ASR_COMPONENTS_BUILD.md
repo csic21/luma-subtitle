@@ -319,3 +319,35 @@ ordinary ASCII-path initialization with the adapted Unicode-path initialization,
 and prove restoration after a deliberate post-import error. This check uses only
 Nagisa's already bundled data. It does not establish Qwen ASR inference, memory
 fit, or closure of the separate Windows app-local CRT requirement.
+
+## Fixed direct-Microsoft Windows runtime prerequisite
+
+The Windows Qwen review candidate selects `windows_crt:msvc-14.44.35211-x64`.
+This is a single compiled, hash-pinned Microsoft package contract, not a generic
+installer mechanism. Its direct official download is 25,635,768 bytes. The
+package executable is never run: bounded, exact CAB members yield only the two
+reviewed original `msvcp140` DLLs and English/Chinese RTF notices. Existing PBS
+VCRUNTIME companions must match the exact same-version originals. Windows verifies
+Microsoft signatures; the application does not install globally or require admin.
+The full English and Chinese EULAs are displayed and hashed before assent and
+before any package download. Original RTF hashes and source package identities are
+preserved; direct-source delivery does not grant binary redistribution rights.
+
+Native CI uses the existing audited extractor and native signature verifier,
+then copies those unchanged originals into both deterministic private assemblies.
+The genuine Rust lifecycle test independently uses the production CRT extraction
+primitive, protects those files in wheel preflight, and checks their exact receipts
+after pip and after activation. Whole-tree normal and delay PE import closure
+includes Torch, PyAV and DyNet; actual loaded CRT/OpenMP libraries must also stay
+inside the private runtime. Unknown or additional missing libraries fail the proof
+rather than expand the two-DLL extraction policy. The original NVIDIA-containing
+CTranslate2 wheel remains excluded from application recipe delivery.
+
+The direct-CRT proof also compiles the actual application's `main.rs` with
+`cargo rustc --locked --bin luma-subtitle -- -C debug-assertions=no`, verifies its
+PE subsystem is Windows GUI, and runs only the fixed early signature-helper mode.
+It checks online and cache-only trust policies separately, rejects invalid
+role/path requests, and uses Unicode/spaced app, package and working-directory
+paths with poisoned PATH and bounded inherited output handles. This is a
+GUI-subsystem helper check, not a full release/bundle build. Final release builds
+remain independently required; no UI or downloaded installer is launched.

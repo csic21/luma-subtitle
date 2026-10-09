@@ -74,9 +74,11 @@ private target/build interpreter remains the byte-locked PBS runtime. It:
    headers and import library come from the pinned PBS archive; setuptools,
    wheel, pybind11, CMake and Ninja are exact hash-locked inputs.
 5. Builds oneDNN, CTranslate2 and the wheel independently in two source/build
-   directories. `/Brepro` and path mapping control native build differences;
-   matching complete wheel SHA-256 values are required. A mismatch is failure,
-   never relabeled as reproducibility.
+   directories. `/Brepro`, the pinned compiler-required `/experimental:deterministic`
+   and path mapping control native build differences; an early actual compiler
+   probe confirms mapping before the full build. Matching complete wheel hashes
+   are required. Per-member hashes, PE timestamps, section hashes and CodeView
+   build IDs are reported on mismatch, without modifying binary bytes.
 6. Creates a new private PBS runtime and uses the shared guarded offline pip
    installer with the existing faster-whisper 1.2.1 closure, replacing only CT2
    with this locally built wheel. The original CT2 wheel is skipped before fetch.
@@ -88,11 +90,13 @@ private target/build interpreter remains the byte-locked PBS runtime. It:
 7. Relocates that runtime to a Unicode/spaced path and inventories every EXE, DLL
    and PYD, including PE delay imports. Unknown dependencies, any GPU/MKL/OpenMP
    runtime and any missing private VC CRT block the proof before imports.
-8. Only after that gate passes, uses the private isolated interpreter, empty PATH,
+8. Only after the dependency gate passes, uses the private isolated interpreter, empty PATH,
    poisoned inherited Python configuration, fresh home/cache and offline worker
    audit to import actual backends and run the pinned Tiny/JFK fixture cold and
    warm. Requires valid transcription/timestamps and warm-model reuse; inventories
    the modules actually loaded and rejects host-global VC CRT fallback.
+   These functional tests run on the exact first wheel even if the second build
+   differs; that mismatch still fails the final proof and publication gate.
 
 The OS/runner image is recorded, not a hermetically reproduced Windows image.
 The two-build result establishes only repeatability of these inputs on that

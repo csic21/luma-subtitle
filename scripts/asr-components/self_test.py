@@ -36,6 +36,10 @@ def optional_vc_runtime(filename):
     return re.fullmatch(r'(?:msvcp|vcruntime|concrt|vcomp|vccorlib)[0-9][a-z0-9_]*\.dll', name) is not None
 
 
+def private_openmp_runtime(filename):
+    return re.fullmatch(r'(?:libiomp|libomp)[a-z0-9_.-]*\.dll', filename.lower()) is not None
+
+
 def data_file_diagnostic(path, root, record_sha256=None):
     """Read-only evidence for a bundled data file; never import/alter its package."""
     path = Path(path); root = Path(root).resolve()
@@ -113,8 +117,8 @@ def loaded_native_libraries():
     for path in paths:
         resolved = Path(path).resolve()
         test = str(resolved).lower() if sys.platform == 'win32' else str(resolved)
-        if sys.platform == 'win32' and optional_vc_runtime(resolved.name) and not resolved.is_relative_to(ROOT):
-            raise AssertionError(f'Optional Visual C++ runtime came from outside the private component: {path}')
+        if sys.platform == 'win32' and (optional_vc_runtime(resolved.name) or private_openmp_runtime(resolved.name)) and not resolved.is_relative_to(ROOT):
+            raise AssertionError(f'Optional CRT/OpenMP runtime came from outside the private component: {path}')
         if not resolved.is_relative_to(ROOT) and not test.startswith(allowed):
             raise AssertionError(f'Loaded non-system library outside component: {path}')
     return len(paths)

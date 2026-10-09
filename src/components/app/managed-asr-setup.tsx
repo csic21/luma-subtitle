@@ -76,6 +76,7 @@ function ComponentDetails({ component, status, consents, disabled, perform, t }:
       </details>
       {unavailable && <FieldDescription role="status">{t("asr.managed.unavailable")} {component.unavailable_reason}</FieldDescription>}
       {runtime?.recipe && action === "repair" && reuseConsent && <FieldDescription>{t("asr.terms.reuse")}</FieldDescription>}
+      {runtime?.recipe?.windows_crt && <FieldDescription>{t("asr.managed.windowsTrustNetwork")}</FieldDescription>}
       {status?.error && <FieldDescription role="alert">{status.error}</FieldDescription>}
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="secondary" disabled={disabled || unavailable} onClick={start}>

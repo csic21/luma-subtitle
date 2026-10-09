@@ -26,10 +26,15 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates):
     recipe = candidate.get('recipe')
     if recipe is None:
         return {'tested': False, 'reason': candidate['unavailable_reason']}
-    inputs = output / 'recipe-inputs'; inputs.mkdir()
+    inputs = output / 'recipe inputs é 测试'; inputs.mkdir()
     runtime_path = output / 'recipe-runtime.json'
     dump(runtime_path, candidate)
     artifacts = [(recipe['python'], recipe['python']['sha256'])] + [(wheel, wheel['filename']) for wheel in recipe['wheels']]
+    if recipe.get('windows_crt'):
+        from windows_crt_proof import CONTRACT, ID
+        if recipe['windows_crt'] != ID: raise ValueError('Unreviewed direct CRT recipe')
+        crt = json.loads(CONTRACT.read_text(encoding='utf-8'))['installer']
+        artifacts.append((crt, crt['sha256']))
     for artifact, name in artifacts:
         source = cache / artifact['sha256']
         if source.is_symlink() or not source.is_file() or source.stat().st_size != artifact['bytes'] or sha256(source) != artifact['sha256']:
@@ -49,9 +54,19 @@ def main():
     parser.add_argument('--worker', type=Path, required=True)
     parser.add_argument('--recipe-candidates', type=Path, required=True)
     args = parser.parse_args(); output = args.output.resolve(); cache = args.cache.resolve()
+    candidate = next(item for item in json.loads(args.recipe_candidates.read_text(encoding='utf-8'))['runtimes'] if item['id'] == args.pack)
+    windows_crt = None
+    if candidate.get('recipe', {}).get('windows_crt'):
+        from windows_crt_proof import ID, prepare
+        if candidate['recipe']['windows_crt'] != ID: raise ValueError('Unreviewed direct CRT recipe')
+        windows_crt = prepare(output, cache, args.source_sha)
     first, second = output / 'first', output / 'second'
-    one = build(args.pack, first, cache, args.source_sha, installer='pip')
-    two = build(args.pack, second, cache, args.source_sha, installer='pip')
+    one = build(args.pack, first, cache, args.source_sha, installer='pip', windows_crt=windows_crt)
+    two = build(args.pack, second, cache, args.source_sha, installer='pip', windows_crt=windows_crt)
+    crt_signatures = None
+    if windows_crt:
+        crt_signatures = json.loads((output / 'direct-crt-signatures.json').read_text(encoding='utf-8-sig'))
+        shutil.rmtree(windows_crt)
     assert one['archive'] == two['archive'], 'Offline pip output must reproduce exactly'
     assert (first / (args.pack + '.manifest.json')).read_bytes() == (second / (args.pack + '.manifest.json')).read_bytes()
     assembly = json.loads((first / 'staging' / args.pack / 'ASSEMBLY.json').read_text())
@@ -64,10 +79,16 @@ def main():
     # installed copy and atomic repair. User-space requirements stay enforced.
     shutil.rmtree(first)
     native_installer = prove_native_installer(args.pack, output, cache, args.recipe_candidates.resolve())
+    app_helper = None
+    if windows_crt:
+        from windows_crt_proof import prove_app_helper
+        app_helper = prove_app_helper(cache, output)
     report = {'schema': 1, 'pack_id': args.pack, 'source_sha': args.source_sha,
               'method': 'private-offline-pip', 'reproducible': True,
               'recipe_candidates_sha256': sha256(args.recipe_candidates),
               'assembly': assembly, 'runtime_smoke': smoke,
+              'windows_crt_signatures': crt_signatures,
+              'app_helper_test': app_helper,
               'native_installer_test': native_installer, 'publication_authorized': False}
     destination = output / (args.pack + '.offline-pip-proof.json')
     dump(destination, report); print(json.dumps(report, indent=2, ensure_ascii=False))

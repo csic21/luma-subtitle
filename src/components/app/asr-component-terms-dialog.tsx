@@ -43,6 +43,7 @@ export function AsrComponentTermsDialog({ runtime, disabled, onCancel, onAccept,
             {componentSources(runtime).map((url) => <FieldDescription key={url} className="break-all"><a href={url} target="_blank" rel="noreferrer">{url}</a></FieldDescription>)}
           </details>
           <FieldDescription>{t("asr.terms.scope")}</FieldDescription>
+          {runtime.recipe?.windows_crt && <FieldDescription>{t("asr.terms.windowsTrust")}</FieldDescription>}
           {runtime.recipe?.terms.map((term) => <Field key={`${term.id}-${term.version}-${term.sha256}`}>
             <FieldLabel>{term.id}{" · "}{term.version}</FieldLabel>
             <FieldDescription className="break-all">{t("asr.terms.textHash")} {term.sha256}</FieldDescription>

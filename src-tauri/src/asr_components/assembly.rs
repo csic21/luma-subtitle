@@ -6,11 +6,16 @@ use tauri::AppHandle;
 use tokio::io::AsyncReadExt;
 pub(super) const SCRIPT: &str = include_str!("../../../scripts/asr-components/assemble.py");
 
-pub(super) async fn prepare(app: &AppHandle, manager: &ComponentManager, root: &Path, staging: &store::Staging, runtime: &Runtime, recipe: &Recipe, cancel: &Arc<AtomicBool>) -> Result<Vec<FileReceipt>, String> {
+pub(super) async fn prepare(app: &AppHandle, manager: &ComponentManager, root: &Path, staging: &store::Staging, runtime: &Runtime, recipe: &Recipe, cancel: &Arc<AtomicBool>, lifetime: &super::setup_process::SetupLifetime) -> Result<Vec<FileReceipt>, String> {
     let python = Archive { url: recipe.python.url.clone(), bytes: recipe.python.bytes, sha256: recipe.python.sha256.clone() };
     let python_archive = download::cached(root, &runtime.id, &python, Source::Python, cancel, |bytes| manager.report(app, "downloading", bytes, "Downloading verified private Python from its official source")).await?;
     let wheelhouse = staging.directory.join("wheelhouse"); store::create_private_dir(&wheelhouse)?;
     let mut completed = python.bytes;
+    let crt_package = if recipe.windows_crt.is_some() {
+        let artifact = super::direct_crt::artifact();
+        let package = download::cached(root, &runtime.id, &artifact, Source::MicrosoftCrt, cancel, |bytes| manager.report(app, "downloading", completed + bytes, "Downloading the fixed Microsoft runtime package")).await?;
+        completed += artifact.bytes; Some(package)
+    } else { None };
     for wheel in &recipe.wheels {
         archive::cancelled(cancel)?;
         let artifact = Archive { url: wheel.url.clone(), bytes: wheel.bytes, sha256: wheel.sha256.clone() };
@@ -20,7 +25,9 @@ pub(super) async fn prepare(app: &AppHandle, manager: &ComponentManager, root: &
             manager.report(app, "downloading", completed + high_water, "Downloading exact, hash-verified upstream wheels");
         }).await?;
         let destination = wheelhouse.join(&wheel.filename); let cap = wheel.installed_bytes; let files = wheel.max_files; let cancellation = cancel.clone();
+        let retained = lifetime.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _lifetime = retained;
             archive::inspect(&source, cap, files, &cancellation)?;
             copy_local(&source, &destination, &cancellation)
         }).await.map_err(|e| e.to_string())??;
@@ -28,19 +35,41 @@ pub(super) async fn prepare(app: &AppHandle, manager: &ComponentManager, root: &
     }
     manager.report(app, "extracting", completed, "Safely preparing the pinned private Python runtime");
     let payload = staging.payload(); let byte_cap = recipe.python.installed_bytes; let file_cap = recipe.python.max_files; let cancellation = cancel.clone();
-    let python_files = tauri::async_runtime::spawn_blocking(move || super::tar_bootstrap::extract(&python_archive, &payload, byte_cap, file_cap, &cancellation)).await.map_err(|e| e.to_string())??;
+    let retained = lifetime.clone();
+    let mut python_files = tauri::async_runtime::spawn_blocking(move || {
+        let _lifetime = retained;
+        super::tar_bootstrap::extract(&python_archive, &payload, byte_cap, file_cap, &cancellation)
+    }).await.map_err(|e| e.to_string())??;
     archive::cancelled(cancel)?;
+    if let Some(package) = crt_package {
+        manager.report(app, "verifying", completed, "Verifying Microsoft signatures and preparing private runtime files");
+        super::direct_crt::install(&package, &staging.directory, &staging.payload(), cancel, super::direct_crt::TrustMode::Online, lifetime).await?;
+    }
+    let crt_receipts = if recipe.windows_crt.is_some() { super::direct_crt::verified_files(&staging.payload(), cancel)? } else { Vec::new() };
+    for receipt in &crt_receipts { if !python_files.iter().any(|f| f.path == receipt.path) { python_files.push(receipt.clone()); } }
     let inspected_wheelhouse = wheelhouse.clone(); let inspected_recipe = recipe.clone(); let cancellation = cancel.clone();
-    tauri::async_runtime::spawn_blocking(move || super::wheel_preflight::validate(&inspected_wheelhouse, &inspected_recipe, &python_files, &cancellation)).await.map_err(|e| e.to_string())??;
+    let retained = lifetime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lifetime = retained;
+        super::wheel_preflight::validate(&inspected_wheelhouse, &inspected_recipe, &python_files, &cancellation)
+    }).await.map_err(|e| e.to_string())??;
     let lock = json!({"schema":1,"platform":runtime.platform,"python":"3.12","wheels":recipe.wheels});
     let lock_path = staging.directory.join("wheel-lock.json"); write_new(&lock_path, &serde_json::to_vec(&lock).map_err(|e| e.to_string())?)?;
     let script = staging.directory.join("offline-assemble.py"); write_new(&script, SCRIPT.as_bytes())?;
     manager.report(app, "assembling", completed, "Installing the fixed local wheel set without network access or dependency resolution");
-    run(&staging.payload(), &script, &lock_path, &wheelhouse, runtime, cancel).await?;
+    run(&staging.payload(), &script, &lock_path, &wheelhouse, runtime, cancel, lifetime).await?;
     verify_report(&staging.payload(), runtime, recipe)?;
+    if recipe.windows_crt.is_some() {
+        let retained = super::direct_crt::verified_files(&staging.payload(), cancel)?;
+        if retained.iter().zip(&crt_receipts).any(|(a,b)| a.path != b.path || a.bytes != b.bytes || a.sha256 != b.sha256) || retained.len() != crt_receipts.len() { return Err("Offline assembly changed a verified Microsoft runtime file or notice.".into()); }
+    }
     manager.report(app, "verifying", completed, "Verifying the complete assembled private component");
     let payload = staging.payload(); let byte_cap = runtime.installed_bytes; let file_cap = runtime.max_files; let cancellation = cancel.clone();
-    tauri::async_runtime::spawn_blocking(move || inventory(&payload, byte_cap, file_cap, &cancellation)).await.map_err(|e| e.to_string())?
+    let retained = lifetime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lifetime = retained;
+        inventory(&payload, byte_cap, file_cap, &cancellation)
+    }).await.map_err(|e| e.to_string())?
 }
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut options = OpenOptions::new(); options.create_new(true).write(true);
@@ -58,7 +87,7 @@ fn copy_local(source: &Path, destination: &Path, cancel: &AtomicBool) -> Result<
     loop { archive::cancelled(cancel)?; let n = input.read(&mut buffer).map_err(|e| e.to_string())?; if n == 0 { break; } output.write_all(&buffer[..n]).map_err(|e| e.to_string())?; }
     output.sync_all().map_err(|e| e.to_string())
 }
-pub(super) async fn run(root: &Path, script: &Path, lock: &Path, wheelhouse: &Path, runtime: &Runtime, cancel: &AtomicBool) -> Result<(), String> {
+pub(super) async fn run(root: &Path, script: &Path, lock: &Path, wheelhouse: &Path, runtime: &Runtime, cancel: &AtomicBool, lifetime: &super::setup_process::SetupLifetime) -> Result<(), String> {
     archive::cancelled(cancel)?;
     let executable = store::checked_path(root, &runtime.entrypoint)?; store::regular_file(&executable)?;
     let mut command = tokio::process::Command::new(executable);
@@ -68,15 +97,15 @@ pub(super) async fn run(root: &Path, script: &Path, lock: &Path, wheelhouse: &Pa
         .current_dir(root).env_remove("PYTHONPATH").env_remove("PYTHONHOME")
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::process_utils::hide_tokio_command_window(&mut command);
-    let mut child = command.spawn().map_err(|e| format!("Cannot start private offline assembly: {e}"))?;
-    let mut stdout = child.stdout.take().ok_or("Private assembly stdout is missing")?;
-    let mut stderr = child.stderr.take().ok_or("Private assembly stderr is missing")?;
+    let mut child = super::setup_process::OwnedChild::spawn(&mut command, lifetime, temporary).map_err(|e| format!("Cannot start private offline assembly: {e}"))?;
+    let mut stdout = child.child_mut().stdout.take().ok_or("Private assembly stdout is missing")?;
+    let mut stderr = child.child_mut().stderr.take().ok_or("Private assembly stderr is missing")?;
     let mut out_done = false; let mut err_done = false; let mut status = None; let mut bytes = 0usize;
     let mut tail = VecDeque::new(); let mut buffer = [0u8; 4096]; let started = Instant::now();
     let result = loop {
         if cancel.load(Ordering::SeqCst) { break Err("Component setup cancelled.".into()); }
         if started.elapsed() > Duration::from_secs(600) { break Err("Private offline assembly timed out. The previous component is unchanged.".into()); }
-        if status.is_none() { match child.try_wait() { Ok(value) => status = value, Err(e) => break Err(format!("Cannot inspect private assembly process: {e}")) } }
+        if status.is_none() { match child.child_mut().try_wait() { Ok(value) => status = value, Err(e) => break Err(format!("Cannot inspect private assembly process: {e}")) } }
         // Drain both pipes in this owned future. No detached reader task can
         // outlive cancellation or keep the child blocked on a full pipe.
         for stream in 0..2 {
@@ -90,7 +119,7 @@ pub(super) async fn run(root: &Path, script: &Path, lock: &Path, wheelhouse: &Pa
             match read {
                 Ok(Ok(0)) => { if stream == 0 { out_done = true; } else { err_done = true; } },
                 Ok(Ok(n)) => { bytes += n; tail.extend(&buffer[..n]); let excess = tail.len().saturating_sub(4096); tail.drain(..excess); },
-                Ok(Err(e)) => { let _ = child.kill().await; let _ = child.wait().await; return Err(format!("Cannot read private assembly diagnostics: {e}")); },
+                Ok(Err(e)) => { child.finish(true).await; return Err(format!("Cannot read private assembly diagnostics: {e}")); },
                 Err(_) => (),
             }
         }
@@ -106,8 +135,7 @@ pub(super) async fn run(root: &Path, script: &Path, lock: &Path, wheelhouse: &Pa
         tokio::time::sleep(POLL).await;
     };
     // Always await termination/reaping, including cancellation and time limits.
-    if result.is_err() { let _ = child.kill().await; }
-    let _ = child.wait().await;
+    child.finish(result.is_err()).await;
     result
 }
 pub(super) fn verify_report(root: &Path, runtime: &Runtime, recipe: &Recipe) -> Result<(), String> {

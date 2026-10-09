@@ -49,10 +49,15 @@ try {
         # insufficient. The installer and extracted DLLs are never executed.
         $signature = Get-AuthenticodeSignature -LiteralPath $path
         $signer = $signature.SignerCertificate
+        $signerDerSha256 = $null
+        if ($null -ne $signer) {
+            $signerDerSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($signer.RawData)).ToLowerInvariant()
+        }
         $evidence.files += @{
             role=$role; path=$relative; bytes=$file.Length; sha256=$hash
             signature_status=$signature.Status.ToString()
             signer_subject=$signer.Subject; signer_thumbprint=$signer.Thumbprint
+            signer_certificate_der_sha256=$signerDerSha256
             timestamp_subject=$signature.TimeStamperCertificate.Subject
             timestamp_thumbprint=$signature.TimeStamperCertificate.Thumbprint
             file_version=$file.VersionInfo.FileVersion; product_version=$file.VersionInfo.ProductVersion

@@ -39,6 +39,16 @@ If the operating system blocks a component, Luma reports the original error;
 it does not remove quarantine attributes or bypass a warning. Updater integrity
 signatures are distinct from Apple Developer ID signing/notarization.
 
+Windows components obtain the exact Microsoft runtime package directly from
+Microsoft after its English and Chinese terms are displayed for acceptance.
+Only the verified required DLLs and original notices are extracted into the
+private runtime; the downloaded installer is never executed. Install and Repair
+use normal Windows certificate-chain/revocation validation in a bounded,
+cancellable helper. These checks can require internet access even when all
+download bytes are cached. The private pip step remains offline; completely
+offline repair is not promised. Failed trust checks do not replace the current
+component or change Windows security settings.
+
 Advanced external-runtime paths remain available for existing configurations.
 The manual commands below are optional advanced examples, not the standard setup.
 
@@ -106,13 +116,12 @@ python3.12 -m venv "$HOME/.venvs/luma-faster-whisper"
 "$HOME/.venvs/luma-faster-whisper/bin/hf" download dropbox-dash/faster-whisper-large-v3-turbo --local-dir "$HOME/Models/luma/faster-whisper-turbo"
 ```
 
-Windows PowerShell example:
-
-```powershell
-py -3.12 -m venv "$env:USERPROFILE\.venvs\luma-faster-whisper"
-& "$env:USERPROFILE\.venvs\luma-faster-whisper\Scripts\python.exe" -m pip install "faster-whisper==1.2.1" huggingface_hub
-& "$env:USERPROFILE\.venvs\luma-faster-whisper\Scripts\hf.exe" download dropbox-dash/faster-whisper-large-v3-turbo --local-dir "$env:USERPROFILE\Models\luma\faster-whisper-turbo"
-```
+For Windows CPU, use Luma's managed component. Its reviewed CPU-only CTranslate2
+build excludes CUDA/cuDNN and Intel OpenMP/MKL. The general upstream Windows
+CTranslate2 wheel can include GPU libraries and additional terms even when CPU
+execution is selected; it is not the managed CPU recipe. Existing external
+runtimes remain usable through advanced paths, but their dependencies and terms
+must be checked separately.
 
 This Turbo conversion is maintained by Dropbox (formerly the `mobiuslabsgmbh`
 repository), **not an official OpenAI model export**. It is the conversion named

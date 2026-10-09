@@ -9,6 +9,8 @@ mod archive;
 mod assembly;
 mod catalog;
 mod download;
+mod direct_crt;
+#[cfg(windows)] pub(crate) use direct_crt::signature_helper_from_args;
 mod recipe;
 mod tar_bootstrap;
 mod setup_process;
@@ -121,6 +123,7 @@ pub(crate) async fn asr_component_status(app: AppHandle) -> Result<Status, Strin
     let _snapshot = manager.store_gate.read().await;
     let _cross_process_snapshot = store::snapshot_lease(&root)?;
     let (components, consents) = tauri::async_runtime::spawn_blocking(move || {
+        let _cross_process_snapshot = _cross_process_snapshot;
         let components = catalog.components().iter().map(|c| store::status(&root, c)).collect();
         let consents = store::read_consents(&root, &catalog)?;
         Ok::<_, String>((components, consents))
@@ -167,22 +170,30 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
     if let Some(consent) = consent { store::record_consent(&root, &consent)?; }
     if !repair {
         let check_root = root.clone(); let check_component = component.clone(); let cancellation = cancel.clone();
-        let previous = tauri::async_runtime::spawn_blocking(move || store::status_with_cancel(&check_root, &check_component, &cancellation)).await.map_err(|e| e.to_string())?;
+        let retained_lease = _lease.clone();
+        let previous = tauri::async_runtime::spawn_blocking(move || {
+            let _lease = retained_lease;
+            store::status_with_cancel(&check_root, &check_component, &cancellation)
+        }).await.map_err(|e| e.to_string())?;
         archive::cancelled(&cancel)?;
         if previous.state == "installed" { return Ok(previous); }
     }
-    let recovery_root = root.clone();
-    tauri::async_runtime::spawn_blocking(move || store::recover_staging(&recovery_root)).await.map_err(|e| e.to_string())??;
+    let recovery_root = root.clone(); let retained_lease = _lease.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lease = retained_lease;
+        store::recover_staging(&recovery_root)
+    }).await.map_err(|e| e.to_string())??;
     archive::cancelled(&cancel)?;
     let multiplier = if matches!(component, Component::Runtime(runtime) if runtime.recipe.is_some()) { 2 } else { 1 };
     let needed = required_free_space(component.download_bytes().checked_mul(multiplier).ok_or("Download budget overflow")?, component.installed_bytes().checked_mul(multiplier).ok_or("Staging budget overflow")?)?;
     let available = fs2::available_space(&root).map_err(|e| format!("Cannot check free space for private components: {e}"))?;
     if available < needed { return Err(format!("Not enough free disk space for a safe staged install. Need {needed} bytes free; {available} bytes are available. Existing components and models were preserved.")); }
     let staging = store::Staging::create(&root)?;
+    let lifetime = setup_process::SetupLifetime::new(&staging, &_lease);
     let files = match component {
         Component::Runtime(runtime) => {
             if let Some(recipe) = &runtime.recipe {
-                assembly::prepare(app, manager, &root, &staging, runtime, recipe, &cancel).await?
+                assembly::prepare(app, manager, &root, &staging, runtime, recipe, &cancel, &lifetime).await?
             } else {
             let archive = runtime.archive.as_ref().ok_or("Runtime package has not been published")?;
             let download_path = staging.directory.join("runtime.zip");
@@ -190,9 +201,13 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
             manager.report(app, "verifying", archive.bytes, "Engine download size and SHA-256 verified");
             manager.report(app, "extracting", archive.bytes, "Safely extracting the private engine package");
             let payload = staging.payload(); let max_bytes = runtime.installed_bytes; let max_files = runtime.max_files; let cancellation = cancel.clone();
-            // Await the extractor even on cancellation/shutdown: never detach a
-            // writer while staging could be removed or the app could exit.
-            tauri::async_runtime::spawn_blocking(move || archive::extract(&download_path, &payload, max_bytes, max_files, &cancellation)).await.map_err(|e| e.to_string())??
+            // Await normal cancellation; retained ownership also protects the
+            // tree if this awaiting future is aborted during blocking work.
+            let retained = lifetime.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _lifetime = retained;
+                archive::extract(&download_path, &payload, max_bytes, max_files, &cancellation)
+            }).await.map_err(|e| e.to_string())??
             }
         }
         Component::Model(model) => {
@@ -218,17 +233,27 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
     archive::cancelled(&cancel)?;
     if let Component::Runtime(runtime) = component {
         manager.report(app, "testing", component.download_bytes(), "Checking the private engine before activation");
-        self_test(&staging.payload(), runtime, &cancel).await?;
+        self_test(&staging.payload(), runtime, &cancel, &lifetime).await?;
     }
     archive::cancelled(&cancel)?;
     store::write_receipt(&staging.payload(), component, files)?;
     let payload = staging.payload(); let check_component = component.clone(); let cancellation = cancel.clone();
-    tauri::async_runtime::spawn_blocking(move || store::validate_files(&payload, &check_component, &cancellation)).await.map_err(|e| e.to_string())??;
+    let retained = lifetime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _lifetime = retained;
+        store::validate_files(&payload, &check_component, &cancellation)
+    }).await.map_err(|e| e.to_string())??;
     let _store_write = cancellable(manager.store_gate.write(), &cancel).await?;
     manager.commit_boundary()?;
     manager.report(app, "activating", component.download_bytes(), "Activating the verified component; keeping the previous version");
-    let check_component = component.clone();
-    let status = tauri::async_runtime::spawn_blocking(move || store::commit(&root, &check_component, &staging)).await.map_err(|e| e.to_string())??;
+    let check_component = component.clone(); let retained = lifetime.clone();
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        let _lifetime = retained;
+        // Drop this extra staging owner before the retained setup lock, also on
+        // unwinding, so last-owner cleanup remains inside the lease lifetime.
+        let staging = staging;
+        store::commit(&root, &check_component, &staging)
+    }).await.map_err(|e| e.to_string())??;
     if status.state != "installed" { return Err(status.error.unwrap_or_else(|| "Component activation could not be verified.".into())); }
     Ok(status)
 }
@@ -249,6 +274,8 @@ pub(crate) async fn remove_asr_component(app: AppHandle, request: ComponentReque
         manager.report(&app, "removing", 0, "Removing only this app-owned component");
         let removing_component = component.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let _lease = _lease;
+            let _use_lease = _use_lease;
             store::remove(&root, &removing_component)?;
             Ok::<_, String>(store::status(&root, &removing_component))
         }).await.map_err(|e| e.to_string())?
@@ -281,7 +308,7 @@ fn self_test_failure(status: std::process::ExitStatus) -> String {
     };
     format!("Private engine self-test failed ({detail}). The previous component is unchanged. Try Repair. If the OS reports a security block, use its supported review or recovery flow, or ask your administrator; do not disable protections.")
 }
-async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool) -> Result<(), String> {
+async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool, lifetime: &setup_process::SetupLifetime) -> Result<(), String> {
     let executable = store::checked_path(root, &runtime.entrypoint)?; store::regular_file(&executable)?;
     let code = self_test_script(&runtime.backend)?;
     let mut command = tokio::process::Command::new(&executable);
@@ -293,20 +320,21 @@ async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool)
         .env("HF_HUB_DISABLE_TELEMETRY", "1").env("DO_NOT_TRACK", "1")
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
     crate::process_utils::hide_tokio_command_window(&mut command);
-    let mut child = command.spawn().map_err(|e| format!("Cannot start private engine self-test: {e}"))?;
+    let mut child = setup_process::OwnedChild::spawn(&mut command, lifetime, temporary).map_err(|e| format!("Cannot start private engine self-test: {e}"))?;
     let started = Instant::now();
-    loop {
+    let result = loop {
         if cancel.load(Ordering::SeqCst) || started.elapsed() > Duration::from_secs(120) {
-            let _ = child.kill().await; let _ = child.wait().await;
-            return Err(if cancel.load(Ordering::SeqCst) { "Component setup cancelled." } else { "Private engine self-test timed out. The previous component is still installed." }.into());
+            break Err(if cancel.load(Ordering::SeqCst) { "Component setup cancelled." } else { "Private engine self-test timed out. The previous component is still installed." }.into());
         }
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(self_test_failure(status)),
+        match child.child_mut().try_wait() {
+            Ok(Some(status)) if status.success() => break Ok(()),
+            Ok(Some(status)) => break Err(self_test_failure(status)),
             Ok(None) => tokio::time::sleep(POLL).await,
-            Err(error) => { let _ = child.kill().await; let _ = child.wait().await; return Err(format!("Cannot inspect private engine self-test: {error}")); }
+            Err(error) => break Err(format!("Cannot inspect private engine self-test: {error}")),
         }
-    }
+    };
+    child.finish(result.is_err()).await;
+    result
 }
 pub(super) async fn cancellable<F: Future>(future: F, cancel: &AtomicBool) -> Result<F::Output, String> {
     let mut future = Box::pin(future);

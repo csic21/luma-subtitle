@@ -5,6 +5,10 @@ on:
     paths:
       - 'scripts/asr-components/**'
       - '!scripts/asr-components/ct2-cpu/**'
+      # These bounded helpers are also inputs to the Qwen/direct-CRT proof.
+      - 'scripts/asr-components/ct2-cpu/native_inventory.py'
+      - 'scripts/asr-components/ct2-cpu/direct-crt/**'
+      - 'scripts/asr-components/ct2-cpu/verify_direct_crt_signatures.ps1'
       - 'src-tauri/src/asr/**'
       - 'src-tauri/src/asr_components.rs'
       - 'src-tauri/src/asr_components/**'

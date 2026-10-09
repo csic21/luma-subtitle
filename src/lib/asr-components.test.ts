@@ -61,6 +61,16 @@ describe("exact runtime consent", () => {
     expect(componentDownloadBytes(recipeRuntime)).toBe(120);
     expect(componentSources(recipeRuntime)).toEqual(["https://example.test/python.zip", "https://example.test/engine.whl"]);
   });
+  it("includes the exact optional Microsoft package in declared sources and bytes", () => {
+    const withCrt: AsrRuntimeComponent = { ...recipeRuntime, recipe: { ...recipeRuntime.recipe!, windows_crt: "msvc-14.44.35211-x64" } };
+    expect(componentDownloadBytes(withCrt)).toBe(120 + 25_635_768);
+    expect(componentSources(withCrt).slice(-1)[0]).toBe("https://download.visualstudio.microsoft.com/download/pr/73aabf2e-9532-4f68-99f7-3247081a619c/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe");
+    expect(runtimeAcknowledgement(withCrt)).not.toBeNull();
+    expect(runtimeConfirmationKey(withCrt)).not.toBe(runtimeConfirmationKey(recipeRuntime));
+    expect(runtimeAcknowledgement({ ...withCrt, platform: "macos-arm64" })).toBeNull();
+    expect(runtimeAcknowledgement({ ...withCrt, recipe: { ...withCrt.recipe!, windows_crt: "unknown" as "msvc-14.44.35211-x64" } })).toBeNull();
+    expect(componentDownloadBytes({ ...recipeRuntime, recipe: { ...recipeRuntime.recipe!, windows_crt: null } })).toBe(120);
+  });
   it("constructs only the complete exact plan and term identity tuples", () => {
     expect(runtimeAcknowledgement(recipeRuntime)).toEqual({ plan_sha256: "1".repeat(64), acknowledged_terms: [
       { id: "vendor-license", version: "2026-01", sha256: "4".repeat(64) },

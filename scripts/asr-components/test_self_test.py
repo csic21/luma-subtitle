@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from self_test import platform_description, optional_vc_runtime, data_file_diagnostic
+from self_test import platform_description, optional_vc_runtime, private_openmp_runtime, data_file_diagnostic
 
 
 class SelfTestReportingTests(unittest.TestCase):
@@ -34,6 +34,12 @@ class SelfTestReportingTests(unittest.TestCase):
             description = platform_description()
         self.assertIsInstance(description, str)
         self.assertGreater(len(description), 3)
+
+    def test_openmp_cannot_hide_under_systemroot_allowlist(self):
+        for name in ('libiomp5md.dll', 'libomp.dll', 'LIBOMP140.X86_64.DLL'):
+            self.assertTrue(private_openmp_runtime(name))
+        for name in ('kernel32.dll', 'combase.dll', 'msvcp_win.dll'):
+            self.assertFalse(private_openmp_runtime(name))
 
 
 if __name__ == '__main__': unittest.main()

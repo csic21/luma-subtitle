@@ -13,6 +13,8 @@ export const enUS = {
     "asr.terms.planHash": "Installation plan SHA-256:",
     "asr.terms.sources": "Sources:",
     "asr.terms.scope": "The text below is supplied by the third parties. Luma does not provide legal advice or certify that these terms permit your intended use. Declining starts no download and leaves the current installation unchanged.",
+    "asr.terms.windowsTrust": "Windows will validate the Microsoft component’s digital signatures. Install and Repair may contact certificate authorities for public certificate status even when component files are cached; audio and account credentials are not sent. A failed trust check stops setup without changing Windows security settings.",
+    "asr.managed.windowsTrustNetwork": "Install and Repair may need internet access for Windows certificate checks, even when the component download is cached. A failed check leaves the current component unchanged.",
     "asr.terms.invalid": "The exact installation plan or terms are incomplete. Installation is unavailable. Refresh the catalog or use another supported component.",
     "asr.terms.acceptLabel": "I accept the exact third-party terms displayed above for this component.",
     "asr.terms.decline": "Decline and cancel",

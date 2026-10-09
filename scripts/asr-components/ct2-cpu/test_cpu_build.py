@@ -12,6 +12,8 @@ import struct
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 import zipfile
 
 import build_cpu as build
@@ -98,6 +100,50 @@ class SourceTests(unittest.TestCase):
         self.assertGreaterEqual(len(files), 10)
         self.assertTrue(any(x['component'] == 'thread-pool' for x in lock['files']))
         self.assertTrue(any(x['component'] == 'pybind11' for x in lock['files']))
+
+    def test_deterministic_mapping_flag_is_explicit_and_process_local(self):
+        original = {'UNCHANGED': 'value'}
+        result = build.deterministic_environment(Path('private-build'), original, {'source_date_epoch': 1})
+        self.assertEqual(original, {'UNCHANGED': 'value'})
+        self.assertIn('/experimental:deterministic', result['_CL_'])
+        self.assertIn('/pathmap:private-build=C:\\luma-ct2-build', result['_CL_'])
+        self.assertEqual(result['_LINK_'], '/Brepro /INCREMENTAL:NO')
+
+    def test_path_mapping_probe_rejects_ignored_compiler_flag(self):
+        for diagnostic, valid in [('const char* source_file = "C:\\\\luma-ct2-build\\\\probe.cpp";\n', True),
+                                  ("cl : warning D9007 : '/pathmap:' option ignored\n", False)]:
+            with tempfile.TemporaryDirectory() as work:
+                root = Path(work); reports = root / 'reports'; reports.mkdir()
+                args = SimpleNamespace(work=root, reports=reports)
+                def fake_command(*args, **kwargs):
+                    kwargs['logfile'].write_text(diagnostic)
+                with patch.object(build, 'command', side_effect=fake_command):
+                    if valid:
+                        build.probe_path_mapping(args, {}, {'source_date_epoch': 1})
+                        self.assertTrue((reports / 'compiler-probe.json').is_file())
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'did not apply'):
+                            build.probe_path_mapping(args, {}, {'source_date_epoch': 1})
+
+    def test_functional_proof_runs_on_mismatch_and_final_gate_still_fails(self):
+        calls = []
+        status = {'wheel_reproduced': False, 'native_inference_passed': False}
+        with self.assertRaisesRegex(RuntimeError, 'Independent builds differ'):
+            build.enforce_independent_proofs(status, lambda: calls.append('exact first wheel'))
+        self.assertEqual(calls, ['exact first wheel'])
+        self.assertTrue(status['native_inference_passed'])
+        self.assertIn('reproducibility_error', status)
+
+    def test_both_independent_proof_failures_are_retained(self):
+        def fail():
+            raise ValueError('functional fixture failure')
+        status = {'wheel_reproduced': False, 'native_inference_passed': False}
+        with self.assertRaisesRegex(RuntimeError, 'Independent builds differ'):
+            build.enforce_independent_proofs(status, fail)
+        self.assertEqual(status['functional_error'], 'ValueError: functional fixture failure')
+        self.assertFalse(status['native_inference_passed'])
+        with self.assertRaisesRegex(ValueError, 'functional fixture failure'):
+            build.enforce_independent_proofs({'wheel_reproduced': True}, fail)
 
     def test_build_tool_scripts_scheme_requires_exact_private_payload(self):
         with tempfile.TemporaryDirectory() as work:
@@ -220,6 +266,8 @@ class SourceTests(unittest.TestCase):
         script = (build.HERE / 'verify_direct_crt_signatures.ps1').read_text()
         self.assertIn('Get-AuthenticodeSignature -LiteralPath $path', script)
         self.assertIn('[System.Management.Automation.SignatureStatus]::Valid', script)
+        self.assertIn('[Security.Cryptography.SHA256]::HashData($signer.RawData)', script)
+        self.assertIn('signer_certificate_der_sha256=$signerDerSha256', script)
         self.assertIn("'cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b'", script)
         self.assertIn('installer_executed=$false', script)
         self.assertNotIn('Start-Process', script)

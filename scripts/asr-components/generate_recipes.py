@@ -91,6 +91,8 @@ def generate(catalog, caps, config, proprietary, terms_directory):
                        recipe={'schema': 1, 'python': {key: bound['runtime'][key] for key in PYTHON_FIELDS},
                                'wheels': [{key: wheel[key] for key in WHEEL_FIELDS} for wheel in bound['wheels']],
                                'terms': terms})
+        if runtime['platform'] == 'windows-x64':
+            runtime['recipe']['windows_crt'] = 'msvc-14.44.35211-x64'
         candidates.append(runtime)
     return {'schema': 1, 'status': 'review-only-not-active', 'runtimes': candidates,
             'evidence': 'Per-input extraction limits and their measured/conservative classification are in recipe-caps.json. This file never activates catalog entries; all unavailable reasons must be preserved until final review.'}

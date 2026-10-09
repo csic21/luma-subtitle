@@ -106,9 +106,19 @@ def main():
         if managed_qwen:
             adapted = nagisa_probe(executable, probe, env, work, '--adapt')
             assert baseline['words'] == adapted['words'] and baseline['postags'] == adapted['postags']
+            assert baseline['upstream_finders_added'] == adapted['upstream_finders_added']
             failure = nagisa_probe(executable, probe, env, work, '--adapt', '--forced-failure')
+            assert baseline['upstream_finders_added'] == failure['upstream_finders_added']
             nagisa = {'baseline': baseline, 'unicode': adapted, 'failure': failure, 'japanese_tokens_match': True}
             print('NAGISA_UNICODE_PROOF=' + json.dumps(nagisa, ensure_ascii=False), flush=True)
+        native_inventory = None
+        if manifest['platform'] == 'windows-x64':
+            from windows_native_inventory import inventory
+            native_inventory = inventory(relocated)
+            print('WINDOWS_NATIVE_CLOSURE=' + json.dumps({'passed': native_inventory['passed'],
+                  'native_files': len(native_inventory['files']), 'blocked_dependencies': native_inventory['blocked_dependencies'],
+                  'gpu_files': native_inventory['gpu_files']}, sort_keys=True), flush=True)
+            assert native_inventory['passed'], 'Whole Windows runtime has unresolved normal/delay native dependencies'
         result = subprocess.run([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(relocated / 'self_test.py')],
                                 capture_output=True, text=True, encoding='utf-8', env=env, cwd=work, timeout=240)
         if result.returncode:
@@ -154,6 +164,7 @@ def main():
                   'worker_test': {'passed': True, 'checks': ['json-lines', 'offline-path-rejection', 'clean-eof-shutdown', 'idle-termination', 'recovery']},
                   'imports': imports, 'inference': inference,
                   'nagisa_unicode': nagisa,
+                  'windows_native_inventory': native_inventory,
                   'limitations': ['No CUDA validation or CUDA redistribution.', 'No Developer ID signing, notarization, Gatekeeper bypass, or clean-GUI-machine validation.']}
         dump(output / f'{manifest["id"]}.smoke.json', report)
         print(json.dumps(report, indent=2, ensure_ascii=False))

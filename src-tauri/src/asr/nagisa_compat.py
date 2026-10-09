@@ -24,6 +24,7 @@ class LumaNagisaInitializationError(BaseException):
 _luma_nagisa_state = 'new'
 _luma_nagisa_module = None
 _luma_nagisa_original_init = None
+_luma_nagisa_restoration = None
 
 
 def _luma_validate_nagisa():
@@ -98,7 +99,7 @@ def _luma_validate_nagisa():
 
 def luma_prepare_nagisa():
     """Initialize once, retaining only the unmodified upstream public API."""
-    global _luma_nagisa_state, _luma_nagisa_module, _luma_nagisa_original_init
+    global _luma_nagisa_state, _luma_nagisa_module, _luma_nagisa_original_init, _luma_nagisa_restoration
     if _luma_sys.platform != 'win32':
         return None
     if _luma_nagisa_state == 'ready':
@@ -109,7 +110,7 @@ def luma_prepare_nagisa():
     if _luma_nagisa_state != 'new':
         raise LumaNagisaInitializationError('Nagisa initialization is already active or failed; discard this worker')
     _luma_nagisa_state = 'initializing'
-    cwd = None; finder = None; tagger_class = None; original_init = None
+    cwd = None; finder = None; tagger_class = None; original_init = None; finders_before = None
     try:
         if _luma_threading.current_thread() is not _luma_threading.main_thread() or _luma_threading.active_count() != 1:
             raise ValueError('Nagisa must initialize before worker activity threads')
@@ -162,6 +163,7 @@ def luma_prepare_nagisa():
                 return spec
 
         cwd = _LumaPath.cwd()
+        finders_before = tuple(_luma_sys.meta_path)
         _luma_os.chdir(package / 'data')
         finder = Finder(); _luma_sys.meta_path.insert(0, finder)
         module = _luma_importlib.import_module('nagisa')
@@ -185,6 +187,16 @@ def luma_prepare_nagisa():
                 _luma_sys.meta_path[:] = [item for item in _luma_sys.meta_path if item is not finder]
             if cwd is not None:
                 _luma_os.chdir(cwd)
+            _luma_nagisa_restoration = {
+                'constructor_restored': original_init is None or tagger_class.__init__ is original_init,
+                'finder_removed': finder is None or all(item is not finder for item in _luma_sys.meta_path),
+                'cwd_restored': cwd is None or _LumaPath.cwd().resolve() == cwd.resolve(),
+                'original_finders_retained': finders_before is None or tuple(
+                    item for item in _luma_sys.meta_path if any(item is before for before in finders_before)
+                ) == finders_before,
+            }
+            if not all(_luma_nagisa_restoration.values()):
+                raise ValueError('Nagisa initialization state was not restored exactly')
         except BaseException as exc:
             _luma_nagisa_state = 'failed'
             raise LumaNagisaInitializationError('Nagisa restoration failed; discard this worker') from exc

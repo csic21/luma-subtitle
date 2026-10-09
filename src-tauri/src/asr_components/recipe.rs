@@ -28,6 +28,8 @@ pub(crate) struct Term {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Recipe {
     pub schema: u32, pub python: PythonArchive, pub wheels: Vec<Wheel>, pub terms: Vec<Term>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_crt: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
@@ -38,7 +40,7 @@ pub(crate) struct Consent {
     pub component_id: String, pub plan_sha256: String, pub terms: Vec<TermAcknowledgement>,
 }
 impl Recipe {
-    pub(super) fn download_bytes(&self) -> u64 { self.python.bytes + self.wheels.iter().map(|w| w.bytes).sum::<u64>() }
+    pub(super) fn download_bytes(&self) -> u64 { self.python.bytes + self.wheels.iter().map(|w| w.bytes).sum::<u64>() + if self.windows_crt.is_some() { super::direct_crt::DOWNLOAD_BYTES } else { 0 } }
     pub(super) fn acknowledgements(&self) -> Vec<TermAcknowledgement> {
         let mut terms: Vec<_> = self.terms.iter().map(|t| TermAcknowledgement { id: t.id.clone(), version: t.version.clone(), sha256: t.sha256.clone() }).collect();
         terms.sort(); terms
@@ -47,6 +49,7 @@ impl Recipe {
         if self.schema != 1 || self.wheels.is_empty() || self.wheels.len() > 128 || self.terms.is_empty() || self.terms.len() > 256 {
             return Err("Embedded direct-source recipe has invalid schema or input counts.".into());
         }
+        super::direct_crt::validate_recipe(self, runtime)?;
         let python = &self.python;
         catalog::validate_download(&python.url, python.bytes, &python.sha256, Source::Python)?;
         if python.entrypoint != runtime.entrypoint || python.pip_version != "26.2.1" {
@@ -56,7 +59,7 @@ impl Recipe {
         if python.site_packages != expected_site { return Err("The private site-packages path does not match this platform.".into()); }
         relative_path(&python.entrypoint)?; relative_path(&python.site_packages)?;
         bounds(python.installed_bytes, python.max_files)?;
-        let mut total = python.installed_bytes; let mut total_download = python.bytes;
+        let mut total = python.installed_bytes + if self.windows_crt.is_some() { super::direct_crt::INSTALLED_BOUND } else { 0 }; let mut total_download = python.bytes + if self.windows_crt.is_some() { super::direct_crt::DOWNLOAD_BYTES } else { 0 };
         let mut names = HashSet::new(); let mut filenames = HashSet::new();
         for wheel in &self.wheels {
             if wheel.name.is_empty() || !wheel.name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b)) || wheel.version.is_empty() || !wheel.version.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+!-".contains(&b)) {
@@ -83,7 +86,7 @@ impl Recipe {
             if !valid_hash(&term.sha256) || format!("{:x}", Sha256::digest(term.text.as_bytes())) != term.sha256 {
                 return Err("Embedded upstream terms do not match their displayed UTF-8 SHA-256.".into());
             }
-            if term.raw_sha256.as_deref().is_some_and(|h| !valid_hash(h)) || term.source_encoding.as_deref().is_some_and(|e| !matches!(e, "utf-8" | "cp1252" | "ascii")) {
+            if term.raw_sha256.as_deref().is_some_and(|h| !valid_hash(h)) || term.source_encoding.as_deref().is_some_and(|e| !matches!(e, "utf-8" | "cp1252" | "ascii" | "rtf")) {
                 return Err("Invalid upstream terms source provenance.".into());
             }
             let url = url::Url::parse(&term.url).map_err(|_| "Invalid upstream terms URL")?;
@@ -104,7 +107,9 @@ pub(super) fn plan_hash(runtime: &Runtime) -> Result<String, String> {
     // Availability is evaluated for the local OS separately; it is not assent.
     snapshot.unavailable_reason = None;
     let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    let mut digest = Sha256::new(); digest.update(bytes);
+    if runtime.recipe.as_ref().is_some_and(|r| r.windows_crt.is_some()) { digest.update(super::direct_crt::CONTRACT.as_bytes()); }
+    Ok(format!("{:x}", digest.finalize()))
 }
 pub(super) fn validate_acknowledgement(runtime: &Runtime, request: &ComponentRequest) -> Result<Option<Consent>, String> {
     let Some(recipe) = &runtime.recipe else { return Ok(None); };

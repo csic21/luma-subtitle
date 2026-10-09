@@ -7,10 +7,19 @@ export type AsrInstallConsent = { plan_sha256: string; acknowledged_terms: AsrTe
 export type AsrRecordedConsent = { component_id: string; plan_sha256: string; terms: AsrTermAcknowledgement[] };
 export type AsrRuntimeRecipe = {
   schema: 1;
+  windows_crt?: "msvc-14.44.35211-x64" | null;
   python: { url: string; bytes: number; sha256: string; installed_bytes: number; max_files: number; entrypoint: string; site_packages: string; pip_version: string };
   wheels: { name: string; version: string; filename: string; url: string; bytes: number; sha256: string; installed_bytes: number; max_files: number }[];
   terms: AsrComponentTerm[];
 };
+
+// Display metadata for the one compiled Windows CRT contract. The backend
+// independently authenticates every byte and rejects any other contract ID.
+const windowsCrtSource = {
+  id: "msvc-14.44.35211-x64",
+  bytes: 25_635_768,
+  url: "https://download.visualstudio.microsoft.com/download/pr/73aabf2e-9532-4f68-99f7-3247081a619c/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+} as const;
 
 export type AsrComponentFile = { path: string; url: string; bytes: number; sha256: string };
 export type AsrComponentInfo = {
@@ -72,7 +81,8 @@ export type AsrComponentAction = "install" | "repair" | "remove";
 
 export function componentDownloadBytes(component: AsrRuntimeComponent | AsrModelComponent) {
   if ("files" in component) return component.files.reduce((total, file) => total + file.bytes, 0);
-  if (component.recipe) return component.recipe.python.bytes + component.recipe.wheels.reduce((total, wheel) => total + wheel.bytes, 0);
+  if (component.recipe) return component.recipe.python.bytes + component.recipe.wheels.reduce((total, wheel) => total + wheel.bytes, 0)
+    + (component.recipe.windows_crt === windowsCrtSource.id ? windowsCrtSource.bytes : 0);
   return component.archive?.bytes ?? 0;
 }
 
@@ -110,12 +120,14 @@ export function managedAsrConfig(
 
 export function componentSources(component: AsrRuntimeComponent | AsrModelComponent): string[] {
   if ("files" in component) return [...new Set(component.files.map((file) => file.url))];
-  if (component.recipe) return [component.recipe.python.url, ...component.recipe.wheels.map((wheel) => wheel.url)];
+  if (component.recipe) return [component.recipe.python.url, ...component.recipe.wheels.map((wheel) => wheel.url),
+    ...(component.recipe.windows_crt === windowsCrtSource.id ? [windowsCrtSource.url] : [])];
   return component.archive ? [component.archive.url] : [];
 }
 
 export function runtimeAcknowledgement(runtime: AsrRuntimeComponent): AsrInstallConsent | null {
   if (!runtime.recipe || !runtime.plan_sha256 || !/^[a-f0-9]{64}$/i.test(runtime.plan_sha256)) return null;
+  if (runtime.recipe.windows_crt != null && (runtime.recipe.windows_crt !== windowsCrtSource.id || runtime.platform !== "windows-x64")) return null;
   const terms = runtime.recipe.terms;
   if (terms.length === 0 || new Set(terms.map((term) => term.id)).size !== terms.length || terms.some((term) => !term.id || !term.version || !term.text || !/^https:\/\//.test(term.url) || !/^[a-f0-9]{64}$/i.test(term.sha256))) return null;
   return { plan_sha256: runtime.plan_sha256, acknowledged_terms: runtime.recipe.terms.map(({ id, version, sha256 }) => ({ id, version, sha256 })) };

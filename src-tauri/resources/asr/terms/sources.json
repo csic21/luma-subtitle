@@ -200,6 +200,64 @@
         "qwen3-asr-cpu-windows-x64"
       ],
       "classification": "proprietary"
+    },
+    {
+      "id": "microsoft-vc-runtime-en",
+      "version": "Cpp_2015-2022_ENU.1033",
+      "title": "Microsoft Visual C++2015–2022 Runtime license terms (en)",
+      "path": "microsoft-vc-runtime-en.txt",
+      "sha256": "f815ace86c91d3dadc62ed85292b7c79066447f2277774803df87b1d1a9ecfc8",
+      "text_bytes": 6683,
+      "raw_sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b",
+      "raw_bytes": 9235,
+      "source_encoding": "rtf",
+      "locale": "en-US",
+      "normalization": "Font-aware RTF decoding (SimSun charset134 GBK; other runs CP1252), paragraph/indentation normalization by Pandoc3.1.11.1. Every non-whitespace character independently matched the direct RTF decoder; no wording paraphrased or omitted.",
+      "url": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/",
+      "source_url": "https://download.visualstudio.microsoft.com/download/pr/73aabf2e-9532-4f68-99f7-3247081a619c/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+      "source_archive_sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+      "source_member": "ux.cab/u4 (license.rtf)",
+      "applies_to": [
+        "faster-whisper-cpu-windows-x64",
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary",
+      "redistribution_permission_established": false,
+      "independent_text_verification": {
+        "reader": "LibreOfficeDev26.8.0.0.alpha0",
+        "build": "2c87e51eeaa2b413ff4ae097b2705eea1995d8e5",
+        "input": "Original hash-pinned RTF, imported directly with a fresh private profile",
+        "comparison": "Entire text matches after whitespace and paragraph-leading middle-dot/bullet-glyph normalization only; no other character normalization"
+      }
+    },
+    {
+      "id": "microsoft-vc-runtime-zh-cn",
+      "version": "Cpp_2015-2022_CHS.2052",
+      "title": "Microsoft Visual C++2015–2022 Runtime license terms (zh-CN)",
+      "path": "microsoft-vc-runtime-zh-cn.txt",
+      "sha256": "bf17656105173f49b79623f1508c4c8eddf9b09e78a6ea79ee5aad99015eb38e",
+      "text_bytes": 6113,
+      "raw_sha256": "a808b4933ce3b3e0893504dbef43ebf90b8b567f94bd6481b6315ed9141e1b11",
+      "raw_bytes": 18214,
+      "source_encoding": "rtf",
+      "locale": "zh-CN",
+      "normalization": "Font-aware RTF decoding (SimSun charset134 GBK; other runs CP1252), paragraph/indentation normalization by Pandoc3.1.11.1. Every non-whitespace character independently matched the direct RTF decoder; no wording paraphrased or omitted.",
+      "url": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/",
+      "source_url": "https://download.visualstudio.microsoft.com/download/pr/73aabf2e-9532-4f68-99f7-3247081a619c/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+      "source_archive_sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+      "source_member": "ux.cab/u28 (2052\\license.rtf)",
+      "applies_to": [
+        "faster-whisper-cpu-windows-x64",
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary",
+      "redistribution_permission_established": false,
+      "independent_text_verification": {
+        "reader": "LibreOfficeDev26.8.0.0.alpha0",
+        "build": "2c87e51eeaa2b413ff4ae097b2705eea1995d8e5",
+        "input": "Original hash-pinned RTF, imported directly with a fresh private profile",
+        "comparison": "Entire text matches after whitespace and paragraph-leading middle-dot/bullet-glyph normalization only; no other character normalization"
+      }
     }
   ]
 }

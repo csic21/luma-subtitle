@@ -81,6 +81,23 @@ decode = tagger.decode
         with self.assertRaises(self.helper.LumaNagisaInitializationError): self.initialize()
         self.assertFalse(issubclass(self.helper.LumaNagisaInitializationError, Exception))
 
+    def test_legitimate_upstream_finder_is_preserved_and_luma_finder_removed(self):
+        upstream = '''\nimport sys
+class UpstreamFinder:
+    def find_spec(self, fullname, path=None, target=None): return None
+upstream_finder = UpstreamFinder()
+sys.meta_path.append(upstream_finder)
+'''
+        (self.package / '__init__.py').write_text(self.initialization + upstream, encoding='utf-8')
+        module = self.initialize()
+        try:
+            self.assertEqual(tuple(sys.meta_path), self.finders + (module.upstream_finder,))
+            self.assertTrue(all(self.helper._luma_nagisa_restoration.values()))
+            self.assertIs(module.Tagger.__init__, sys.modules['nagisa.tagger'].ORIGINAL_INIT)
+        finally:
+            sys.meta_path.remove(module.upstream_finder)
+        self.assert_restored()
+
     def test_second_default_construction_and_explicit_arguments_fail_closed(self):
         for initialization in (self.initialization + '\nother = Tagger()\n', self.initialization.replace('Tagger()', "Tagger(params='override')")):
             with self.subTest(initialization=initialization):

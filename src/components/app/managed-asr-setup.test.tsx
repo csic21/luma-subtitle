@@ -156,6 +156,25 @@ describe("managed ASR setup UI", () => {
     click("asr.terms.reviewInstall"); expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
     act(() => renderer!.root.findByType(Dialog).props.onOpenChange(false)); expect(mocks.manager.perform).not.toHaveBeenCalled();
   });
+  it("discloses the optional Microsoft source, bytes and platform trust checks before assent", () => {
+    const runtime = useRecipe();
+    mocks.manager.catalog!.runtimes[0] = { ...runtime, recipe: { ...runtime.recipe!, windows_crt: "msvc-14.44.35211-x64" } };
+    mount(); click("asr.terms.reviewInstall");
+    expect(text()).toContain("download.visualstudio.microsoft.com");
+    expect(text()).toContain("26,935,768 bytes");
+    expect(text()).toContain(t("asr.terms.windowsTrust"));
+    expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
+    expect(mocks.manager.perform).not.toHaveBeenCalled();
+    click("asr.terms.decline"); expect(mocks.manager.perform).not.toHaveBeenCalled();
+    expect(text()).toContain(t("asr.managed.windowsTrustNetwork"));
+    const current = mocks.manager.catalog!.runtimes[0];
+    mocks.manager.consents = [{ component_id: current.id, plan_sha256: current.plan_sha256!, terms: runtimeAcknowledgement(current)!.acknowledged_terms }];
+    mocks.manager.components = [installed("runtime")];
+    act(() => renderer!.update(<Harness />));
+    expect(text()).toContain(t("asr.managed.windowsTrustNetwork"));
+    expect(buttons("asr.managed.repair")[0].props.disabled).toBe(false);
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+  });
   it("does not infer assent from an installed runtime and only reuses matching backend receipts for repair", () => {
     const runtime = useRecipe(); mocks.manager.components = [installed("runtime")]; mount();
     click("asr.terms.reviewRepair"); expect(mocks.manager.perform).not.toHaveBeenCalled(); click("asr.terms.decline");

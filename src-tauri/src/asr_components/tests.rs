@@ -320,14 +320,15 @@ fn native_component_archive_installs_repairs_and_removes() {
     let mut installed_paths = Vec::new();
     for _ in 0..2 {
         let staging = store::Staging::create(&fixture.root).unwrap();
+        let lifetime = setup_process::SetupLifetime::new(&staging, &_setup);
         let files = archive::extract(&archive_path, &staging.payload(), runtime.installed_bytes, runtime.max_files, &AtomicBool::new(false)).unwrap();
-        tauri::async_runtime::block_on(self_test(&staging.payload(), runtime, &AtomicBool::new(false))).unwrap();
+        tauri::async_runtime::block_on(self_test(&staging.payload(), runtime, &AtomicBool::new(false), &lifetime)).unwrap();
         store::write_receipt(&staging.payload(), &component, files).unwrap();
         store::validate_files(&staging.payload(), &component, &AtomicBool::new(false)).unwrap();
         let installed = store::commit(&fixture.root, &component, &staging).unwrap();
         let path = PathBuf::from(installed.path.unwrap());
         // Prove private Python and libraries still work after atomic relocation.
-        tauri::async_runtime::block_on(self_test(&path, runtime, &AtomicBool::new(false))).unwrap();
+        tauri::async_runtime::block_on(self_test(&path, runtime, &AtomicBool::new(false), &lifetime)).unwrap();
         assert_eq!(store::status(&fixture.root, &component).state, "installed");
         installed_paths.push(path);
     }
@@ -548,13 +549,15 @@ fn owned_assembly_cancellation_kills_and_reaps_without_detached_readers() {
     use std::os::unix::fs::PermissionsExt;
     tauri::async_runtime::block_on(async {
         let fixture = Fixture::new(); let staging = store::Staging::create(&fixture.root).unwrap();
+        let lease = store::acquire_setup_lease(&fixture.root).unwrap();
+        let lifetime = setup_process::SetupLifetime::new(&staging, &lease);
         let mut runtime = recipe_runtime(); runtime.entrypoint = "python-fixture".into();
         let executable = staging.payload().join(&runtime.entrypoint);
         fs::write(&executable,b"#!/bin/sh\necho $$ > child.pid\nwhile :; do :; done\n").unwrap(); fs::set_permissions(&executable,fs::Permissions::from_mode(0o700)).unwrap();
         let cancel = Arc::new(AtomicBool::new(false)); let flag = cancel.clone();
         let task = tauri::async_runtime::spawn(async move { tokio::time::sleep(Duration::from_millis(150)).await; flag.store(true,Ordering::SeqCst); });
         let started = Instant::now();
-        let result = assembly::run(&staging.payload(),&staging.directory.join("unused.py"),&staging.directory.join("unused.json"),&staging.directory.join("unused-wheels"),&runtime,&cancel).await;
+        let result = assembly::run(&staging.payload(),&staging.directory.join("unused.py"),&staging.directory.join("unused.json"),&staging.directory.join("unused-wheels"),&runtime,&cancel,&lifetime).await;
         task.await.unwrap(); assert!(result.unwrap_err().contains("cancelled")); assert!(started.elapsed() < Duration::from_secs(5));
         let pid = fs::read_to_string(staging.payload().join("child.pid")).unwrap();
         assert!(!std::process::Command::new("/bin/kill").args(["-0",pid.trim()]).status().unwrap().success());
@@ -644,24 +647,50 @@ fn native_direct_recipe_installs_repairs_and_removes() {
         let path = inputs.join(&wheel.filename);
         download::verify_digest(store::regular_file(&path).unwrap().len(),&store::hash_file(&path).unwrap(),wheel.bytes,&wheel.sha256).unwrap();
     }
-    let fixture = Fixture::new(); let _setup = store::acquire_setup_lease(&fixture.root).unwrap(); let cancel = AtomicBool::new(false);
+    let crt_package = recipe.windows_crt.as_ref().map(|_| {
+        let artifact = direct_crt::artifact(); let path = inputs.join(&artifact.sha256);
+        download::verify_digest(store::regular_file(&path).unwrap().len(),&store::hash_file(&path).unwrap(),artifact.bytes,&artifact.sha256).unwrap();
+        path
+    });
+    let mut fixture = Fixture::new();
+    let unicode_root = fixture.base.join("Managed runtime é 测试");
+    fs::rename(&fixture.root,&unicode_root).unwrap(); fixture.root = unicode_root;
+    let _setup = store::acquire_setup_lease(&fixture.root).unwrap(); let cancel = AtomicBool::new(false);
     let mut installed_paths = Vec::new();
     for _ in 0..2 {
         let staging = store::Staging::create(&fixture.root).unwrap();
-        let files = tar_bootstrap::extract(&python_archive,&staging.payload(),recipe.python.installed_bytes,recipe.python.max_files,&cancel).unwrap();
+        let lifetime = setup_process::SetupLifetime::new(&staging, &_setup);
+        let mut files = tar_bootstrap::extract(&python_archive,&staging.payload(),recipe.python.installed_bytes,recipe.python.max_files,&cancel).unwrap();
+        if let Some(package) = &crt_package {
+            tauri::async_runtime::block_on(direct_crt::install(package,&staging.directory,&staging.payload(),&cancel,direct_crt::TrustMode::Online,&lifetime)).unwrap();
+        }
+        let crt_receipts = if crt_package.is_some() { direct_crt::verified_files(&staging.payload(),&cancel).unwrap() } else { Vec::new() };
+        for receipt in &crt_receipts {
+            if let Some(existing) = files.iter().find(|entry| entry.path == receipt.path) {
+                assert_eq!(existing.bytes,receipt.bytes); assert_eq!(existing.sha256,receipt.sha256);
+            } else { files.push(receipt.clone()); }
+        }
         let wheelhouse = staging.directory.join("wheelhouse"); fs::create_dir(&wheelhouse).unwrap();
         for wheel in &recipe.wheels { fs::copy(inputs.join(&wheel.filename),wheelhouse.join(&wheel.filename)).unwrap(); }
         wheel_preflight::validate(&wheelhouse,recipe,&files,&cancel).unwrap();
         let script = staging.directory.join("offline-assemble.py"); fs::write(&script,assembly::SCRIPT).unwrap();
         let lock = serde_json::json!({"schema":1,"platform":runtime.platform,"python":"3.12","wheels":recipe.wheels});
         let lock_path = staging.directory.join("wheel-lock.json"); fs::write(&lock_path,serde_json::to_vec(&lock).unwrap()).unwrap();
-        tauri::async_runtime::block_on(assembly::run(&staging.payload(),&script,&lock_path,&wheelhouse,runtime,&cancel)).unwrap();
+        tauri::async_runtime::block_on(assembly::run(&staging.payload(),&script,&lock_path,&wheelhouse,runtime,&cancel,&lifetime)).unwrap();
         assembly::verify_report(&staging.payload(),runtime,recipe).unwrap();
+        if crt_package.is_some() {
+            let after_pip = direct_crt::verified_files(&staging.payload(),&cancel).unwrap();
+            assert_eq!(serde_json::to_value(&after_pip).unwrap(),serde_json::to_value(&crt_receipts).unwrap(),"Offline pip changed the fixed CRT receipts");
+        }
         let files = assembly::inventory(&staging.payload(),runtime.installed_bytes,runtime.max_files,&cancel).unwrap();
-        tauri::async_runtime::block_on(self_test(&staging.payload(),runtime,&cancel)).unwrap();
+        tauri::async_runtime::block_on(self_test(&staging.payload(),runtime,&cancel,&lifetime)).unwrap();
         store::write_receipt(&staging.payload(),&component,files).unwrap(); store::validate_files(&staging.payload(),&component,&cancel).unwrap();
         let installed = store::commit(&fixture.root,&component,&staging).unwrap(); let path = PathBuf::from(installed.path.unwrap());
-        tauri::async_runtime::block_on(self_test(&path,runtime,&cancel)).unwrap();
+        tauri::async_runtime::block_on(self_test(&path,runtime,&cancel,&lifetime)).unwrap();
+        if crt_package.is_some() {
+            let relocated_crt = direct_crt::verified_files(&path,&cancel).unwrap();
+            assert_eq!(serde_json::to_value(&relocated_crt).unwrap(),serde_json::to_value(&crt_receipts).unwrap(),"Activation changed the fixed CRT receipts");
+        }
         assert_eq!(store::status(&fixture.root,&component).state,"installed"); installed_paths.push(path);
     }
     assert_ne!(installed_paths[0],installed_paths[1]); assert!(installed_paths[0].join(&runtime.entrypoint).is_file());

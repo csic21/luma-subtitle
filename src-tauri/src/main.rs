@@ -21,6 +21,8 @@ mod tests;
 use state::AppState;
 
 fn main() {
+    #[cfg(windows)]
+    if let Some(code) = asr_components::signature_helper_from_args() { std::process::exit(code); }
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())

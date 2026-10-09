@@ -32,6 +32,7 @@ from build import unpack_runtime
 from native_inventory import closure, digest, inventory
 from license_inventory import discover as discover_installed_licenses
 from crt_proof import copy_proof_crt
+from repro_diagnostics import compare_wheels
 
 ALLOWED = {'codeload.github.com', 'github.com', 'files.pythonhosted.org', 'huggingface.co', 'raw.githubusercontent.com'}
 
@@ -279,6 +280,44 @@ def validate_source_version(source):
         raise ValueError('Source version is not literal 4.8.2')
 
 
+def deterministic_environment(work, env, lock):
+    mapped_root = r'C:\luma-ct2-build'
+    return dict(env, SOURCE_DATE_EPOCH=str(lock['source_date_epoch']),
+                _CL_=f'/Brepro /Z7 /experimental:deterministic /pathmap:{work}={mapped_root}',
+                _LINK_='/Brepro /INCREMENTAL:NO', CTRANSLATE2_ROOT=str(work / 'ct2-install'))
+
+
+def probe_path_mapping(args, env, lock):
+    work = args.work / 'compiler-probe'; work.mkdir()
+    source = work / 'probe.cpp'
+    source.write_text('const char* source_file = __FILE__;\n', encoding='ascii')
+    output = args.reports / 'compiler-probe.log'
+    command(['cl', '/nologo', '/EP', source], cwd=work,
+            env=deterministic_environment(work, env, lock), logfile=output, timeout=30)
+    text = output.read_text(encoding='utf-8', errors='replace')
+    expected = json.dumps(r'C:\luma-ct2-build\probe.cpp')
+    if expected not in text or re.search(r'warning D(?:9002|9007)', text):
+        raise RuntimeError('Pinned compiler did not apply the required deterministic path mapping')
+    dump(args.reports / 'compiler-probe.json', {'schema': 1, 'passed': True,
+         'mapped_source': r'C:\luma-ct2-build\probe.cpp', 'output_sha256': digest(output),
+         'compiler_flags': '/Brepro /Z7 /experimental:deterministic /pathmap:<build-root>=C:\\luma-ct2-build'})
+
+
+def enforce_independent_proofs(status, functional_proof):
+    error = None
+    try:
+        functional_proof()
+        status['native_inference_passed'] = True
+    except Exception as failure:
+        error = failure
+        status['functional_error'] = f'{type(failure).__name__}: {failure}'
+    if not status['wheel_reproduced']:
+        status['reproducibility_error'] = 'Independent builds differ; reproducibility has not been established'
+        raise RuntimeError(status['reproducibility_error'])
+    if error is not None:
+        raise error
+
+
 def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
     work = args.work / f'build-{number}'; work.mkdir()
     sources = work / 'sources'; sources.mkdir()
@@ -287,9 +326,7 @@ def build_once(number, args, lock, runtime, cmake, ninja, env, provenance):
         extract_source(fetch(item, args.cache), destination)
     ct = sources / 'ctranslate2'; dn = sources / 'onednn'
     validate_source_version((ct / 'python/ctranslate2/version.py').read_text(encoding='utf-8'))
-    local_env = dict(env, SOURCE_DATE_EPOCH=str(lock['source_date_epoch']),
-                     _CL_=f'/Brepro /Z7 /pathmap:{work}=C:\\luma-ct2-build',
-                     _LINK_='/Brepro /INCREMENTAL:NO', CTRANSLATE2_ROOT=str(work / 'ct2-install'))
+    local_env = deterministic_environment(work, env, lock)
     common = ['-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', f'-DCMAKE_MAKE_PROGRAM={ninja}',
               '-DCMAKE_C_COMPILER=cl', '-DCMAKE_CXX_COMPILER=cl', '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
               '-DCMAKE_SHARED_LINKER_FLAGS=/Brepro /INCREMENTAL:NO', '-DCMAKE_EXE_LINKER_FLAGS=/Brepro /INCREMENTAL:NO']
@@ -432,10 +469,13 @@ def main():
             raise RuntimeError('Pinned PBS archive lacks the Python development inputs')
         env = build_environment(runtime)
         cmake, ninja = install_build_tools(runtime, lock, args.cache, args.work, env, args.reports)
+        probe_path_mapping(args, env, lock)
         provenance = {'schema': 1, 'variant': lock['variant'], 'luma_source_sha': args.source_sha,
                       'upstream': lock['sources'], 'ct2_cmake': lock['ct2_cmake'], 'onednn_cmake': lock['onednn_cmake'],
                       'build_wheels': lock['build_wheels'], 'python_runtime': runtime_item,
                       'source_date_epoch': lock['source_date_epoch'], 'toolchain': toolchain,
+                      'native_compile_flags': '/Brepro /Z7 /experimental:deterministic /pathmap:<build-root>=C:\\luma-ct2-build',
+                      'native_link_flags': '/Brepro /INCREMENTAL:NO',
                       'notices': load(HERE / 'notices.lock.json'), 'publication_authorized': False,
                       'packaging_changes': ['PE executable payloads are not modified.', 'Wheel build tag: 1lumacpu.',
                                             'Remove GPU classifier; add native licenses and provenance; normalize ZIP and RECORD.']}
@@ -446,11 +486,14 @@ def main():
         status['wheel'] = {'filename': first.name, 'bytes': first.stat().st_size, 'sha256': digest(first)}
         second = build_once(2, args, lock, runtime, cmake, ninja, env, provenance)
         status['second_sha256'] = digest(second)
-        if digest(first) != digest(second):
-            raise RuntimeError('Independent builds differ; reproducibility has not been established')
-        status['wheel_reproduced'] = True
-        private_proof(args, lock, first, runtime_archive, env)
-        status['native_inference_passed'] = True
+        comparison = compare_wheels(first, second)
+        dump(args.reports / 'wheel-comparison.json', comparison)
+        status['wheel_reproduced'] = comparison['identical']
+        status['different_wheel_members'] = comparison['different_members']
+        # Functional diagnostics are independent: a repeatability mismatch must
+        # not suppress first-wheel closure/import/Tiny evidence. Final failure is
+        # retained even if that exact first wheel works correctly.
+        enforce_independent_proofs(status, lambda: private_proof(args, lock, first, runtime_archive, env))
         status['passed'] = True
     except BaseException as error:
         status.update(passed=False, error=f'{type(error).__name__}: {error}')

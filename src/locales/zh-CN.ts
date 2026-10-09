@@ -13,6 +13,8 @@ export const zhCN = {
     "asr.terms.planHash": "安装方案 SHA-256：",
     "asr.terms.sources": "来源：",
     "asr.terms.scope": "下方为第三方提供的条款原文。Luma 不提供法律建议，也不保证这些条款允许您的预期用途。拒绝不会开始下载，也不会更改当前安装。",
+    "asr.terms.windowsTrust": "Windows 将验证 Microsoft 组件的数字签名。安装和修复时，即使组件文件已缓存，系统也可能向证书颁发机构查询公开的证书状态；不会发送音频或账户凭据。信任验证失败会停止安装，不会更改 Windows 安全设置。",
+    "asr.managed.windowsTrustNetwork": "安装和修复可能需要联网完成 Windows 证书检查，即使组件下载已缓存。检查失败会保留当前组件。",
     "asr.terms.invalid": "确切安装方案或条款不完整，暂不可安装。请刷新目录或使用其他受支持组件。",
     "asr.terms.acceptLabel": "我接受上方所展示的此组件的确切第三方条款。",
     "asr.terms.decline": "拒绝并取消",

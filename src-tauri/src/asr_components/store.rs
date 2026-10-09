@@ -1,7 +1,7 @@
 use super::{archive::relative_path, catalog::Component, ComponentStatus};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs::{self, OpenOptions}, io::{Read, Write}, path::{Path, PathBuf}, sync::atomic::AtomicBool};
+use std::{fs::{self, OpenOptions}, io::{Read, Write}, path::{Path, PathBuf}, sync::{atomic::AtomicBool, Arc}};
 use uuid::Uuid;
 
 const OWNER: &str = "luma-subtitle-managed-asr-v1\n";
@@ -75,7 +75,9 @@ fn verify_owned(path: &Path) -> Result<(), String> {
 }
 /// OS-backed lock is released even after a process crash. It prevents two app
 /// instances from recovering/deleting one another's active staging directories.
-pub(super) fn acquire_setup_lease(root: &Path) -> Result<fs::File, String> {
+#[derive(Clone)]
+pub(super) struct SetupLease { _file: Arc<fs::File> }
+pub(super) fn acquire_setup_lease(root: &Path) -> Result<SetupLease, String> {
     verify_owned(root)?;
     let path = root.join(".setup.lock");
     if fs::symlink_metadata(&path).is_ok() { regular_file(&path)?; }
@@ -83,7 +85,7 @@ pub(super) fn acquire_setup_lease(root: &Path) -> Result<fs::File, String> {
     #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
     let file = options.open(path).map_err(|e| e.to_string())?;
     fs2::FileExt::try_lock_exclusive(&file).map_err(|_| "Another app instance is changing engine components. Wait for it to finish or close it, then retry.")?;
-    Ok(file)
+    Ok(SetupLease { _file: Arc::new(file) })
 }
 pub(super) fn acquire_use_lease(root: &Path, exclusive: bool) -> Result<fs::File, String> {
     verify_owned(root)?;
@@ -139,19 +141,36 @@ pub(super) fn prepare_component(root: &Path, component: &Component) -> Result<Pa
     create_private_dir(&directory.join("activations"))?;
     Ok(directory)
 }
-pub(super) struct Staging { pub directory: PathBuf }
+/// Cleanup belongs to the last owner, including an aborted setup child's reaper.
+#[derive(Clone)]
+pub(super) struct Staging { pub directory: PathBuf, _cleanup: Arc<StagingCleanup> }
+struct StagingCleanup {
+    directory: PathBuf,
+    #[cfg(test)] before_cleanup: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+}
 impl Staging {
     pub(super) fn create(root: &Path) -> Result<Self, String> {
         verify_owned(root)?;
         let staging = root.join(".staging"); owned_dir(&staging)?;
         let directory = staging.join(Uuid::new_v4().to_string()); owned_dir(&directory)?;
         create_private_dir(&directory.join("payload"))?;
-        Ok(Self { directory })
+        Ok(Self { _cleanup: Arc::new(StagingCleanup {
+            directory: directory.clone(),
+            #[cfg(test)] before_cleanup: std::sync::Mutex::new(None),
+        }), directory })
     }
     pub(super) fn payload(&self) -> PathBuf { self.directory.join("payload") }
+    #[cfg(test)]
+    pub(super) fn observe_cleanup(&self, observer: impl FnOnce() + Send + 'static) {
+        *self._cleanup.before_cleanup.lock().unwrap() = Some(Box::new(observer));
+    }
 }
-impl Drop for Staging {
-    fn drop(&mut self) { if verify_owned(&self.directory).is_ok() { let _ = fs::remove_dir_all(&self.directory); } }
+impl Drop for StagingCleanup {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        if let Some(observer) = self.before_cleanup.get_mut().unwrap().take() { observer(); }
+        if verify_owned(&self.directory).is_ok() { let _ = fs::remove_dir_all(&self.directory); }
+    }
 }
 pub(super) fn recover_staging(root: &Path) -> Result<(), String> {
     let staging = root.join(".staging");

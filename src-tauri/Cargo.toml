@@ -45,3 +45,6 @@ tauri-plugin-dialog = "=2.6.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "=2.10.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }

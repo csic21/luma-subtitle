@@ -349,7 +349,7 @@ def run_offline_assembly(root, runtime, lock_path, wheels, cache, output):
     shutil.rmtree(wheelhouse); shutil.rmtree(poison)
 
 
-def build(pack_id, output, cache, source_sha, native=True, installer='wheel'):
+def build(pack_id, output, cache, source_sha, native=True, installer='wheel', windows_crt=None):
     config = json.loads((ROOT / 'packs.json').read_text())
     pack = next(p for p in config['packs'] if p['id'] == pack_id)
     native_platform = 'windows-x64' if sys.platform == 'win32' and platform.machine().lower() in {'amd64', 'x86_64'} else 'macos-arm64' if sys.platform == 'darwin' and platform.machine() == 'arm64' else None
@@ -386,6 +386,11 @@ def build(pack_id, output, cache, source_sha, native=True, installer='wheel'):
     else:
         raise ValueError('Unknown reviewed assembly method')
     clean(root, site)
+    if windows_crt is not None:
+        if not native or pack['platform'] != 'windows-x64':
+            raise ValueError('Direct CRT inputs require a native Windows runtime')
+        from windows_crt_proof import install as install_crt
+        install_crt(root, windows_crt)
     prune_reviewed_files(root, pack_id)
     copy_runtime_licenses(root, pack['platform'])
     copy_supplemental_notices(root, pack)
