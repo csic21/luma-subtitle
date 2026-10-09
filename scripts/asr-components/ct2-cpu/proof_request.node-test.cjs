@@ -91,15 +91,29 @@ test('oversized request is rejected before parsing', () => { assert.throws(() =>
 
 const fs = require('node:fs');
 const path = require('node:path');
-function workflowJobs() {
-  const text = fs.readFileSync(path.join(__dirname, '../../../.github/workflows/asr-ct2-cpu.yml'), 'utf8');
-  const section = text.slice(text.indexOf('\njobs:\n') + 7);
+function readWorkflow() {
+  return fs.readFileSync(path.join(__dirname, '../../../.github/workflows/asr-ct2-cpu.yml'), 'utf8').replace(/\r\n/g, '\n');
+}
+function workflowJobs(raw = readWorkflow()) {
+  const text = raw.replace(/\r\n/g, '\n');
+  const marker = '\njobs:\n', start = text.indexOf(marker);
+  assert(start >= 0, 'Required workflow jobs marker missing');
+  assert.equal(text.indexOf(marker, start + marker.length), -1, 'Duplicate workflow jobs marker');
+  const section = text.slice(start + marker.length);
   const jobs = Object.fromEntries([...section.matchAll(/^  ([a-z][a-z0-9-]*):\n([\s\S]*?)(?=^  [a-z][a-z0-9-]*:\n|$(?![\s\S]))/gm)].map(m => [m[1], m[2]]));
   assert.deepEqual(Object.keys(jobs).sort(), ['request', 'source-tests', 'windows-cpu-proof', 'windows-direct-crt-signatures']);
   return { text, jobs };
 }
-test('PR revisions run cheap source guards and only inert request-path pushes can trigger the native gate', () => {
-  const { text, jobs } = workflowJobs();
+test('proof workflow parser normalizes LF and CRLF and rejects missing or duplicate jobs markers', () => {
+  const lf = readWorkflow();
+  assert.deepEqual(workflowJobs(lf), workflowJobs(lf.replace(/\n/g, '\r\n')));
+  assert.throws(() => workflowJobs(lf.replace('\njobs:\n', '\nnot-jobs:\n')), /marker missing/);
+  assert.throws(() => workflowJobs(lf + '\njobs:\n'), /Duplicate/);
+});
+for (const ending of ['LF', 'CRLF']) {
+const rawWorkflow = ending === 'LF' ? readWorkflow() : readWorkflow().replace(/\n/g, '\r\n');
+test('PR revisions run cheap source guards and only inert request-path pushes can trigger the native gate' + ` (${ending})`, () => {
+  const { text, jobs } = workflowJobs(rawWorkflow);
   assert(text.includes('  pull_request:'));
   assert(text.includes("  push:\n    branches: [feat/optional-asr-engines]\n    paths: ['.github/requests/ct2-cpu-proof.json']"));
   assert(jobs['source-tests'].includes('name: CPU proof source guards'));
@@ -113,8 +127,8 @@ test('PR revisions run cheap source guards and only inert request-path pushes ca
   assert(jobs.request.includes('source_sha: ${{ steps.request.outputs.source_sha }}'));
   assert(!/contents: write|actions: write|secrets: inherit|pull_request_target:/.test(text));
 });
-test('native jobs require successful guards and explicit request/manual/source route, and never start after cancellation', () => {
-  const { jobs } = workflowJobs();
+test('native jobs require successful guards and explicit request/manual/source route, and never start after cancellation' + ` (${ending})`, () => {
+  const { jobs } = workflowJobs(rawWorkflow);
   const expected = "always() && !cancelled() && needs.source-tests.result == 'success' && (needs.request.result == 'success' || inputs.source_sha || github.event_name == 'workflow_dispatch')";
   for (const name of ['windows-cpu-proof', 'windows-direct-crt-signatures']) {
     const job = jobs[name], condition = job.match(/^    if: (.+)$/m)?.[1];
@@ -138,8 +152,8 @@ test('native jobs require successful guards and explicit request/manual/source r
     }
   }
 });
-test('reusable candidate export remains bound to the dedicated validated caller and exact four files', () => {
-  const { jobs } = workflowJobs(), job = jobs['windows-cpu-proof'];
+test('reusable candidate export remains bound to the dedicated validated caller and exact four files' + ` (${ending})`, () => {
+  const { jobs } = workflowJobs(rawWorkflow), job = jobs['windows-cpu-proof'];
   const expected = "${{ inputs.publication && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && github.workflow == 'Publish reviewed CPU wheel' && startsWith(github.workflow_ref, 'csic21/luma-subtitle/.github/workflows/asr-cpu-wheel-publish.yml@') }}";
   assert.equal(job.match(/^      CPU_CANDIDATE_EXPORT: (.+)$/m)?.[1], expected);
   assert(job.includes("if: success() && env.CPU_CANDIDATE_EXPORT == 'true'"));
@@ -150,13 +164,16 @@ test('reusable candidate export remains bound to the dedicated validated caller 
   assert(job.includes('candidate_artifact_id: ${{ steps.candidate-upload.outputs.artifact-id }}'));
 });
 
-test('diagnostic upload is opt-in, failure-only, one day, literal four-file scope, and never reusable publication', () => {
-  const { text, jobs } = workflowJobs(), job = jobs['windows-cpu-proof'];
+test('diagnostic upload is opt-in, failure-only, one day, literal four-file scope, and never reusable publication' + ` (${ending})`, () => {
+  const { text, jobs } = workflowJobs(rawWorkflow), job = jobs['windows-cpu-proof'];
   assert(jobs.request.includes('diagnostic_artifact: ${{ steps.request.outputs.diagnostic_artifact }}'));
   assert.equal(job.match(/^      CPU_DIAGNOSTIC_EXPORT: (.+)$/m)?.[1],
     "${{ needs.request.outputs.diagnostic_artifact == 'cpu-wheel-source-notices-1-day' && github.repository == 'csic21/luma-subtitle' && github.event_name == 'push' && github.ref == 'refs/heads/feat/optional-asr-engines' && !inputs.source_sha && !inputs.publication }}");
   assert(job.includes("if: failure() && !cancelled() && env.CPU_DIAGNOSTIC_EXPORT == 'true' && hashFiles('dist/ct2-cpu-diagnostic/diagnostic-manifest.json') != ''"));
-  const section = job.slice(job.indexOf('      - name: Retain explicit failed-verifier diagnostic'), job.indexOf('      - name: Export the three reviewed'));
+  const start = job.indexOf('      - name: Retain explicit failed-verifier diagnostic');
+  const end = job.indexOf('      - name: Export the three reviewed');
+  assert(start >= 0 && end > start, 'Required diagnostic/export sections missing or reordered');
+  const section = job.slice(start, end);
   assert(section.includes('retention-days: 1\n'));
   assert(section.includes('overwrite: false'));
   assert(section.includes('name: ct2-cpu-DIAGNOSTIC-NOT-FOR-RELEASE-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}'));
@@ -165,6 +182,8 @@ test('diagnostic upload is opt-in, failure-only, one day, literal four-file scop
     'luma-ct2-cpu-4.8.2-1-sources.zip', 'luma-ct2-cpu-4.8.2-1-notices.zip', 'diagnostic-manifest.json'].sort());
   assert(!text.includes('actions: write'));
 });
+
+}
 
 test('diagnostic manifest cannot satisfy the unchanged publisher proof schema even if renamed', () => {
   const publisher = require('./publish.cjs');

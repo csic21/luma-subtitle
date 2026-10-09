@@ -10,6 +10,15 @@ const BASE = 'a'.repeat(40), REPLAY = 'b'.repeat(40), OTHER = 'c'.repeat(40);
 const G1 = '1'.repeat(40), G2 = '2'.repeat(40), R1 = '3'.repeat(40), R2 = '4'.repeat(40), BLOB = '5'.repeat(40), OLD = '6'.repeat(40), SAME = '7'.repeat(40);
 const clone = x => JSON.parse(JSON.stringify(x));
 const entry = (path, sha, type = 'blob', mode = type === 'tree' ? '040000' : '100644') => ({ path, sha, type, mode });
+// Test parsing only: Windows checkout line endings must not alter source bytes.
+const normalizeWorkflow = text => text.replace(/\r\n/g, '\n');
+const readWorkflow = (name = 'asr-ct2-cpu-replay.yml') => normalizeWorkflow(fs.readFileSync(path.join(__dirname, '../../../.github/workflows', name), 'utf8'));
+function requiredMarker(text, marker) {
+  const index = text.indexOf(marker);
+  assert(index >= 0, `Required workflow marker missing: ${JSON.stringify(marker)}`);
+  assert.equal(text.indexOf(marker, index + marker.length), -1, `Duplicate workflow marker: ${JSON.stringify(marker)}`);
+  return index;
+}
 function fixture() {
   const request = { schema_version: 1, purpose: p.PURPOSE, source_sha: BASE,
     producer: clone(p.PRODUCER), artifact: clone(p.ARTIFACT), manifest: clone(p.MANIFEST) };
@@ -151,8 +160,8 @@ test('existing archive is never overwritten', async t => {
   await assert.rejects(p.downloadExactArchive({ github: {}, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination }), /fresh/);
   assert.equal(fs.readFileSync(destination, 'utf8'), 'keep');
 });
-test('workflow grants Actions read only to the explicit retrieval proof, with metadata-only outputs', () => {
-  const text = fs.readFileSync(path.join(__dirname, '../../../.github/workflows/asr-ct2-cpu-replay.yml'), 'utf8');
+function assertWorkflowGuards(raw) {
+  const text = normalizeWorkflow(raw);
   assert(text.includes("paths: ['.github/requests/ct2-cpu-replay.json']"));
   assert(!/workflow_dispatch:|workflow_call:|pull_request_target:|contents: write|actions: write|secrets: inherit|id-token:/.test(text));
   assert.equal((text.match(/actions: read/g) || []).length, 1);
@@ -166,7 +175,8 @@ test('workflow grants Actions read only to the explicit retrieval proof, with me
   assert.equal(uploads.length, 1);
   assert.equal(uploads[0].trim(), '${{ runner.temp }}/ct2-replay-controller/retrieval.json\n            ${{ runner.temp }}/ct2-replay-reports/**/*.json\n            ${{ runner.temp }}/ct2-replay-reports/**/*.log');
   for (const [, ref] of text.matchAll(/uses: ([^\s]+)/g)) assert(/@[a-f0-9]{40}$/.test(ref), ref);
-});
+}
+test('workflow grants Actions read only to the explicit retrieval proof, with metadata-only outputs', () => assertWorkflowGuards(readWorkflow()));
 test('replay retrieval metadata remains ineligible for the unchanged publisher', () => {
   const publisher = require('./publish.cjs');
   assert.throws(() => publisher.validateProof({ schema_version: 1, kind: 'ct2-cpu-diagnostic-retrieval',
@@ -176,18 +186,59 @@ test('replay retrieval metadata remains ineligible for the unchanged publisher',
 test('CPU proof and publisher github-script pins use the independently verified official v7.0.1 commit', () => {
   const official = 'actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea';
   for (const [name, count] of [['asr-ct2-cpu.yml', 1], ['asr-cpu-wheel-publish.yml', 2], ['asr-ct2-cpu-replay.yml', 2]]) {
-    const text = fs.readFileSync(path.join(__dirname, '../../../.github/workflows', name), 'utf8');
+    const text = readWorkflow(name);
     const pins = [...text.matchAll(/uses: (actions\/github-script@\S+)/g)].map(match => match[1]);
     assert.deepEqual(pins, Array(count).fill(official));
   }
 });
 
-function cleanupScript() {
-  const workflow = fs.readFileSync(path.join(__dirname, '../../../.github/workflows/asr-ct2-cpu-replay.yml'), 'utf8');
-  const cleanup = workflow.slice(workflow.indexOf('      - name: Remove only owned replay private inputs'));
-  assert(cleanup.includes('if: always()')); assert(cleanup.includes('timeout-minutes: 5'));
-  return cleanup.slice(cleanup.indexOf('        run: |\n') + '        run: |\n'.length).split('\n').map(line => line.replace(/^          /, '')).join('\n');
+function cleanupScript(raw = readWorkflow()) {
+  const workflow = normalizeWorkflow(raw);
+  const upload = requiredMarker(workflow, '      - name: Upload bounded replay metadata');
+  const start = requiredMarker(workflow, '      - name: Remove only owned replay private inputs');
+  assert(start > upload, 'Cleanup must follow metadata upload');
+  const cleanup = workflow.slice(start);
+  const condition = requiredMarker(cleanup, '        if: always()\n');
+  const timeout = requiredMarker(cleanup, '        timeout-minutes: 5\n');
+  const shell = requiredMarker(cleanup, '        shell: python\n');
+  const marker = '        run: |\n', run = requiredMarker(cleanup, marker);
+  assert(condition < timeout && timeout < shell && shell < run, 'Cleanup headers must precede its Python body');
+  const lines = cleanup.slice(run + marker.length).split('\n');
+  assert(lines.every(line => line === '' || line.startsWith('          ')), 'Unexpected YAML after cleanup body');
+  const script = lines.map(line => line.replace(/^          /, '')).join('\n');
+  assert(script.trim(), 'Cleanup Python body must not be empty');
+  // Compile before every execution, especially failures: invalid extraction must
+  // never masquerade as a passing containment/drain negative test.
+  const compiled = require('node:child_process').spawnSync('python', ['-B', '-c', "import sys; compile(sys.stdin.read(), '<workflow-cleanup>', 'exec')"], { input: script, encoding: 'utf8' });
+  assert.equal(compiled.status, 0, compiled.stderr || String(compiled.error));
+  return script;
 }
+test('LF and CRLF workflow inputs have identical guards and executable cleanup', t => {
+  const { spawnSync } = require('node:child_process');
+  const lf = readWorkflow(), crlf = lf.replace(/\n/g, '\r\n');
+  assert(crlf.includes('\r\n'));
+  assertWorkflowGuards(lf); assertWorkflowGuards(crlf);
+  assert.equal(cleanupScript(lf), cleanupScript(crlf));
+  for (const workflow of [lf, crlf]) {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-newlines-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(root, 'ct2-replay-input')); fs.writeFileSync(path.join(root, 'ct2-replay-input', 'owned'), 'fixture');
+    fs.mkdirSync(path.join(root, 'unrelated')); fs.writeFileSync(path.join(root, 'unrelated', 'keep'), 'unchanged');
+    const result = spawnSync('python', ['-B', '-c', cleanupScript(workflow)], { env: { ...process.env, RUNNER_TEMP: root }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(path.join(root, 'ct2-replay-input')), false);
+    assert.equal(fs.readFileSync(path.join(root, 'unrelated', 'keep'), 'utf8'), 'unchanged');
+  }
+});
+test('cleanup extraction rejects missing, duplicate, reordered or invalid Python markers before execution', () => {
+  const raw = readWorkflow(), title = '      - name: Remove only owned replay private inputs';
+  const start = requiredMarker(raw, title), prefix = raw.slice(0, start), cleanup = raw.slice(start);
+  for (const marker of [title, '        if: always()\n', '        timeout-minutes: 5\n', '        shell: python\n', '        run: |\n']) {
+    assert.throws(() => cleanupScript(prefix + cleanup.replace(marker, '')), /Required workflow marker missing/);
+    assert.throws(() => cleanupScript(prefix + cleanup.replace(marker, marker + marker)), /Duplicate workflow marker/);
+  }
+  assert.throws(() => cleanupScript(prefix + cleanup.replace('        shell: python\n        run: |\n', '        run: |\n        shell: python\n')), /headers must precede/);
+  assert.throws(() => cleanupScript(prefix + cleanup.replace('          import json, os, shutil, stat', '          this is not valid Python :')), /SyntaxError/);
+});
 test('final cleanup removes only exact owned private roots and preserves reports/checkouts', t => {
   const { spawnSync } = require('node:child_process');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-cleanup-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -212,11 +263,12 @@ test('final cleanup rejects aliased private roots before deleting any target', t
   assert.equal(fs.readFileSync(path.join(root,'ct2-replay-private','keep'),'utf8'),'untouched');
 });
 test('Rust lifecycle can follow a failed Python baseline only after retrieval and a revalidated ready receipt', () => {
-  const workflow = fs.readFileSync(path.join(__dirname, '../../../.github/workflows/asr-ct2-cpu-replay.yml'), 'utf8');
-  const start = workflow.indexOf('      - name: Exercise the actual Rust manager');
-  const upload = workflow.indexOf('      - name: Upload bounded replay metadata');
-  const cleanup = workflow.indexOf('      - name: Remove only owned replay private inputs');
-  assert(start > workflow.indexOf('        id: replay')); assert(upload > start); assert(cleanup > upload);
+  const workflow = readWorkflow();
+  const replay = requiredMarker(workflow, '        id: replay\n');
+  const start = requiredMarker(workflow, '      - name: Exercise the actual Rust manager');
+  const upload = requiredMarker(workflow, '      - name: Upload bounded replay metadata');
+  const cleanup = requiredMarker(workflow, '      - name: Remove only owned replay private inputs');
+  assert(start > replay); assert(upload > start); assert(cleanup > upload);
   const rust = workflow.slice(start, upload);
   assert(rust.includes("if: ${{ always() && !cancelled() && steps.retrieve.outcome == 'success' && (steps.replay.outcome == 'success' || steps.replay.outcome == 'failure') }}"));
   assert(rust.includes('timeout-minutes: 35'));

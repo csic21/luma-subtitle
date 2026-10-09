@@ -74,10 +74,45 @@ class DefenderIdentityTests(unittest.TestCase):
             calls.append((root, path, reserved, flags)); return Key()
         registry = SimpleNamespace(KEY_READ=0x20019, KEY_WOW64_64KEY=0x100,
             HKEY_LOCAL_MACHINE='HKLM', OpenKey=open_key, QueryValueEx=lambda key, value: ('"' + DEFENDER + '"', 1))
-        with patch.dict(sys.modules, winreg=registry):
+        with patch.dict(sys.modules, winreg=registry), redirect_stderr(io.StringIO()) as err:
             self.assertEqual(subject.defender_registered_path(), DEFENDER)
+        diagnostic = json.loads(err.getvalue().split('=', 1)[1])
+        self.assertEqual(diagnostic['raw_value'], '"' + DEFENDER + '"')
+        self.assertEqual(diagnostic['registry_value_type'], 1)
+        self.assertEqual(diagnostic['registry_view'], 'native-64')
         self.assertEqual(calls, [('HKLM', 'SOFTWARE\\Microsoft\\AMSI\\Providers\\' + subject.DEFENDER_AMSI_CLSID, 0, 0x20119),
             ('HKLM', 'SOFTWARE\\Classes\\CLSID\\' + subject.DEFENDER_AMSI_CLSID + '\\InprocServer32', 0, 0x20119)])
+
+    def test_raw_registry_diagnostic_precedes_fail_closed_parsing(self):
+        class Key:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        value = '%ProgramData%\\Microsoft\\Windows Defender\\Platform\\4.18.26080.4-0\\MpOav.dll'
+        registry = SimpleNamespace(KEY_READ=0x20019, KEY_WOW64_64KEY=0x100,
+            HKEY_LOCAL_MACHINE='HKLM', OpenKey=lambda *args: Key(), QueryValueEx=lambda *args: (value, 2))
+        with patch.dict(sys.modules, winreg=registry), redirect_stderr(io.StringIO()) as err, \
+             patch.dict(os.environ, ProgramData=r'C:\attacker-controlled'):
+            with self.assertRaisesRegex(ValueError, 'unexpanded reference'):
+                subject.defender_registered_path()
+        diagnostic = json.loads(err.getvalue().split('=', 1)[1])
+        self.assertEqual(diagnostic['raw_value'], value)
+        self.assertEqual(diagnostic['registry_value_type'], 2)
+        self.assertFalse(diagnostic['raw_value_truncated'])
+        self.assertNotIn('attacker-controlled', err.getvalue())
+        for value, message in [(DEFENDER + '\x00suffix', 'NUL'), ('"' + DEFENDER, 'quotes')]:
+            with self.assertRaisesRegex(ValueError, message): subject.defender_registry_value(value, 1)
+
+    def test_registry_diagnostic_is_bounded_and_escapes_control_characters(self):
+        value = '\x00' + '"%' + '\u6d4b' * 10000
+        result = subject.defender_registry_diagnostic(value, 2)
+        self.assertEqual(len(result['raw_value']), 512)
+        self.assertEqual(result['raw_value_characters'], len(value))
+        self.assertTrue(result['raw_value_truncated'])
+        self.assertTrue(result['contains_nul']); self.assertTrue(result['contains_percent'])
+        encoded = json.dumps(result, ensure_ascii=True)
+        self.assertNotIn('\x00', encoded)
+        self.assertLess(len(encoded), 4096)
+        self.assertNotIn('raw_value', subject.defender_registry_diagnostic(b'unneeded-binary-data', 3))
 
     def test_every_reparse_ancestor_and_file_is_rejected(self):
         class Node:

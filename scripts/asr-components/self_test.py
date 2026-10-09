@@ -83,9 +83,29 @@ def defender_registry_value(value, value_type):
         raise ValueError('Defender registration is not a bounded registry string')
     if value.startswith('"') and value.endswith('"'):
         value = value[1:-1]
-    if any(character in value for character in ('"', '%', '\x00')):
-        raise ValueError('Defender registration contains expansion or command syntax')
+    if '\x00' in value:
+        raise ValueError('Defender registration contains a NUL character')
+    if '%' in value:
+        raise ValueError('Defender registration contains an unexpanded reference')
+    if '"' in value:
+        raise ValueError('Defender registration contains unmatched/interior quotes')
     return value
+
+
+def defender_registry_diagnostic(value, value_type):
+    # Only this fixed public OS-module registration is inspected. JSON escapes
+    # control characters; never expand tokens or include process environment.
+    result = {'kind': 'windows-defender-amsi-registration', 'registry_hive': 'HKLM',
+              'registry_view': 'native-64', 'provider_clsid': DEFENDER_AMSI_CLSID,
+              'key': 'SOFTWARE\\Classes\\CLSID\\' + DEFENDER_AMSI_CLSID + '\\InprocServer32',
+              'value_name': '(Default)', 'registry_value_type': value_type,
+              'value_is_string': isinstance(value, str)}
+    if isinstance(value, str):
+        result.update(raw_value=value[:512], raw_value_characters=len(value),
+                      raw_value_truncated=len(value) > 512,
+                      contains_percent='%' in value, contains_nul='\x00' in value,
+                      quote_count=value.count('"'))
+    return result
 
 
 def defender_registered_path():
@@ -97,6 +117,11 @@ def defender_registered_path():
     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                         'SOFTWARE\\Classes\\CLSID\\' + DEFENDER_AMSI_CLSID + '\\InprocServer32', 0, access) as key:
         value, value_type = winreg.QueryValueEx(key, None)
+    # Emit before validation: the native metadata test calls this function
+    # before entering verified_defender_module's broader diagnostic scope.
+    print('HOST_SECURITY_REGISTRATION_DIAGNOSTIC=' + json.dumps(
+          defender_registry_diagnostic(value, value_type), sort_keys=True, ensure_ascii=True),
+          file=sys.stderr, flush=True)
     return defender_registry_value(value, value_type)
 
 
