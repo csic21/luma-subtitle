@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
+  AsrConfig,
+  AsrBackendStatus,
   DownloadStatus,
   EnvironmentState,
   QueueSettings,
@@ -20,6 +22,7 @@ type TaskCreatePayload = {
   output_dir: string | null;
   target_language: string;
   whisper_model_path: string;
+  asr?: AsrConfig;
   whisper_language: string;
   base_url: string;
   base_url_is_complete: boolean;
@@ -37,6 +40,7 @@ type TaskCreatePayload = {
 type TaskSettingsUpdatePayload = {
   target_language: string;
   whisper_model_path: string;
+  asr?: AsrConfig;
   whisper_language: string;
   base_url: string;
   base_url_is_complete: boolean;
@@ -78,6 +82,14 @@ export function getTask(taskId: string) {
 
 export function getTaskLogs(taskId: string) {
   return invoke<string[]>("get_task_logs", { taskId });
+}
+
+export function releaseAsrBackend() {
+  return invoke<boolean>("release_asr_backend");
+}
+
+export function checkAsrBackend(config: AsrConfig) {
+  return invoke<AsrBackendStatus>("check_asr_backend", { config });
 }
 
 export function loadSettings() {

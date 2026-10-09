@@ -179,7 +179,12 @@ pub(crate) fn update_task_settings(
     if matches!(task.status.as_str(), "queued" | "running") {
         return Err("任务正在运行或排队中，稍后再修改配置".to_string());
     }
-    let settings = task_settings_from_update_request(task.settings.output_dir.clone(), &settings);
+    let mut updated =
+        task_settings_from_update_request(task.settings.output_dir.clone(), &settings);
+    if settings.asr.is_none() {
+        updated.asr = task.settings.asr.clone();
+    }
+    let settings = updated;
     let saved = task_db::update_task_settings(&app, &task_id, settings)?;
     if saved.result_revision != task.result_revision {
         state.subtitle_results.lock().remove(&task_id);

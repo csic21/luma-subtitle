@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[allow(dead_code)]
 #[derive(Clone, Deserialize)]
 pub(crate) struct JobRequest {
+    #[serde(default)]
+    pub(crate) asr: crate::asr::AsrConfig,
     #[serde(alias = "video_path")]
     pub(crate) media_path: String,
     #[serde(default = "default_media_source_type")]
@@ -57,6 +59,8 @@ pub(crate) struct TranslateSubtitlesRequest {
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct CreateVideoTaskRequest {
+    #[serde(default)]
+    pub(crate) asr: crate::asr::AsrConfig,
     pub(crate) video_path: String,
     pub(crate) output_dir: Option<String>,
     pub(crate) target_language: String,
@@ -84,6 +88,8 @@ pub(crate) struct CreateVideoTaskRequest {
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct CreateAudioTaskRequest {
+    #[serde(default)]
+    pub(crate) asr: crate::asr::AsrConfig,
     pub(crate) audio_path: String,
     pub(crate) output_dir: Option<String>,
     pub(crate) target_language: String,
@@ -111,6 +117,8 @@ pub(crate) struct CreateAudioTaskRequest {
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct CreateSrtTaskRequest {
+    #[serde(default)]
+    pub(crate) asr: crate::asr::AsrConfig,
     pub(crate) srt_path: String,
     pub(crate) output_dir: Option<String>,
     pub(crate) target_language: String,
@@ -138,6 +146,8 @@ pub(crate) struct CreateSrtTaskRequest {
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct UpdateTaskSettingsRequest {
+    #[serde(default)]
+    pub(crate) asr: Option<crate::asr::AsrConfig>,
     pub(crate) target_language: String,
     pub(crate) whisper_model_path: String,
     pub(crate) whisper_language: String,

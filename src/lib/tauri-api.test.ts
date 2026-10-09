@@ -87,3 +87,14 @@ describe("saveTranslatedSubtitles", () => {
     });
   });
 });
+
+describe("optional ASR commands", () => {
+  it("uses the explicit nested config contract and release command", async () => {
+    const { checkAsrBackend, releaseAsrBackend } = await import("./tauri-api");
+    const config = { engine: "qwen3-asr", python_path: "/venv/bin/python", model_path: "/models/qwen", aligner_path: "/models/aligner", device: "cpu" as const };
+    await checkAsrBackend(config);
+    expect(invoke).toHaveBeenCalledWith("check_asr_backend", { config });
+    await releaseAsrBackend();
+    expect(invoke).toHaveBeenCalledWith("release_asr_backend");
+  });
+});

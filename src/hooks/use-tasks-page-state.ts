@@ -1,3 +1,4 @@
+import { normalizeSettings } from "@/lib/asr-config";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
@@ -69,6 +70,7 @@ export function useTasksPageState(t: TFunction) {
   const operationContext = useMemo(
     () => ({
       environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
+      ffmpegReady: Boolean(env?.ffmpeg_path),
       hasApiCredential: settings.has_api_key,
       llamaReady: Boolean(env?.llama_path),
     }),
@@ -117,7 +119,7 @@ export function useTasksPageState(t: TFunction) {
   const refreshSettings = useCallback(async () => {
     try {
       const loaded = await loadSettings();
-      setSettings({ ...defaultSettings, ...loaded });
+      setSettings(normalizeSettings(loaded));
     } catch (error) {
       setNotice(errorText(error));
     }

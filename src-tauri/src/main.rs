@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod asr;
 mod commands;
 mod dependencies;
 mod environment;
@@ -24,6 +25,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
+        .manage(asr::AsrRuntime::default())
         .setup(|app| {
             task_db::init(app.handle())?;
             Ok(())
@@ -37,6 +39,8 @@ fn main() {
             commands::select_srt,
             settings::load_settings,
             settings::save_settings,
+            asr::check_asr_backend,
+            asr::release_asr_backend,
             translation::cli::check_translation_cli,
             translation::cli::list_translation_cli_models,
             environment::check_environment,
@@ -64,6 +68,12 @@ fn main() {
             jobs::save_translated_subtitles,
             commands::open_path
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Luma Subtitle");
+        .build(tauri::generate_context!())
+        .expect("failed to build Luma Subtitle")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                tauri::async_runtime::block_on(app.state::<asr::AsrRuntime>().shutdown());
+            }
+        });
 }

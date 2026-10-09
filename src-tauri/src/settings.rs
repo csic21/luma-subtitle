@@ -8,14 +8,15 @@ use crate::{
         normalize_translation_cli_args, normalize_translation_cli_command,
         normalize_translation_cli_model, normalize_translation_cli_tool,
         normalize_translation_local_model_path, normalize_translation_provider,
-        normalize_translation_shard_size,
-        DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
-        DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
+        normalize_translation_shard_size, DEFAULT_TRANSLATION_CLI_COMMAND,
+        DEFAULT_TRANSLATION_CLI_TOOL, DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
     },
 };
 
 #[derive(Clone, Deserialize, Serialize)]
 struct PersistedSettings {
+    #[serde(default)]
+    asr: crate::asr::AsrConfig,
     base_url: String,
     #[serde(default)]
     base_url_is_complete: bool,
@@ -44,6 +45,7 @@ struct PersistedSettings {
 impl Default for PersistedSettings {
     fn default() -> Self {
         Self {
+            asr: crate::asr::AsrConfig::default(),
             base_url: "https://api.openai.com".to_string(),
             base_url_is_complete: false,
             model: "gpt-4o-mini".to_string(),
@@ -64,6 +66,8 @@ impl Default for PersistedSettings {
 }
 #[derive(Deserialize)]
 pub(crate) struct SettingsPayload {
+    #[serde(default)]
+    asr: Option<crate::asr::AsrConfig>,
     base_url: String,
     #[serde(default)]
     base_url_is_complete: bool,
@@ -90,6 +94,8 @@ pub(crate) struct SettingsPayload {
 }
 #[derive(Serialize)]
 pub(crate) struct SettingsResponse {
+    #[serde(default)]
+    asr: crate::asr::AsrConfig,
     base_url: String,
     base_url_is_complete: bool,
     model: String,
@@ -126,6 +132,10 @@ pub(crate) fn save_settings(
     let base_url_is_complete = payload.base_url_is_complete;
     let read_previous = read_settings(&app).unwrap_or_default();
     let settings = PersistedSettings {
+        asr: payload
+            .asr
+            .unwrap_or(read_previous.asr.clone())
+            .normalized(),
         base_url: normalize_base_url(&payload.base_url, base_url_is_complete),
         base_url_is_complete,
         model: payload.model.trim().to_string(),
@@ -229,6 +239,7 @@ pub(crate) fn task_settings_from_current(
 ) -> Result<TaskSettingsSnapshot, String> {
     let settings = read_settings(app)?;
     Ok(TaskSettingsSnapshot {
+        asr: settings.asr.normalized(),
         output_dir,
         target_language: settings.target_language.trim().to_string(),
         whisper_model_path: settings.whisper_model_path.trim().to_string(),
@@ -282,6 +293,7 @@ fn default_translation_cli_command() -> String {
 impl PersistedSettings {
     fn into_response(self, has_api_key: bool) -> SettingsResponse {
         SettingsResponse {
+            asr: self.asr.normalized(),
             base_url: self.base_url,
             base_url_is_complete: self.base_url_is_complete,
             model: self.model,
@@ -302,5 +314,40 @@ impl PersistedSettings {
                 &self.translation_local_model_path,
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod asr_compatibility_tests {
+    use super::*;
+    #[test]
+    fn old_settings_keep_model_credentials_and_original_engine() {
+        let json = r#"{"base_url":"https://example.test","model":"custom","temperature":0.3,"whisper_model_path":"existing/ggml-large-v3-turbo-q5_0.bin","whisper_language":"zh","target_language":"English","has_api_key":true}"#;
+        let old: PersistedSettings = serde_json::from_str(json).unwrap();
+        assert!(old.asr.is_legacy());
+        assert_eq!(
+            old.whisper_model_path,
+            "existing/ggml-large-v3-turbo-q5_0.bin"
+        );
+        assert!(old.has_api_key);
+        let saved: PersistedSettings =
+            serde_json::from_str(&serde_json::to_string(&old).unwrap()).unwrap();
+        assert_eq!(saved.asr, crate::asr::AsrConfig::default());
+        assert_eq!(saved.whisper_model_path, old.whisper_model_path);
+        assert_eq!(saved.model, "custom");
+    }
+    #[test]
+    fn older_settings_client_omits_asr_without_reset_instruction() {
+        let json = r#"{"base_url":"https://example.test","model":"custom","temperature":0.3,"whisper_model_path":"existing.bin","whisper_language":"zh","target_language":"English"}"#;
+        let payload: SettingsPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.asr.is_none());
+        let previous = crate::asr::AsrConfig {
+            engine: "qwen3-asr".into(),
+            ..crate::asr::AsrConfig::default()
+        };
+        assert_eq!(
+            payload.asr.unwrap_or(previous.clone()).normalized(),
+            previous
+        );
     }
 }

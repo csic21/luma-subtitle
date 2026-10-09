@@ -1,4 +1,12 @@
-import type { SettingsState, TargetLanguageOption, WhisperLanguageOption, ModelPresetView } from "@/types";
+import type { AsrConfig, SettingsState, TargetLanguageOption, WhisperLanguageOption, ModelPresetView } from "@/types";
+
+export const defaultAsrConfig: AsrConfig = {
+  engine: "whisper-cpp",
+  python_path: "",
+  model_path: "",
+  aligner_path: "",
+  device: "auto",
+};
 
 export const defaultSettings: SettingsState = {
   base_url: "https://api.openai.com",
@@ -7,6 +15,7 @@ export const defaultSettings: SettingsState = {
   temperature: 0.2,
   translation_shard_size: 200,
   whisper_model_path: "",
+  asr: { ...defaultAsrConfig },
   whisper_language: "auto",
   target_language: "简体中文",
   has_api_key: false,

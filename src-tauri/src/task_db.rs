@@ -606,6 +606,29 @@ mod tests {
     }
 
     #[test]
+    fn opt_in_asr_settings_preserve_old_results_download_path_and_revision() {
+        let (mut conn, mut settings) = settings_fixture();
+        assert!(settings.asr.is_legacy());
+        settings.asr.engine = "qwen3-asr".into();
+        settings.asr.model_path = "/local/qwen".into();
+        settings.asr.aligner_path = "/local/aligner".into();
+        let saved = update_settings_in_connection(&mut conn, "task", settings).unwrap();
+        assert_eq!(saved.source_srt_path.as_deref(), Some("source"));
+        assert_eq!(saved.translated_srt_path.as_deref(), Some("translation"));
+        assert_eq!(saved.exported_translated_srt.as_deref(), Some("export"));
+        assert_eq!(saved.settings.whisper_model_path, "old.bin");
+        assert_eq!(saved.settings.asr.engine, "qwen3-asr");
+        assert_eq!(saved.result_revision, 0);
+        assert_eq!(saved.run_generation, 0);
+        let mut settings = saved.settings;
+        settings.asr.engine = "whisper-cpp".into();
+        let saved = update_settings_in_connection(&mut conn, "task", settings).unwrap();
+        assert_eq!(saved.settings.whisper_model_path, "old.bin");
+        assert!(saved.settings.asr.is_legacy());
+        assert_eq!(saved.source_srt_path.as_deref(), Some("source"));
+    }
+
+    #[test]
     fn failed_settings_transaction_keeps_previous_results() {
         let (mut conn, mut settings) = settings_fixture();
         settings.target_language = "English".into();
@@ -688,6 +711,7 @@ mod tests {
         let conn = Connection::open_in_memory().expect("in-memory sqlite should open");
         migrate(&conn).expect("migration should run");
         let settings = TaskSettingsSnapshot {
+            asr: crate::asr::AsrConfig::default(),
             output_dir: Some("D:/out".to_string()),
             target_language: "简体中文".to_string(),
             whisper_model_path: "D:/models/ggml.bin".to_string(),
@@ -758,6 +782,8 @@ mod tests {
             DEFAULT_TRANSLATION_SHARD_SIZE
         );
         assert!(!record.settings.base_url_is_complete);
+        assert!(record.settings.asr.is_legacy());
+        assert_eq!(record.settings.whisper_model_path, "D:/models/ggml.bin");
         assert_eq!(record.settings.translation_provider, "api");
         assert_eq!(record.settings.translation_cli_tool, "opencode");
         assert_eq!(record.settings.translation_cli_command, "opencode");
@@ -777,6 +803,7 @@ mod tests {
             message: "SRT 已生成".to_string(),
             progress: 1.0,
             settings: TaskSettingsSnapshot {
+                asr: crate::asr::AsrConfig::default(),
                 output_dir: Some("exports".to_string()),
                 target_language: "简体中文".to_string(),
                 whisper_model_path: "models/ggml.bin".to_string(),
@@ -839,6 +866,7 @@ mod tests {
             message: "任务已创建".to_string(),
             progress: 0.0,
             settings: TaskSettingsSnapshot {
+                asr: crate::asr::AsrConfig::default(),
                 output_dir: None,
                 target_language: "简体中文".to_string(),
                 whisper_model_path: "models/ggml.bin".to_string(),

@@ -2,6 +2,33 @@ export type TFunction = (key: string, values?: Record<string, string | number>) 
 
 export type TaskOperation = "transcribe" | "translate" | "resume_translate" | "export";
 
+export type AsrConfig = {
+  // Preserve unknown engines from newer settings; never silently run a different engine.
+  engine: string;
+  python_path: string;
+  model_path: string;
+  aligner_path: string;
+  device: "auto" | "cpu" | "cuda" | "metal";
+};
+
+export type AsrBackendStatus = {
+  ready: boolean;
+  backend: string | null;
+  device: string | null;
+  estimated_weight_memory_bytes?: number | null;
+  model_bytes: number;
+  aligner_bytes: number;
+  total_bytes: number;
+  capabilities: {
+    offline: boolean;
+    word_timestamps: boolean;
+    supported_languages: string[] | null;
+  };
+  warnings: string[];
+  error?: string | null;
+  code?: string | null;
+};
+
 export type SettingsState = {
   base_url: string;
   base_url_is_complete: boolean;
@@ -9,6 +36,7 @@ export type SettingsState = {
   temperature: number;
   translation_shard_size: number;
   whisper_model_path: string;
+  asr?: AsrConfig;
   whisper_language: string;
   target_language: string;
   has_api_key: boolean;
@@ -102,6 +130,7 @@ export type TaskSettingsSnapshot = {
   output_dir?: string | null;
   target_language: string;
   whisper_model_path: string;
+  asr?: AsrConfig;
   whisper_language: string;
   base_url: string;
   base_url_is_complete: boolean;

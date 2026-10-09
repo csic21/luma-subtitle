@@ -14,6 +14,8 @@ import {
   Terminal,
 } from "lucide-react";
 
+import { AsrSettingsFields } from "@/components/app/asr-settings-fields";
+import { asrConfigurationIssues, normalizeAsrConfig } from "@/lib/asr-config";
 import { DownloadProgress, FieldBlock, IconAction, SectionTitle, StatusBadge } from "@/components/app/shared";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -102,7 +104,7 @@ export function ModelApiSettingsCard({
 }) {
   const selectedPresetDownloaded = downloadedWhisperModelFiles.has(selectedWhisperPreset.fileName);
   const selectedTranslationDownloaded = downloadedTranslationModelFiles.has(selectedTranslationPreset.fileName);
-  const missingWhisperModel = !settings.whisper_model_path.trim();
+  const missingWhisperModel = normalizeAsrConfig(settings.asr).engine === "whisper-cpp" && !settings.whisper_model_path.trim();
   const translationProvider = settings.translation_provider ?? defaultSettings.translation_provider;
   const isCliProvider = isCliTranslationProvider(translationProvider);
   const isLocalProvider = isLocalTranslationProvider(translationProvider);
@@ -128,6 +130,7 @@ export function ModelApiSettingsCard({
     : "-";
   const missingRequiredLabels = [
     missingWhisperModel ? t("requirement.missingWhisperModel") : "",
+    ...asrConfigurationIssues(settings.asr).map((issue) => t(`requirement.${issue}`)),
     ...(isCliProvider
       ? [
           missingCliCommand ? t("requirement.missingCliCommand") : "",
@@ -206,70 +209,77 @@ export function ModelApiSettingsCard({
           </Alert>
         )}
 
-        <FieldBlock
-          label={t("common.whisperModel")}
-          invalid={missingWhisperModel}
-          description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+        <AsrSettingsFields
+          value={settings.asr}
+          onChange={(asr) => setSettings((current) => ({ ...current, asr }))}
+          t={t}
         >
-          <div className="input-action">
-            <Input
-              value={settings.whisper_model_path ? fileName(settings.whisper_model_path) : ""}
-              readOnly
-              placeholder={selectedWhisperPreset.fileName}
-              onClick={onPickWhisperModel}
-              title={settings.whisper_model_path || t("settings.selectWhisper")}
-              aria-invalid={missingWhisperModel}
-            />
-            <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel}>
-              <FolderOpen />
-            </IconAction>
-          </div>
-        </FieldBlock>
-
-        <FieldBlock label={t("model.preset")}>
-          <div className="preset-control">
+          <FieldBlock
+            label={t("common.whisperModel")}
+            invalid={missingWhisperModel}
+            description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+          >
             <div className="input-action">
-              <Select value={whisperPresetId} onValueChange={setWhisperPresetId}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {whisperModelPresets.map((preset) => {
-                      const downloaded = downloadedWhisperModelFiles.has(preset.fileName);
-                      return (
-                        <SelectItem key={preset.id} value={preset.id}>
-                          <span className="preset-option">
-                            <span>{t(preset.labelKey)}</span>
-                            {downloaded && (
-                              <Badge variant="secondary" className="downloaded-badge">
-                                <CheckCircle2 />
-                                {t("model.downloaded")}
-                              </Badge>
-                            )}
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <IconAction
-                label={t("download.pickPreset", { fileName: selectedWhisperPreset.fileName })}
-                onClick={onDownloadWhisperPreset}
-                disabled={modelDownloading}
-              >
-                {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+              <Input
+                value={settings.whisper_model_path ? fileName(settings.whisper_model_path) : ""}
+                readOnly
+                placeholder={selectedWhisperPreset.fileName}
+                onClick={onPickWhisperModel}
+                title={settings.whisper_model_path || t("settings.selectWhisper")}
+                aria-invalid={missingWhisperModel}
+              />
+              <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel}>
+                <FolderOpen />
               </IconAction>
             </div>
-            {selectedPresetDownloaded && (
-              <div className="preset-status">
-                <CheckCircle2 />
-                <span>{t("model.downloaded")}</span>
+          </FieldBlock>
+
+          <FieldBlock label={t("model.preset")}>
+            <div className="preset-control">
+              <div className="input-action">
+                <Select value={whisperPresetId} onValueChange={setWhisperPresetId}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {whisperModelPresets.map((preset) => {
+                        const downloaded = downloadedWhisperModelFiles.has(preset.fileName);
+                        return (
+                          <SelectItem key={preset.id} value={preset.id}>
+                            <span className="preset-option">
+                              <span>{t(preset.labelKey)}</span>
+                              {downloaded && (
+                                <Badge variant="secondary" className="downloaded-badge">
+                                  <CheckCircle2 />
+                                  {t("model.downloaded")}
+                                </Badge>
+                              )}
+                            </span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <IconAction
+                  label={t("download.pickPreset", { fileName: selectedWhisperPreset.fileName })}
+                  onClick={onDownloadWhisperPreset}
+                  disabled={modelDownloading}
+                >
+                  {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+                </IconAction>
               </div>
-            )}
-          </div>
-        </FieldBlock>
+              {selectedPresetDownloaded && (
+                <div className="preset-status">
+                  <CheckCircle2 />
+                  <span>{t("model.downloaded")}</span>
+                </div>
+              )}
+            </div>
+          </FieldBlock>
+
+        </AsrSettingsFields>
 
         {modelDownload && <DownloadProgress event={modelDownload} />}
 

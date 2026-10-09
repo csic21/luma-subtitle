@@ -24,6 +24,7 @@ pub(super) fn task_settings_from_video_request(
     request: &CreateVideoTaskRequest,
 ) -> TaskSettingsSnapshot {
     TaskSettingsSnapshot {
+        asr: request.asr.clone().normalized(),
         output_dir: request
             .output_dir
             .as_ref()
@@ -78,6 +79,7 @@ pub(super) fn task_settings_from_srt_request(
     request: &CreateSrtTaskRequest,
 ) -> TaskSettingsSnapshot {
     TaskSettingsSnapshot {
+        asr: request.asr.clone().normalized(),
         output_dir: request
             .output_dir
             .as_ref()
@@ -132,6 +134,7 @@ pub(super) fn task_settings_from_audio_request(
     request: &CreateAudioTaskRequest,
 ) -> TaskSettingsSnapshot {
     TaskSettingsSnapshot {
+        asr: request.asr.clone().normalized(),
         output_dir: request
             .output_dir
             .as_ref()
@@ -187,6 +190,7 @@ pub(super) fn task_settings_from_update_request(
     request: &UpdateTaskSettingsRequest,
 ) -> TaskSettingsSnapshot {
     TaskSettingsSnapshot {
+        asr: request.asr.clone().unwrap_or_default().normalized(),
         output_dir,
         target_language: request.target_language.trim().to_string(),
         whisper_model_path: request.whisper_model_path.trim().to_string(),
@@ -286,7 +290,8 @@ pub(super) fn validate_start_request(request: &JobRequest) -> Result<(), String>
             "视频文件不存在".to_string()
         });
     }
-    if request.whisper_model_path.trim().is_empty() {
+    request.asr.validate()?;
+    if request.asr.is_legacy() && request.whisper_model_path.trim().is_empty() {
         return Err("请选择 Whisper 模型文件".to_string());
     }
     Ok(())
