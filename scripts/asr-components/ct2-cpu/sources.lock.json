@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "variant": "luma-cpu-seq-1",
+  "wheel_build_tag": "1lumacpu",
+  "python": "3.12.15",
+  "source_date_epoch": 1788190986,
+  "sources": [
+    {
+      "name": "ctranslate2",
+      "repository": "OpenNMT/CTranslate2",
+      "commit": "d44d2d069eb88c7b7804da864c10c201501cb4a9",
+      "url": "https://codeload.github.com/OpenNMT/CTranslate2/tar.gz/d44d2d069eb88c7b7804da864c10c201501cb4a9",
+      "bytes": 3434163,
+      "sha256": "9ff1d14d178f2ba1334b100bc0fb37049ce03b0676520be51e4fbeb9bc682295",
+      "license": "MIT",
+      "version": "4.8.2"
+    },
+    {
+      "name": "onednn",
+      "repository": "oneapi-src/oneDNN",
+      "commit": "64f6bcbcbab628e96f33a62c3e975f8535a7bde4",
+      "url": "https://codeload.github.com/oneapi-src/oneDNN/tar.gz/64f6bcbcbab628e96f33a62c3e975f8535a7bde4",
+      "bytes": 7572819,
+      "sha256": "ebac5d8a043c75aa6019c7d427b2ba36635b6469a60e304a968b85fc4998162a",
+      "license": "Apache-2.0",
+      "version": "3.1.1"
+    },
+    {
+      "name": "cpu_features",
+      "repository": "google/cpu_features",
+      "commit": "8a494eb1e158ec2050e5f699a504fbc9b896a43b",
+      "url": "https://codeload.github.com/google/cpu_features/tar.gz/8a494eb1e158ec2050e5f699a504fbc9b896a43b",
+      "bytes": 86019,
+      "sha256": "9b2019dae7608630ab985129a5c3263fc788e4f82e26965a8d8c33b8c035802e",
+      "license": "Apache-2.0",
+      "version": "0.7.0"
+    },
+    {
+      "name": "spdlog",
+      "repository": "gabime/spdlog",
+      "commit": "76fb40d95455f249bd70824ecfcae7a8f0930fa3",
+      "url": "https://codeload.github.com/gabime/spdlog/tar.gz/76fb40d95455f249bd70824ecfcae7a8f0930fa3",
+      "bytes": 368822,
+      "sha256": "4530d53b86d45228a5b8982a8f4fe7d95d3ba8e1944858d3f663732c7e949cb7",
+      "license": "MIT",
+      "version": "1.10.0"
+    }
+  ],
+  "ctranslate2_submodules": [
+    {
+      "path": "third_party/cpu_features",
+      "commit": "8a494eb1e158ec2050e5f699a504fbc9b896a43b",
+      "used": true
+    },
+    {
+      "path": "third_party/cutlass",
+      "commit": "bbe579a9e3beb6ea6626d9227ec32d0dae119a49",
+      "used": false
+    },
+    {
+      "path": "third_party/cxxopts",
+      "commit": "44380e5a44706ab7347f400698c703eb2a196202",
+      "used": false
+    },
+    {
+      "path": "third_party/googletest",
+      "commit": "f8d7d77c06936315286eb55f8de22cd23c188571",
+      "used": false
+    },
+    {
+      "path": "third_party/ruy",
+      "commit": "363f252289fb7a1fba1703d99196524698cb884d",
+      "used": false
+    },
+    {
+      "path": "third_party/spdlog",
+      "commit": "76fb40d95455f249bd70824ecfcae7a8f0930fa3",
+      "used": true
+    },
+    {
+      "path": "third_party/thrust",
+      "commit": "b5fe509fd11a925f90d6495176707cc1184eed9d",
+      "used": false
+    }
+  ],
+  "build_wheels": [
+    {
+      "filename": "cmake-3.31.6-py3-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/18/58/909d6d99acb4e0886d0f660cf4e0fb26f586590e370b2e4ce7a10d06b145/cmake-3.31.6-py3-none-win_amd64.whl",
+      "name": "cmake",
+      "version": "3.31.6",
+      "bytes": 36396448,
+      "sha256": "bbaed969cef3c427f4f17591feb28db4ae595e3a4bbd45cb35522cee14df6a32",
+      "license": "Apache 2.0"
+    },
+    {
+      "filename": "ninja-1.11.1.4-py3-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/5b/10/9b8fe9ac004847490cc7b54896124c01ce2d87d95dc60aabd0b8591addff/ninja-1.11.1.4-py3-none-win_amd64.whl",
+      "name": "ninja",
+      "version": "1.11.1.4",
+      "bytes": 296461,
+      "sha256": "4617b3c12ff64b611a7d93fd9e378275512bb36eff8babff7c83f5116b4f8d66",
+      "license": null
+    },
+    {
+      "filename": "setuptools-80.9.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl",
+      "name": "setuptools",
+      "version": "80.9.0",
+      "bytes": 1201486,
+      "sha256": "062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922",
+      "license": "MIT"
+    },
+    {
+      "filename": "wheel-0.45.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/0b/2c/87f3254fd8ffd29e4c02732eee68a83a1d3c346ae39bc6822dcbcb697f2b/wheel-0.45.1-py3-none-any.whl",
+      "name": "wheel",
+      "version": "0.45.1",
+      "bytes": 72494,
+      "sha256": "708e7481cc80179af0e556bbf0cc00b8444c7321e2700b8d8580231d13017248",
+      "license": null
+    },
+    {
+      "filename": "packaging-25.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl",
+      "name": "packaging",
+      "version": "25.0",
+      "bytes": 66469,
+      "sha256": "29572ef2b1f17581046b3a2227d5c611fb25ec70ca1ba8554b24b0e69331a484",
+      "license": null
+    },
+    {
+      "filename": "pybind11-2.11.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/06/55/9f73c32dda93fa4f539fafa268f9504e83c489f460c380371d94296126cd/pybind11-2.11.1-py3-none-any.whl",
+      "name": "pybind11",
+      "version": "2.11.1",
+      "bytes": 227746,
+      "sha256": "33cdd02a6453380dd71cc70357ce388ad1ee8d32bd0e38fc22b273d050aa29b3",
+      "license": "BSD"
+    }
+  ],
+  "ct2_cmake": {
+    "WITH_MKL": "OFF",
+    "WITH_CUDA": "OFF",
+    "WITH_CUDNN": "OFF",
+    "WITH_HIP": "OFF",
+    "CUDA_DYNAMIC_LOADING": "OFF",
+    "WITH_ACCELERATE": "OFF",
+    "WITH_OPENBLAS": "OFF",
+    "WITH_RUY": "OFF",
+    "WITH_TENSOR_PARALLEL": "OFF",
+    "WITH_FLASH_ATTN": "OFF",
+    "ENABLE_PROFILING": "OFF",
+    "ENABLE_ADDRESS_SANITIZER": "OFF",
+    "BUILD_CLI": "OFF",
+    "BUILD_TESTS": "OFF",
+    "WITH_DNNL": "ON",
+    "OPENMP_RUNTIME": "NONE",
+    "ENABLE_CPU_DISPATCH": "ON",
+    "BUILD_SHARED_LIBS": "ON",
+    "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL"
+  },
+  "onednn_cmake": {
+    "DNNL_CPU_RUNTIME": "SEQ",
+    "DNNL_GPU_RUNTIME": "NONE",
+    "DNNL_LIBRARY_TYPE": "STATIC",
+    "DNNL_BLAS_VENDOR": "NONE",
+    "DNNL_BUILD_TESTS": "OFF",
+    "DNNL_BUILD_EXAMPLES": "OFF",
+    "ONEDNN_BUILD_GRAPH": "OFF",
+    "DNNL_ENABLE_JIT_PROFILING": "OFF",
+    "DNNL_ENABLE_ITT_TASKS": "OFF",
+    "DNNL_ENABLE_WORKLOAD": "INFERENCE",
+    "DNNL_ENABLE_PRIMITIVE": "MATMUL",
+    "DNNL_ENABLE_CONCURRENT_EXEC": "ON",
+    "DNNL_ARCH_OPT_FLAGS": "",
+    "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL"
+  },
+  "toolchain": {
+    "visual_studio_version": "17.14.37710.0",
+    "vc_tools_version": "14.44.35207",
+    "windows_sdk_version": "10.0.26100.0",
+    "runner_image_observed": "20260927.320.1",
+    "source": "https://github.com/actions/runner-images/blob/main/images/windows/Windows2022-Readme.md"
+  },
+  "publication_authorized": false
+}

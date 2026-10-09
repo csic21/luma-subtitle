@@ -313,7 +313,33 @@ def archive_tree(root, output):
         raise ValueError('Component exceeds release-asset limit')
 
 
-def build(pack_id, output, cache, source_sha, native=True):
+def run_offline_assembly(root, runtime, lock_path, wheels, cache, output):
+    wheelhouse = output / 'wheelhouse'; wheelhouse.mkdir()
+    for wheel in wheels:
+        shutil.copyfile(fetch(wheel, cache), wheelhouse / wheel['filename'])
+    poison = output / 'poison'; poison.mkdir()
+    (poison / 'sitecustomize.py').write_text("raise RuntimeError('Inherited Python path used')\n")
+    (poison / 'pip.conf').write_text('[global]\nindex-url = https://invalid.example/no-network\ntarget = /never-use-inherited-pip-target\n')
+    env = dict(os.environ, PATH=str(poison / 'no-executables'), PYTHONHOME=str(poison / 'not-python'),
+               PYTHONPATH=str(poison), PIP_CONFIG_FILE=str(poison / 'pip.conf'),
+               PIP_INDEX_URL='https://invalid.example/no-network', PIP_TARGET=str(poison / 'must-not-be-written'))
+    command = [str(root / runtime['entrypoint']), '-I', '-S', '-B', '-u', '-X', 'utf8', str(ROOT / 'assemble.py'),
+               '--runtime-root', str(root), '--wheel-lock', str(lock_path), '--wheelhouse', str(wheelhouse)]
+    child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', env=env)
+    try:
+        transcript = child.communicate(timeout=600)[0]
+    except BaseException:
+        child.kill(); child.communicate()
+        raise
+    print(transcript, flush=True)
+    if child.returncode:
+        raise RuntimeError('Owned private offline-pip assembly failed')
+    if (poison / 'must-not-be-written').exists():
+        raise RuntimeError('Inherited pip target was used')
+    shutil.rmtree(wheelhouse); shutil.rmtree(poison)
+
+
+def build(pack_id, output, cache, source_sha, native=True, installer='wheel'):
     config = json.loads((ROOT / 'packs.json').read_text())
     pack = next(p for p in config['packs'] if p['id'] == pack_id)
     native_platform = 'windows-x64' if sys.platform == 'win32' and platform.machine().lower() in {'amd64', 'x86_64'} else 'macos-arm64' if sys.platform == 'darwin' and platform.machine() == 'arm64' else None
@@ -334,14 +360,21 @@ def build(pack_id, output, cache, source_sha, native=True):
     unpack_runtime(fetch(runtime, cache), root)
     site = root / ('Lib/site-packages' if pack['platform'] == 'windows-x64' else 'lib/python3.12/site-packages')
     site.mkdir(parents=True, exist_ok=True)
-    # PBS includes build convenience packages; replace them only with the lock.
-    for name in ('pip', 'setuptools', '_distutils_hack', 'pkg_resources'):
-        for path in site.glob(name + '*'):
-            shutil.rmtree(path) if path.is_dir() else path.unlink()
-    (site / 'distutils-precedence.pth').unlink(missing_ok=True)
-    for wheel in lock['wheels']:
-        print(f'Verifying {wheel["filename"]}', flush=True)
-        wheel['installed_notice_files'] = install_wheel(fetch(wheel, cache), root, site)
+    if installer == 'pip':
+        if not native:
+            raise ValueError('Offline pip proof requires the native private interpreter')
+        run_offline_assembly(root, runtime, lock_path, lock['wheels'], cache, output)
+    elif installer == 'wheel':
+        # Existing reference assembly, retained to compare native proof results.
+        for name in ('pip', 'setuptools', '_distutils_hack', 'pkg_resources'):
+            for path in site.glob(name + '*'):
+                shutil.rmtree(path) if path.is_dir() else path.unlink()
+        (site / 'distutils-precedence.pth').unlink(missing_ok=True)
+        for wheel in lock['wheels']:
+            print(f'Verifying {wheel["filename"]}', flush=True)
+            wheel['installed_notice_files'] = install_wheel(fetch(wheel, cache), root, site)
+    else:
+        raise ValueError('Unknown reviewed assembly method')
     clean(root, site)
     prune_reviewed_files(root, pack_id)
     copy_runtime_licenses(root, pack['platform'])

@@ -2355,3 +2355,7 @@ werkzeug==3.1.9 \
     --hash=sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab
     # via flask
     # from https://pypi.org/simple
+
+# Explicit upstream qwen-omni-utils runtime import, absent from its dependency metadata.
+audioread==3.1.0 \
+    --hash=sha256:b30d1df6c5d3de5dcef0fb0e256f6ea17bdcf5f979408df0297d8a408e2971b4

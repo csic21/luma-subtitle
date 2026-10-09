@@ -5,7 +5,7 @@ import {
   asrComponentCatalog, asrComponentStatus, cancelAsrComponent,
   installAsrComponent, removeAsrComponent, repairAsrComponent,
 } from "@/lib/tauri-api";
-import { isTerminalComponentPhase, type AsrComponentAction, type AsrComponentCatalog, type AsrComponentProgress, type AsrComponentStatus } from "@/lib/asr-components";
+import { isTerminalComponentPhase, type AsrComponentAction, type AsrComponentCatalog, type AsrComponentProgress, type AsrComponentStatus, type AsrInstallConsent, type AsrRecordedConsent } from "@/lib/asr-components";
 import type { TFunction } from "@/types";
 
 type State = {
@@ -14,6 +14,7 @@ type State = {
   verified: boolean;
   catalog?: AsrComponentCatalog;
   components: AsrComponentStatus[];
+  consents: AsrRecordedConsent[];
   operation?: AsrComponentProgress;
   cancelling?: boolean;
   error?: string;
@@ -36,7 +37,7 @@ export function useAsrComponents(engine: string, t: TFunction) {
   const lastProgress = useRef<AsrComponentProgress>();
   const loadingRef = useRef(false);
   const eventsDuringLoad = useRef(new Map<string, AsrComponentProgress>());
-  const [state, setState] = useState<State>({ epoch, loading: true, verified: false, components: [] });
+  const [state, setState] = useState<State>({ epoch, loading: true, verified: false, components: [], consents: [] });
   const current = () => scope.current.mounted && scope.current.epoch === epoch;
   const publish = (patch: Partial<State>) => {
     if (current()) setState((previous) => ({ ...previous, ...patch, epoch }));
@@ -91,7 +92,7 @@ export function useAsrComponents(engine: string, t: TFunction) {
       const operation = recovered && !isTerminalComponentPhase(recovered.phase) ? recovered : undefined;
       eventsDuringLoad.current.clear();
       active.current = operation ? { id: operation.request_id, componentId: operation.component_id, own: false, cancelling: false } : undefined;
-      publish({ catalog, components: snapshot.components, operation, loading: false, verified: true, cancelling: false });
+      publish({ catalog, components: snapshot.components, consents: snapshot.consents ?? [], operation, loading: false, verified: true, cancelling: false });
     } catch (error) {
       if (current() && loadVersion.current === version) publish({ loading: false, error: errorText(error) });
     } finally {
@@ -106,7 +107,7 @@ export function useAsrComponents(engine: string, t: TFunction) {
     listener.current = undefined;
     lastProgress.current = undefined;
     eventsDuringLoad.current.clear();
-    setState({ epoch, loading: true, verified: false, components: [] });
+    setState({ epoch, loading: true, verified: false, components: [], consents: [] });
     void refresh();
     return () => {
       scope.current.mounted = false;
@@ -122,17 +123,27 @@ export function useAsrComponents(engine: string, t: TFunction) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine]);
 
-  const perform = async (action: AsrComponentAction, componentId: string) => {
+  const perform = async (action: AsrComponentAction, componentId: string, consent?: AsrInstallConsent) => {
     if (!current() || active.current || loadingRef.current || !listener.current) return;
     const requestId = crypto.randomUUID();
     active.current = { id: requestId, componentId, own: true, cancelling: false };
     lastProgress.current = undefined;
     publish({ error: undefined, notice: undefined, cancelling: false, operation: { request_id: requestId, component_id: componentId, phase: action === "remove" ? "removing" : "preparing", downloaded_bytes: 0, total_bytes: 0, message: "" } });
     try {
-      const installed = await actions[action](componentId, requestId);
+      const installed = await (consent ? actions[action](componentId, requestId, consent) : actions[action](componentId, requestId));
       if (!current() || active.current?.id !== requestId) return;
       setState((previous) => ({ ...previous, components: [...previous.components.filter((item) => item.id !== installed.id), installed] }));
       publish({ notice: t(action === "remove" ? "asr.managed.removed" : "asr.managed.installedNotice") });
+      if (consent) {
+        // Reuse only a receipt returned by the backend, never a frontend acceptance cache.
+        publish({ loading: true });
+        try {
+          const snapshot = await asrComponentStatus();
+          if (current() && active.current?.id === requestId) publish({ consents: snapshot.consents ?? [] });
+        } catch {
+          if (current() && active.current?.id === requestId) publish({ consents: [] });
+        }
+      }
     } catch (error) {
       if (!current() || active.current?.id !== requestId) return;
       const progress = lastProgress.current as AsrComponentProgress | undefined;
@@ -145,7 +156,7 @@ export function useAsrComponents(engine: string, t: TFunction) {
       publish({ loading: true });
       try {
         const snapshot = await asrComponentStatus();
-        if (current() && active.current?.id === requestId) publish({ components: snapshot.components, verified: true });
+        if (current() && active.current?.id === requestId) publish({ components: snapshot.components, consents: snapshot.consents ?? [], verified: true });
       } catch {
         if (current() && active.current?.id === requestId) publish({ verified: false });
       }
@@ -175,6 +186,6 @@ export function useAsrComponents(engine: string, t: TFunction) {
     }
   };
 
-  const visible: State = state.epoch === epoch ? state : { epoch, loading: true, verified: false, components: [] };
+  const visible: State = state.epoch === epoch ? state : { epoch, loading: true, verified: false, components: [], consents: [] };
   return { ...visible, busy: !!visible.operation, refresh, perform, cancel };
 }

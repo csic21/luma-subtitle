@@ -30,7 +30,7 @@ afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.clear
 
 describe("shared transcription settings", () => {
   it("keeps no-Python Whisper and Turbo visible by default and retains them after switching back", () => {
-    mount(); expect(text()).toContain("Turbo preset"); expect(renderer!.root.findAllByType("button").some((button) => button.children.includes(t("asr.release")))).toBe(true); expect(renderer!.root.findAllByType("input")).toHaveLength(1);
+    mount(); expect(text()).toContain("Turbo preset"); expect(text()).not.toContain(t("asr.terms.title")); expect(renderer!.root.findAllByType("button").some((button) => button.children.includes(t("asr.release")))).toBe(true); expect(renderer!.root.findAllByType("input")).toHaveLength(1);
     selectEngine("qwen3-asr"); expect(renderer!.root.findAllByProps({ "aria-label": "legacy-model" })).toHaveLength(0); expect(renderer!.root.findAllByType("input")).toHaveLength(3);
     expect(text()).toContain("Mac: Qwen uses CPU"); expect(text()).toContain("Offline setup guide"); expect(text()).toContain("3.72 / 6.54 GB");
     selectEngine("whisper-cpp"); expect(renderer!.root.findByProps({ "aria-label": "legacy-model" }).props.value).toContain("turbo");

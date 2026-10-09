@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "path": "licenses/ctranslate2/LICENSE.txt",
+      "component": "ctranslate2",
+      "license": "MIT",
+      "source_url": "https://raw.githubusercontent.com/OpenNMT/CTranslate2/d44d2d069eb88c7b7804da864c10c201501cb4a9/LICENSE",
+      "bytes": 1115,
+      "sha256": "54aa79d9fe3c09e67a16dcd95b9e88676405a6ec174efda31036983cf7672ecb"
+    },
+    {
+      "path": "licenses/ctranslate2/avx_mathfun.h.txt",
+      "component": "ctranslate2",
+      "license": "MIT and Zlib",
+      "source_url": "https://raw.githubusercontent.com/OpenNMT/CTranslate2/d44d2d069eb88c7b7804da864c10c201501cb4a9/third_party/avx_mathfun.h",
+      "bytes": 2569,
+      "sha256": "85ad62e479533f41102df2dac25df5b4ce6a086746bac11ae1eca7fa44479cca"
+    },
+    {
+      "path": "licenses/ctranslate2/avx512_mathfun.h.txt",
+      "component": "ctranslate2",
+      "license": "BSD-2-Clause and Zlib",
+      "source_url": "https://raw.githubusercontent.com/OpenNMT/CTranslate2/d44d2d069eb88c7b7804da864c10c201501cb4a9/third_party/avx512_mathfun.h",
+      "bytes": 292,
+      "sha256": "a6171c7f7bd21be0f356220a99aabda4e92723d2a974bd3e67ccca350bd68a62"
+    },
+    {
+      "path": "licenses/onednn/LICENSE.txt",
+      "component": "onednn",
+      "license": "Apache-2.0",
+      "source_url": "https://raw.githubusercontent.com/oneapi-src/oneDNN/64f6bcbcbab628e96f33a62c3e975f8535a7bde4/LICENSE",
+      "bytes": 11521,
+      "sha256": "dd12452e1ae11e3282271aa5895d8175296b83e936a027209f9399d26a407d0f"
+    },
+    {
+      "path": "licenses/onednn/THIRD-PARTY-PROGRAMS.txt",
+      "component": "onednn",
+      "license": "BSD-3-Clause and other permissive notices",
+      "source_url": "https://raw.githubusercontent.com/oneapi-src/oneDNN/64f6bcbcbab628e96f33a62c3e975f8535a7bde4/THIRD-PARTY-PROGRAMS",
+      "bytes": 29825,
+      "sha256": "9117585dfc6b5cd0fafc063312f28a86ec82eb97bf68316dcefcaaa7fc11428e"
+    },
+    {
+      "path": "licenses/cpu_features/LICENSE.txt",
+      "component": "cpu_features",
+      "license": "Apache-2.0",
+      "source_url": "https://raw.githubusercontent.com/google/cpu_features/8a494eb1e158ec2050e5f699a504fbc9b896a43b/LICENSE",
+      "bytes": 12876,
+      "sha256": "af272c1b4dd08dd61d43e001d3134119d03ca7a2b057a64f7355fdf27fbea3dd"
+    },
+    {
+      "path": "licenses/spdlog/LICENSE.txt",
+      "component": "spdlog",
+      "license": "MIT",
+      "source_url": "https://raw.githubusercontent.com/gabime/spdlog/76fb40d95455f249bd70824ecfcae7a8f0930fa3/LICENSE",
+      "bytes": 1348,
+      "sha256": "a7241a379cb98d37788f82c2fc2e484c3ae85dae881fd3406f0637644850926f"
+    },
+    {
+      "path": "licenses/spdlog/fmt.license.rst.txt",
+      "component": "spdlog",
+      "license": "MIT",
+      "source_url": "https://raw.githubusercontent.com/gabime/spdlog/76fb40d95455f249bd70824ecfcae7a8f0930fa3/include/spdlog/fmt/bundled/fmt.license.rst",
+      "bytes": 1408,
+      "sha256": "825c9324e70f8c839c8ba910543dd4a7daee243b86ef960594c11381a19980b8"
+    },
+    {
+      "path": "licenses/thread-pool/LICENSE.txt",
+      "component": "thread-pool",
+      "license": "MIT",
+      "source_url": "https://raw.githubusercontent.com/bshoshany/thread-pool/bd4533f1f70c2b975cbd5769a60d8eaaea1d2233/LICENSE.txt",
+      "bytes": 1076,
+      "sha256": "712a867cc12ebfcdecf6cea097f5aa7ec5acaa435a8f818c9f370960df35acbf",
+      "header_provenance": {
+        "ct2_path": "third_party/BS_thread_pool.hpp",
+        "ct2_header_sha256": "ae01783f6373f78aceb0b1bd9bfa40ba8af728e48afdf3ff77b88380ba717143",
+        "upstream_commit": "bd4533f1f70c2b975cbd5769a60d8eaaea1d2233",
+        "upstream_header_sha256": "50e9f4ebd7b479417e34361e411f7973f3b23274f09a988e8ca287df878f707b",
+        "comparison": "identical except final newline"
+      }
+    },
+    {
+      "path": "licenses/pybind11/LICENSE.txt",
+      "component": "pybind11",
+      "license": "BSD-3-Clause",
+      "source_url": "https://files.pythonhosted.org/packages/06/55/9f73c32dda93fa4f539fafa268f9504e83c489f460c380371d94296126cd/pybind11-2.11.1-py3-none-any.whl",
+      "source_archive_sha256": "33cdd02a6453380dd71cc70357ce388ad1ee8d32bd0e38fc22b273d050aa29b3",
+      "source_member": "pybind11-2.11.1.dist-info/LICENSE",
+      "bytes": 1684,
+      "sha256": "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb"
+    },
+    {
+      "path": "licenses/simd-utils/LICENSE.txt",
+      "component": "simd-utils",
+      "license": "BSD-2-Clause",
+      "source_url": "https://raw.githubusercontent.com/JishinMaster/simd_utils/77cc4a0bdb997a2855f2632e8f03ef7b7cf6c321/LICENSE",
+      "bytes": 1322,
+      "sha256": "dfaa54b4188ffa0e6298ce7ea27c865d12edcf73d742e2200ce9812db6268c0f",
+      "provenance": "The CT2-vendored avx512_mathfun.h identifies SIMD_Utils 0.2.5, author JishinMaster, BSD-2. Full project license at the pinned 0.2.5-era upstream commit; underlying Pommier/Garberoglio notice is retained in avx_mathfun.h.txt."
+    }
+  ],
+  "blockers": [],
+  "notice_inputs_complete": true,
+  "independent_redistribution_review_passed": false
+}

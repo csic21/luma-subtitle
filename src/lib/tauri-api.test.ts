@@ -111,3 +111,15 @@ describe("managed ASR component commands", () => {
     await api.cancelAsrComponent("request-id"); expect(invoke).toHaveBeenCalledWith("cancel_asr_component", { requestId: "request-id" });
   });
 });
+
+
+describe("runtime plan acceptance IPC", () => {
+  it("sends exact acknowledged hashes for install and repair without embedding text or general permission", async () => {
+    const { installAsrComponent, repairAsrComponent } = await import("./tauri-api");
+    const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "vendor-license", version: "2026", sha256: "b".repeat(64) }] };
+    await installAsrComponent("runtime", "request", consent);
+    expect(invoke).toHaveBeenCalledWith("install_asr_component", { request: { component_id: "runtime", request_id: "request", ...consent } });
+    await repairAsrComponent("runtime", "repair", consent);
+    expect(invoke).toHaveBeenCalledWith("repair_asr_component", { request: { component_id: "runtime", request_id: "repair", ...consent } });
+  });
+});

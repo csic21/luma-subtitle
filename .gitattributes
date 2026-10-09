@@ -1,3 +1,7 @@
 
 # Preserve exact hashed upstream license bytes, including vendor CRLF.
 scripts/asr-components/licenses/** -text -whitespace
+
+# Exact reviewed license presentation and CPU-build notice hashes.
+src-tauri/resources/asr/terms/** -text -whitespace
+scripts/asr-components/ct2-cpu/licenses/** -text -whitespace

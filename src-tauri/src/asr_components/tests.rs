@@ -192,14 +192,14 @@ fn managed_symlink_redirection_is_refused() {
 #[test]
 fn request_ids_busy_cancel_and_commit_boundary_are_deterministic() {
     let manager = ComponentManager::default();
-    let request = ComponentRequest { component_id: "fixture-model".into(), request_id: uuid::Uuid::new_v4().to_string() };
+    let request = ComponentRequest { component_id: "fixture-model".into(), request_id: uuid::Uuid::new_v4().to_string(), plan_sha256: None, acknowledged_terms: Vec::new() };
     let operation = manager.begin(&request, 4).unwrap();
     assert!(manager.begin(&request, 4).is_err());
     operation.cancel.store(true, Ordering::SeqCst);
     assert!(manager.commit_boundary().is_err());
     drop(operation);
     assert!(manager.begin(&request, 4).is_err());
-    let new = ComponentRequest { component_id: request.component_id.clone(), request_id: uuid::Uuid::new_v4().to_string() };
+    let new = ComponentRequest { component_id: request.component_id.clone(), request_id: uuid::Uuid::new_v4().to_string(), plan_sha256: None, acknowledged_terms: Vec::new() };
     let _operation = manager.begin(&new, 4).unwrap();
     assert!(manager.commit_boundary().is_ok());
     assert!(manager.active.lock().as_ref().unwrap().committing);
@@ -211,14 +211,14 @@ fn shutdown_cancels_owned_setup_and_waits_for_operation_cleanup() {
         let task_manager = manager.clone();
         let started = Arc::new(AtomicBool::new(false)); let signal = started.clone();
         let task = tauri::async_runtime::spawn(async move {
-            let request = ComponentRequest { component_id: "fixture-model".into(), request_id: uuid::Uuid::new_v4().to_string() };
+            let request = ComponentRequest { component_id: "fixture-model".into(), request_id: uuid::Uuid::new_v4().to_string(), plan_sha256: None, acknowledged_terms: Vec::new() };
             let operation = task_manager.begin(&request, 4).unwrap(); signal.store(true, Ordering::SeqCst);
             while !operation.cancel.load(Ordering::SeqCst) { tokio::time::sleep(Duration::from_millis(10)).await; }
         });
         while !started.load(Ordering::SeqCst) { tokio::time::sleep(Duration::from_millis(10)).await; }
         manager.shutdown().await; task.await.unwrap();
         assert!(manager.active.lock().is_none());
-        assert!(manager.begin(&ComponentRequest { component_id: "fixture-model".into(), request_id: uuid::Uuid::new_v4().to_string() }, 4).is_err());
+        assert!(manager.begin(&ComponentRequest { component_id: "fixture-model".into(), request_id: uuid::Uuid::new_v4().to_string(), plan_sha256: None, acknowledged_terms: Vec::new() }, 4).is_err());
     });
 }
 #[test]
@@ -371,4 +371,286 @@ fn self_test_errors_preserve_windows_native_failure_code() {
     let message = self_test_failure(status);
     assert!(message.contains("0xc0000135"));
     assert!(message.contains("supported review or recovery"));
+}
+
+fn recipe_runtime() -> catalog::Runtime {
+    let term = "Fixture upstream terms\n";
+    let runtime: catalog::Runtime = serde_json::from_value(serde_json::json!({
+        "id":"fixture-runtime", "version":"1.0.0", "label":"Fixture private runtime", "platform":"windows-x64", "engine":"whisper-accelerated", "backend":"faster-whisper", "device":"cpu", "license":"Fixture", "license_url":"https://example.com/terms", "installed_bytes":1024*1024, "max_files":100, "entrypoint":"python.exe",
+        "recipe": { "schema":1,
+            "python":{"url":"https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-x86_64-pc-windows-msvc-install_only_stripped.tar.gz", "bytes":4,"sha256":digest(b"good"),"installed_bytes":100000,"max_files":100,"entrypoint":"python.exe","site_packages":"Lib/site-packages","pip_version":"26.2.1"},
+            "wheels":[{"name":"example","version":"1.0","filename":"example-1.0-py3-none-any.whl","url":format!("https://files.pythonhosted.org/packages/aa/bb/{}/example-1.0-py3-none-any.whl", "a".repeat(64)),"bytes":4,"sha256":digest(b"good"),"installed_bytes":1000,"max_files":20}],
+            "terms":[{"id":"fixture-terms","version":"1","url":"https://example.com/terms","text":term,"sha256":digest(term.as_bytes())}]
+        }
+    })).unwrap();
+    runtime.recipe.as_ref().unwrap().validate(&runtime).unwrap(); runtime
+}
+#[test]
+fn recipe_rejects_remote_trust_drift_missing_bounds_and_changed_displayed_terms() {
+    let runtime = recipe_runtime(); let valid = runtime.recipe.as_ref().unwrap();
+    let mut changed = valid.clone(); changed.python.pip_version = "latest".into(); assert!(changed.validate(&runtime).is_err());
+    let mut changed = valid.clone(); changed.wheels[0].url = "https://evil.example/package.whl".into(); assert!(changed.validate(&runtime).is_err());
+    let mut changed = valid.clone(); changed.wheels[0].max_files = 0; assert!(changed.validate(&runtime).is_err());
+    let mut changed = valid.clone(); changed.terms[0].text.push('!'); assert!(changed.validate(&runtime).is_err());
+    let mut changed = valid.clone(); changed.wheels.push(changed.wheels[0].clone()); assert!(changed.validate(&runtime).is_err());
+    let mut changed = valid.clone(); changed.terms[0].raw_sha256 = Some(digest(b"original legacy bytes")); changed.terms[0].source_encoding = Some("cp1252".into()); assert!(changed.validate(&runtime).is_ok());
+}
+#[test]
+fn exact_plan_and_every_term_are_required_before_setup_can_begin() {
+    let runtime = recipe_runtime(); let required = runtime.recipe.as_ref().unwrap().acknowledgements();
+    let mut request = ComponentRequest { component_id: runtime.id.clone(), request_id: uuid::Uuid::new_v4().to_string(), plan_sha256: None, acknowledged_terms: Vec::new() };
+    assert!(recipe::validate_acknowledgement(&runtime, &request).is_err());
+    request.plan_sha256 = Some(recipe::plan_hash(&runtime).unwrap());
+    assert!(recipe::validate_acknowledgement(&runtime, &request).is_err());
+    request.acknowledged_terms = required.clone();
+    assert!(recipe::validate_acknowledgement(&runtime, &request).unwrap().is_some());
+    request.acknowledged_terms.push(required[0].clone()); assert!(recipe::validate_acknowledgement(&runtime, &request).is_err());
+    request.acknowledged_terms = required; request.plan_sha256 = Some("0".repeat(64)); assert!(recipe::validate_acknowledgement(&runtime, &request).is_err());
+    // Pure acknowledgement validation cannot create state or fetch a source.
+    let manager = ComponentManager::default(); assert!(manager.active.lock().is_none());
+}
+#[test]
+fn consent_receipts_store_tuples_only_and_never_approve_a_changed_plan() {
+    let fixture = Fixture::new(); let runtime = recipe_runtime();
+    let consent = recipe::Consent { component_id:runtime.id.clone(), plan_sha256:recipe::plan_hash(&runtime).unwrap(), terms:runtime.recipe.as_ref().unwrap().acknowledgements() };
+    let mut catalog = catalog::Catalog { schema:1, platform:"unsupported".into(), runtimes:vec![runtime], models:Vec::new() };
+    assert!(store::read_consents(&fixture.root, &catalog).unwrap().is_empty());
+    store::record_consent(&fixture.root, &consent).unwrap();
+    assert_eq!(store::read_consents(&fixture.root, &catalog).unwrap(), vec![consent]);
+    let directory = fixture.root.join(".consents/fixture-runtime");
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            let text = fs::read_to_string(path).unwrap(); assert!(!text.contains("Fixture upstream terms")); assert!(!text.contains("credential"));
+        }
+    }
+    let term = &mut catalog.runtimes[0].recipe.as_mut().unwrap().terms[0];
+    term.text.push_str("Changed\n"); term.sha256 = digest(term.text.as_bytes()); term.version = "2".into();
+    assert!(store::read_consents(&fixture.root, &catalog).unwrap().is_empty());
+}
+fn tar_fixture(base: &Path, members: &[(&str, u8, &[u8], &str)]) -> PathBuf {
+    let path = base.join(format!("{}.tar.gz", uuid::Uuid::new_v4()));
+    let gzip = flate2::write::GzEncoder::new(fs::File::create(&path).unwrap(), flate2::Compression::default());
+    let mut builder = tar::Builder::new(gzip);
+    for (name, kind, bytes, link) in members {
+        let mut header = tar::Header::new_gnu(); header.set_mode(0o755); header.set_size(bytes.len() as u64);
+        header.set_entry_type(tar::EntryType::new(*kind));
+        header.as_mut_bytes()[..100].fill(0); header.as_mut_bytes()[..name.len()].copy_from_slice(name.as_bytes());
+        if !link.is_empty() { header.as_mut_bytes()[157..257].fill(0); header.as_mut_bytes()[157..157+link.len()].copy_from_slice(link.as_bytes()); }
+        header.set_cksum(); builder.append(&header, *bytes).unwrap();
+    }
+    builder.finish().unwrap(); builder.into_inner().unwrap().finish().unwrap(); path
+}
+fn unpack_tar(fixture: &Fixture, archive: &Path, cap: u64, files: usize, cancelled: bool) -> Result<Vec<store::FileReceipt>, String> {
+    let root = fixture.base.join(uuid::Uuid::new_v4().to_string()); fs::create_dir(&root).unwrap();
+    let result = tar_bootstrap::extract(archive, &root, cap, files, &AtomicBool::new(cancelled));
+    if result.is_ok() { for entry in fs::read_dir(&root).unwrap() { assert!(!entry.unwrap().file_type().unwrap().is_symlink()); } }
+    result
+}
+#[test]
+fn pinned_python_internal_links_are_copied_as_regular_files_with_expansion_caps() {
+    let fixture = Fixture::new();
+    let archive = tar_fixture(&fixture.base, &[("python/",b'5',b"",""),("python/bin/",b'5',b"",""),("python/bin/python3.12",b'0',b"good",""),("python/bin/python3",b'2',b"","python3.12"),("python/copy",b'1',b"","python/bin/python3.12")]);
+    let files = unpack_tar(&fixture, &archive,12,3,false).unwrap();
+    assert_eq!(files.len(),3); assert!(files.iter().all(|f| f.sha256 == digest(b"good")));
+    assert!(unpack_tar(&fixture,&archive,8,3,false).is_err());
+    assert!(unpack_tar(&fixture,&archive,12,2,false).is_err());
+    assert!(unpack_tar(&fixture,&archive,12,3,true).is_err());
+}
+#[test]
+fn python_tar_rejects_escape_cycle_alias_sparse_device_and_missing_targets() {
+    let fixture = Fixture::new();
+    for members in [
+        vec![("python/../escape",b'0',&b"bad"[..],"")],
+        vec![("other/file",b'0',&b"bad"[..],"")],
+        vec![("python/file:stream",b'0',&b"bad"[..],"")],
+        vec![("python/link",b'2',&b""[..],"../../escape")],
+        vec![("python/link",b'2',&b""[..],"/absolute")],
+        vec![("python/link",b'1',&b""[..],"../escape")],
+        vec![("python/a",b'2',&b""[..],"b"),("python/b",b'2',&b""[..],"a")],
+        vec![("python/missing",b'2',&b""[..],"not-present")],
+        vec![("python/device",b'3',&b""[..],"")],
+        vec![("python/sparse",b'S',&b""[..],"")],
+        vec![("python/A",b'0',&b"x"[..],""),("python/a",b'0',&b"x"[..],"")],
+    ] {
+        let archive = tar_fixture(&fixture.base,&members);
+        assert!(unpack_tar(&fixture,&archive,100,20,false).is_err(),"{members:?}");
+    }
+    assert!(!fixture.base.join("escape").exists());
+}
+#[test]
+fn component_cache_cleanup_and_removal_are_scoped_to_one_owned_engine() {
+    let fixture = Fixture::new(); let component = model();
+    let ours = store::cache_directory(&fixture.root,component.id()).unwrap();
+    let other = store::cache_directory(&fixture.root,"other-engine").unwrap();
+    let hash = digest(b"good"); fs::write(ours.join(&hash),b"good").unwrap(); fs::write(other.join(&hash),b"good").unwrap();
+    let partial = ours.join(format!("{}.{}.partial",hash,uuid::Uuid::new_v4())); fs::write(&partial,b"unfinished").unwrap();
+    fs::write(ours.join("unrecognized.txt"),b"keep until explicit removal").unwrap();
+    store::cache_directory(&fixture.root,component.id()).unwrap(); assert!(!partial.exists()); assert!(ours.join("unrecognized.txt").exists());
+    let status = store::status(&fixture.root,&component);
+    assert_eq!(status.state,"not_installed"); assert_eq!(status.installed_bytes,0); assert_eq!(status.cached_bytes,4);
+    assert!(!fixture.root.join(component.id()).exists());
+    store::remove(&fixture.root,&component).unwrap(); assert!(!ours.exists()); assert_eq!(fs::read(other.join(hash)).unwrap(),b"good");
+    assert_eq!(store::status(&fixture.root,&component).cached_bytes,0);
+}
+#[test]
+fn required_windows_environment_keys_are_preserved_case_insensitively() {
+    for key in ["SystemRoot","SYSTEMROOT","windir","COMSPEC","PROCESSOR_ARCHITECTURE","Processor_ArchiteW6432","NUMBER_OF_PROCESSORS"] { assert!(setup_process::preserved_os_key(key),"{key}"); }
+    for key in ["PATH","PYTHONPATH","PYTHONHOME","PIP_INDEX_URL","HTTP_PROXY","AWS_SECRET_ACCESS_KEY","HF_TOKEN"] { assert!(!setup_process::preserved_os_key(key),"{key}"); }
+}
+#[cfg(unix)]
+#[test]
+fn owned_assembly_cancellation_kills_and_reaps_without_detached_readers() {
+    use std::os::unix::fs::PermissionsExt;
+    tauri::async_runtime::block_on(async {
+        let fixture = Fixture::new(); let staging = store::Staging::create(&fixture.root).unwrap();
+        let mut runtime = recipe_runtime(); runtime.entrypoint = "python-fixture".into();
+        let executable = staging.payload().join(&runtime.entrypoint);
+        fs::write(&executable,b"#!/bin/sh\necho $$ > child.pid\nwhile :; do :; done\n").unwrap(); fs::set_permissions(&executable,fs::Permissions::from_mode(0o700)).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false)); let flag = cancel.clone();
+        let task = tauri::async_runtime::spawn(async move { tokio::time::sleep(Duration::from_millis(150)).await; flag.store(true,Ordering::SeqCst); });
+        let started = Instant::now();
+        let result = assembly::run(&staging.payload(),&staging.directory.join("unused.py"),&staging.directory.join("unused.json"),&staging.directory.join("unused-wheels"),&runtime,&cancel).await;
+        task.await.unwrap(); assert!(result.unwrap_err().contains("cancelled")); assert!(started.elapsed() < Duration::from_secs(5));
+        let pid = fs::read_to_string(staging.payload().join("child.pid")).unwrap();
+        assert!(!std::process::Command::new("/bin/kill").args(["-0",pid.trim()]).status().unwrap().success());
+    });
+}
+
+fn wheel_fixture(wheelhouse:&Path,name:&str,files:&[(&str,&[u8])])->recipe::Wheel {
+    wheel_fixture_version(wheelhouse,name,"1.0",0o644,files)
+}
+fn wheel_fixture_version(wheelhouse:&Path,name:&str,version:&str,mode:u32,files:&[(&str,&[u8])])->recipe::Wheel {
+    let normalized = name.replace('-',"_");
+    let filename=format!("{normalized}-{version}-py3-none-any.whl"); let path=wheelhouse.join(&filename);
+    let mut zip=zip::ZipWriter::new(fs::File::create(&path).unwrap()); let options=zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).unix_permissions(mode);
+    for (suffix,contents) in [("WHEEL","Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n".to_string()),("METADATA",format!("Name: {name}\nVersion: {version}\n")),("RECORD",String::new())] {
+        zip.start_file(format!("{normalized}-{version}.dist-info/{suffix}"),options).unwrap();zip.write_all(contents.as_bytes()).unwrap();
+    }
+    for (path,bytes) in files {zip.start_file(*path,options).unwrap();zip.write_all(bytes).unwrap();}
+    zip.finish().unwrap();
+    recipe::Wheel{name:name.into(),version:version.into(),filename:filename.clone(),url:format!("https://files.pythonhosted.org/packages/aa/bb/{}/{filename}","a".repeat(64)),bytes:fs::metadata(&path).unwrap().len(),sha256:store::hash_file(&path).unwrap(),installed_bytes:100000,max_files:100}
+}
+#[test]
+fn wheel_destination_mapping_preserves_standard_private_prefix_data_layout() {
+    assert_eq!(wheel_preflight::destination_for_test("example-1.0.data/data/Library/bin/library.dll","example-1.0.data","Lib/site-packages").unwrap(),"Library/bin/library.dll");
+    assert_eq!(wheel_preflight::destination_for_test("example-1.0.data/purelib/example.py","example-1.0.data","Lib/site-packages").unwrap(),"Lib/site-packages/example.py");
+    assert!(wheel_preflight::destination_for_test("example-1.0.data/data/../../python.exe","example-1.0.data","Lib/site-packages").is_err());
+    assert!(wheel_preflight::destination_for_test("other-1.0.data/data/file","example-1.0.data","Lib/site-packages").is_err());
+    assert!(wheel_preflight::destination_for_test("example-1.0.data/headers/header.h","example-1.0.data","Lib/site-packages").is_err());
+}
+#[test]
+fn malicious_wheel_mapping_hooks_and_cross_wheel_collisions_fail_before_pip() {
+    let fixture=Fixture::new(); let wheelhouse=fixture.base.join("wheels");fs::create_dir(&wheelhouse).unwrap();
+    let mut recipe=recipe_runtime().recipe.unwrap();
+    let python=vec![store::FileReceipt{path:"python.exe".into(),bytes:4,sha256:digest(b"good")}];
+    for files in [
+        vec![("example-1.0.data/data/python.exe",&b"evil"[..])],
+        vec![("example.py",&b"one"[..]),("example-1.0.data/purelib/example.py",&b"two"[..])],
+        vec![("subdir",&b"one"[..]),("subdir/child.py",&b"two"[..])],
+        vec![("sitecustomize.py",&b"import socket"[..])],
+        vec![("SITECUSTOMIZE.py",&b"import socket"[..])],
+        vec![("example-1.0.data/data/lib/site-packages/sitecustomize.py",&b"import socket"[..])],
+        vec![("PIP.py",&b"import socket"[..])],
+        vec![("evil.PTH",&b"import socket"[..])],
+        vec![("evil.pth",&b"import socket; socket.socket()"[..])],
+    ] {
+        recipe.wheels=vec![wheel_fixture(&wheelhouse,"example",&files)];
+        assert!(wheel_preflight::validate(&wheelhouse,&recipe,&python,&AtomicBool::new(false)).is_err(),"{files:?}");
+        assert!(!fixture.base.join("ASSEMBLY.json").exists());
+    }
+    recipe.wheels=vec![wheel_fixture(&wheelhouse,"example",&[("namespace/common.py",b"first")]),wheel_fixture(&wheelhouse,"another",&[("namespace/common.py",b"second")])];
+    assert!(wheel_preflight::validate(&wheelhouse,&recipe,&python,&AtomicBool::new(false)).is_err());
+    recipe.wheels=vec![wheel_fixture(&wheelhouse,"example",&[("namespace/first.py",b"first")]),wheel_fixture(&wheelhouse,"another",&[("namespace/second.py",b"second")])];
+    assert!(wheel_preflight::validate(&wheelhouse,&recipe,&python,&AtomicBool::new(false)).is_ok());
+}
+
+#[test]
+fn tar_extension_metadata_is_rejected_before_unbounded_preprocessing() {
+    let fixture = Fixture::new();
+    for kind in [b'L', b'K', b'x', b'g', b'S'] {
+        let path = fixture.base.join(format!("metadata-{kind}.tar.gz"));
+        let mut gzip = flate2::write::GzEncoder::new(fs::File::create(&path).unwrap(), flate2::Compression::default());
+        let mut header = tar::Header::new_gnu(); header.set_path("python/metadata").unwrap();
+        header.set_mode(0o600); header.set_size(1024 * 1024 * 1024); header.set_entry_type(tar::EntryType::new(kind)); header.set_cksum();
+        gzip.write_all(header.as_bytes()).unwrap(); gzip.finish().unwrap();
+        let error = unpack_tar(&fixture,&path,100,20,false).unwrap_err();
+        assert!(error.contains("unsupported extension or sparse metadata"),"kind={kind}: {error}");
+    }
+}
+
+/// Native proof only: local inputs must still match every immutable recipe hash.
+/// No environment override or fixture transport is compiled into production.
+#[test]
+#[ignore = "requires native private Python and exact local wheel inputs"]
+fn native_direct_recipe_installs_repairs_and_removes() {
+    let runtime_path = PathBuf::from(std::env::var_os("LUMA_ASR_RECIPE_RUNTIME").expect("LUMA_ASR_RECIPE_RUNTIME"));
+    let inputs = fs::canonicalize(PathBuf::from(std::env::var_os("LUMA_ASR_RECIPE_INPUTS").expect("LUMA_ASR_RECIPE_INPUTS"))).unwrap();
+    let source: serde_json::Value = serde_json::from_slice(&fs::read(runtime_path).unwrap()).unwrap();
+    let catalog = catalog::parse(&serde_json::json!({"schema":1,"runtimes":[source],"models":[]}).to_string()).unwrap();
+    let component = catalog.components().remove(0);
+    let Component::Runtime(runtime) = &component else { unreachable!() };
+    assert_eq!(runtime.platform,catalog::platform()); catalog::check_os(runtime.min_os_version.as_deref()).unwrap();
+    // Candidate unavailability is deliberately preserved: this test exercises
+    // internal assembly without making an unreviewed production entry usable.
+    let recipe = runtime.recipe.as_ref().expect("exact recipe required");
+    let python_archive = inputs.join(&recipe.python.sha256);
+    download::verify_digest(store::regular_file(&python_archive).unwrap().len(),&store::hash_file(&python_archive).unwrap(),recipe.python.bytes,&recipe.python.sha256).unwrap();
+    for wheel in &recipe.wheels {
+        let path = inputs.join(&wheel.filename);
+        download::verify_digest(store::regular_file(&path).unwrap().len(),&store::hash_file(&path).unwrap(),wheel.bytes,&wheel.sha256).unwrap();
+    }
+    let fixture = Fixture::new(); let _setup = store::acquire_setup_lease(&fixture.root).unwrap(); let cancel = AtomicBool::new(false);
+    let mut installed_paths = Vec::new();
+    for _ in 0..2 {
+        let staging = store::Staging::create(&fixture.root).unwrap();
+        let files = tar_bootstrap::extract(&python_archive,&staging.payload(),recipe.python.installed_bytes,recipe.python.max_files,&cancel).unwrap();
+        let wheelhouse = staging.directory.join("wheelhouse"); fs::create_dir(&wheelhouse).unwrap();
+        for wheel in &recipe.wheels { fs::copy(inputs.join(&wheel.filename),wheelhouse.join(&wheel.filename)).unwrap(); }
+        wheel_preflight::validate(&wheelhouse,recipe,&files,&cancel).unwrap();
+        let script = staging.directory.join("offline-assemble.py"); fs::write(&script,assembly::SCRIPT).unwrap();
+        let lock = serde_json::json!({"schema":1,"platform":runtime.platform,"python":"3.12","wheels":recipe.wheels});
+        let lock_path = staging.directory.join("wheel-lock.json"); fs::write(&lock_path,serde_json::to_vec(&lock).unwrap()).unwrap();
+        tauri::async_runtime::block_on(assembly::run(&staging.payload(),&script,&lock_path,&wheelhouse,runtime,&cancel)).unwrap();
+        assembly::verify_report(&staging.payload(),runtime,recipe).unwrap();
+        let files = assembly::inventory(&staging.payload(),runtime.installed_bytes,runtime.max_files,&cancel).unwrap();
+        tauri::async_runtime::block_on(self_test(&staging.payload(),runtime,&cancel)).unwrap();
+        store::write_receipt(&staging.payload(),&component,files).unwrap(); store::validate_files(&staging.payload(),&component,&cancel).unwrap();
+        let installed = store::commit(&fixture.root,&component,&staging).unwrap(); let path = PathBuf::from(installed.path.unwrap());
+        tauri::async_runtime::block_on(self_test(&path,runtime,&cancel)).unwrap();
+        assert_eq!(store::status(&fixture.root,&component).state,"installed"); installed_paths.push(path);
+    }
+    assert_ne!(installed_paths[0],installed_paths[1]); assert!(installed_paths[0].join(&runtime.entrypoint).is_file());
+    let failed = store::Staging::create(&fixture.root).unwrap();
+    assert!(tar_bootstrap::extract(&python_archive,&failed.payload(),recipe.python.installed_bytes,recipe.python.max_files,&AtomicBool::new(true)).is_err());
+    assert_eq!(store::status(&fixture.root,&component).path.as_deref(),Some(installed_paths[1].to_str().unwrap()));
+    let _exclusive = store::acquire_use_lease(&fixture.root,true).unwrap(); store::remove(&fixture.root,&component).unwrap();
+    assert_eq!(store::status(&fixture.root,&component).state,"not_installed"); assert!(installed_paths.iter().all(|p| !p.exists()));
+    println!("NATIVE_DIRECT_RECIPE_INSTALLER_OK id={} plan_sha256={} install_repair_cancel_remove=true",runtime.id,recipe::plan_hash(runtime).unwrap());
+}
+
+#[test]
+fn tar_root_directory_cannot_hide_a_data_body() {
+    let fixture = Fixture::new();
+    let archive = tar_fixture(&fixture.base,&[("python/",b'5',b"unexpected","")]);
+    assert!(unpack_tar(&fixture,&archive,100,20,false).unwrap_err().contains("root directory contains unexpected data"));
+}
+
+#[test]
+fn reviewed_mlx_overlap_requires_exact_owners_version_path_bytes_and_mode() {
+    let fixture = Fixture::new(); let wheelhouse = fixture.base.join("mlx-wheels"); fs::create_dir(&wheelhouse).unwrap();
+    let mut recipe = recipe_runtime().recipe.unwrap(); let cancel = AtomicBool::new(false);
+    for (second,version,mode,path,content,allowed) in [
+        ("mlx-metal","0.29.3",0o644,"mlx/utils.py",&b"same"[..],true),
+        ("mlx-metal","0.29.3",0o644,"mlx/utils.py",&b"evil"[..],false),
+        ("mlx-metal","0.29.3",0o755,"mlx/utils.py",&b"same"[..],false),
+        ("mlx-metal","0.29.4",0o644,"mlx/utils.py",&b"same"[..],false),
+        ("another","0.29.3",0o644,"mlx/utils.py",&b"same"[..],false),
+        ("mlx-metal","0.29.3",0o644,"mlx/unreviewed.py",&b"same"[..],false),
+        ("mlx-metal","0.29.3",0o644,"mlx/UTILS.py",&b"same"[..],false),
+    ] {
+        let first_path = if path == "mlx/UTILS.py" { "mlx/utils.py" } else { path };
+        recipe.wheels = vec![wheel_fixture_version(&wheelhouse,"mlx","0.29.3",0o644,&[(first_path,b"same")]),wheel_fixture_version(&wheelhouse,second,version,mode,&[(path,content)])];
+        assert_eq!(wheel_preflight::validate(&wheelhouse,&recipe,&[],&cancel).is_ok(),allowed,"owner={second} version={version} mode={mode} path={path}");
+    }
 }

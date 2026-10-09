@@ -16,8 +16,8 @@ release tag, stable latest release, and updater manifest are unchanged.
 | --- | --- | --- | --- | ---: |
 | faster-whisper-cpu-windows-x64 | Windows x64 | Windows 10 | faster-whisper 1.2.1, CTranslate2 4.8.2 | 85,004,906 |
 | mlx-whisper-metal-macos-arm64 | Apple Silicon | macOS 14 | mlx-whisper 0.4.3, MLX/MLX Metal 0.29.3, PyTorch 2.9.1 | 198,349,117 |
-| qwen3-asr-cpu-windows-x64 | Windows x64 | Windows 10 | qwen-asr 0.0.6, PyTorch 2.9.1 CPU, Transformers 4.57.6 | 363,463,247 |
-| qwen3-asr-cpu-macos-arm64 | Apple Silicon | macOS 14 | qwen-asr 0.0.6, PyTorch 2.9.1, Transformers 4.57.6 | 293,565,990 |
+| qwen3-asr-cpu-windows-x64 | Windows x64 | Windows 10 | qwen-asr 0.0.6, PyTorch 2.9.1 CPU, Transformers 4.57.6 | 363,486,390 |
+| qwen3-asr-cpu-macos-arm64 | Apple Silicon | macOS 14 | qwen-asr 0.0.6, PyTorch 2.9.1, Transformers 4.57.6 | 293,589,133 |
 
 The last column is the exact sum of the selected upstream wheel sizes. It is
 **not** the final compressed archive size or installed footprint. Native build
@@ -221,3 +221,66 @@ A separately reviewed publication controller must verify the exact successful PR
 source/run, approved archive and manifest hashes, and rebuilt evidence before any
 release mutation. Published component tags/assets must be immutable; mismatches
 must fail rather than overwrite. A failed or untested pack remains unavailable.
+
+## Direct-upstream assembly proof (not yet a delivery claim)
+
+The separate `assemble.py` entrypoint is shared with the planned application
+installer. It is install-time assembly only; transcription never invokes pip.
+The verified downloader owns every network request. The bootstrap uses the exact
+private PBS interpreter and its bundled **pip 26.2.1**, launched with
+`-I -S -B -u -X utf8`. It manually adds only that interpreter's known private site
+directory, without processing startup `.pth` or site customization hooks.
+
+Every input wheel is rechecked for exact bytes/hash, and the wheelhouse must
+contain exactly the approved files. Requirements are direct local file URLs with
+one exact SHA-256 per wheel. Pip runs with no index, dependency resolution, source
+builds, bytecode compilation or cache. The bootstrap clears inherited environment
+and all `PIP_*` options, sets `PIP_CONFIG_FILE` to the platform's null device, and
+asserts that the pinned pip loads no global/user/site configuration even in
+isolated mode. An audit guard is installed before pip imports and denies network
+and child-process operations. The caller owns the only child process, imposes a
+timeout and kills/reaps it on cancellation or error.
+
+Installation uses the fresh private interpreter's explicit `--prefix`, preserving
+standard wheel `.data/data` locations under the runtime root. The complete old
+bootstrap setuptools package is removed before replacement. Generated launchers are
+removed. Generated local `direct_url.json` records are verified against their
+approved wheel identity and removed; the exact original upstream URLs/hashes are
+preserved in deterministic `ASSEMBLY.json`, without CI or user filesystem paths.
+Only RECORD rows for deliberately removed artifacts are dropped, so launcher and
+local-URL hashes cannot retain staging-dependent content. The reviewed setuptools
+startup `.pth` is also removed; startup hooks are not needed by transcription.
+The native proof assembles twice and compares bytes, then runs the same relocated
+private runtime and functional smoke used by the reference build. Only the JSON
+proof report is uploaded. Until those native checks pass, this is an implemented
+proof path, not verified end-user installation support.
+
+The eventual UI must show exact applicable proprietary terms before a user's
+explicit install click. Consent cannot authorize a use excluded by a vendor's
+license. In particular, the original CUDA/cuDNN-containing CTranslate2 wheel is
+not a direct-source CPU delivery candidate; a separately verified CPU-only build
+is under consideration. Proprietary/native redistribution and source-closure
+holds still prohibit shipping the reference ZIPs.
+
+`measure_recipe_caps.py` reads only the already verified local archive cache.
+`recipe-caps.json` labels each input count as measured or a conservative enforced
+cap. It does not fetch missing archives. The two Qwen candidates use an independent
+4 GiB/100,000-file final-tree limit; that is not a measured installed size.
+
+`generate_recipes.py` combines those bounds with exact Python notices, upstream
+engine license texts, declared dependency inventory and applicable proprietary
+terms into an explicitly named review-only output. CI generates it twice under
+`RUNNER_TEMP`, compares exact bytes, logs its SHA-256 and passes that path to the
+native proof. The redundant generated text is not checked into the repository.
+The generator never modifies the production catalog and
+preserves an unavailable reason for every candidate. The original Windows
+CTranslate2 wheel is excluded entirely. Engine text provenance and matching source
+version evidence are locked in `engine-terms.lock.json`; this does not establish
+complete native dependency license coverage or validate runtime operation.
+
+Windows smoke rejects numbered optional Visual C++ runtime DLLs loaded outside
+the private component, even if the hosted runner has installed them in System32.
+Guaranteed Windows OS libraries such as `msvcp_win.dll` are classified separately.
+The pinned PBS package does not itself supply every optional DLL used by the
+upstream engine wheels; clean-user readiness remains blocked until app-local
+dependencies and their exact upstream terms are reviewed and tested.

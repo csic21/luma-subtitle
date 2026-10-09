@@ -1,4 +1,4 @@
-//! User-triggered, app-owned optional components. No startup downloads, pip,
+//! User-triggered, app-owned optional components. No startup downloads, resolvers,
 //! global Python changes, legacy model changes, or remote trust manifests.
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -6,8 +6,13 @@ use std::{collections::HashSet, future::Future, path::{Path, PathBuf}, process::
 use tauri::{AppHandle, Emitter, Manager};
 
 mod archive;
+mod assembly;
 mod catalog;
 mod download;
+mod recipe;
+mod tar_bootstrap;
+mod setup_process;
+mod wheel_preflight;
 mod store;
 #[cfg(test)] mod tests;
 use catalog::Component;
@@ -25,7 +30,7 @@ pub(crate) fn initialize(app: &AppHandle) -> Result<(), String> {
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct ComponentStatus {
     id: String, kind: String, state: String, version: Option<String>, path: Option<String>,
-    python_path: Option<String>, installed_bytes: u64, error: Option<String>,
+    python_path: Option<String>, installed_bytes: u64, cached_bytes: u64, error: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Progress {
@@ -33,10 +38,14 @@ pub(crate) struct Progress {
     downloaded_bytes: u64, total_bytes: u64, message: String,
 }
 #[derive(Serialize)]
-pub(crate) struct Status { components: Vec<ComponentStatus>, operation: Option<Progress> }
+pub(crate) struct Status { components: Vec<ComponentStatus>, operation: Option<Progress>, consents: Vec<recipe::Consent> }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ComponentRequest { component_id: String, request_id: String }
+pub(crate) struct ComponentRequest {
+    component_id: String, request_id: String,
+    #[serde(default)] plan_sha256: Option<String>,
+    #[serde(default)] acknowledged_terms: Vec<recipe::TermAcknowledgement>,
+}
 struct Operation { progress: Progress, cancel: Arc<AtomicBool>, committing: bool }
 #[derive(Default)]
 pub(crate) struct ComponentManager {
@@ -111,9 +120,13 @@ pub(crate) async fn asr_component_status(app: AppHandle) -> Result<Status, Strin
     let manager = app.state::<ComponentManager>();
     let _snapshot = manager.store_gate.read().await;
     let _cross_process_snapshot = store::snapshot_lease(&root)?;
-    let components = tauri::async_runtime::spawn_blocking(move || catalog.components().iter().map(|c| store::status(&root, c)).collect()).await.map_err(|e| e.to_string())?;
+    let (components, consents) = tauri::async_runtime::spawn_blocking(move || {
+        let components = catalog.components().iter().map(|c| store::status(&root, c)).collect();
+        let consents = store::read_consents(&root, &catalog)?;
+        Ok::<_, String>((components, consents))
+    }).await.map_err(|e| e.to_string())??;
     let operation = manager.active.lock().as_ref().map(|o| o.progress.clone());
-    Ok(Status { components, operation })
+    Ok(Status { components, operation, consents })
 }
 #[tauri::command]
 pub(crate) fn cancel_asr_component(app: AppHandle, request_id: String) -> bool {
@@ -132,10 +145,13 @@ pub(crate) async fn repair_asr_component(app: AppHandle, request: ComponentReque
 async fn install(app: AppHandle, request: ComponentRequest, repair: bool) -> Result<ComponentStatus, String> {
     let component = catalog::embedded()?.find(&request.component_id)?;
     component.availability()?;
+    // Verify explicit exact-plan assent before beginning an operation, creating
+    // storage, downloading, or executing any upstream code.
+    let consent = match &component { Component::Runtime(runtime) => recipe::validate_acknowledgement(runtime, &request)?, Component::Model(_) => None };
     let manager = app.state::<ComponentManager>();
     let operation = manager.begin(&request, component.download_bytes())?;
     manager.report(&app, "preparing", 0, "Preparing private engine component storage");
-    let result = install_inner(&app, &manager, &component, operation.cancel.clone(), repair).await;
+    let result = install_inner(&app, &manager, &component, operation.cancel.clone(), repair, consent).await;
     match &result {
         Ok(_) => manager.report(&app, "complete", component.download_bytes(), "Engine component is ready. Select it to use it."),
         Err(error) => {
@@ -145,9 +161,10 @@ async fn install(app: AppHandle, request: ComponentRequest, repair: bool) -> Res
     }
     result
 }
-async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &Component, cancel: Arc<AtomicBool>, repair: bool) -> Result<ComponentStatus, String> {
+async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &Component, cancel: Arc<AtomicBool>, repair: bool, consent: Option<recipe::Consent>) -> Result<ComponentStatus, String> {
     let root = root_path(app, true)?;
     let _lease = store::acquire_setup_lease(&root)?;
+    if let Some(consent) = consent { store::record_consent(&root, &consent)?; }
     if !repair {
         let check_root = root.clone(); let check_component = component.clone(); let cancellation = cancel.clone();
         let previous = tauri::async_runtime::spawn_blocking(move || store::status_with_cancel(&check_root, &check_component, &cancellation)).await.map_err(|e| e.to_string())?;
@@ -157,12 +174,16 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
     let recovery_root = root.clone();
     tauri::async_runtime::spawn_blocking(move || store::recover_staging(&recovery_root)).await.map_err(|e| e.to_string())??;
     archive::cancelled(&cancel)?;
-    let needed = required_free_space(component.download_bytes(), component.installed_bytes())?;
+    let multiplier = if matches!(component, Component::Runtime(runtime) if runtime.recipe.is_some()) { 2 } else { 1 };
+    let needed = required_free_space(component.download_bytes().checked_mul(multiplier).ok_or("Download budget overflow")?, component.installed_bytes().checked_mul(multiplier).ok_or("Staging budget overflow")?)?;
     let available = fs2::available_space(&root).map_err(|e| format!("Cannot check free space for private components: {e}"))?;
     if available < needed { return Err(format!("Not enough free disk space for a safe staged install. Need {needed} bytes free; {available} bytes are available. Existing components and models were preserved.")); }
     let staging = store::Staging::create(&root)?;
     let files = match component {
         Component::Runtime(runtime) => {
+            if let Some(recipe) = &runtime.recipe {
+                assembly::prepare(app, manager, &root, &staging, runtime, recipe, &cancel).await?
+            } else {
             let archive = runtime.archive.as_ref().ok_or("Runtime package has not been published")?;
             let download_path = staging.directory.join("runtime.zip");
             download::fetch(&archive.url, archive.bytes, &archive.sha256, catalog::Source::Runtime, &download_path, &cancel, |bytes| manager.report(app, "downloading", bytes, "Downloading the verified engine package")).await?;
@@ -172,6 +193,7 @@ async fn install_inner(app: &AppHandle, manager: &ComponentManager, component: &
             // Await the extractor even on cancellation/shutdown: never detach a
             // writer while staging could be removed or the app could exit.
             tauri::async_runtime::spawn_blocking(move || archive::extract(&download_path, &payload, max_bytes, max_files, &cancellation)).await.map_err(|e| e.to_string())??
+            }
         }
         Component::Model(model) => {
             let mut completed = 0u64; let mut files = Vec::new();
@@ -260,6 +282,8 @@ async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool)
     let executable = store::checked_path(root, &runtime.entrypoint)?; store::regular_file(&executable)?;
     let code = self_test_script(&runtime.backend)?;
     let mut command = tokio::process::Command::new(&executable);
+    let temporary = setup_process::PrivateTemp::create(root)?;
+    setup_process::configure(&mut command, root, &temporary)?;
     command.args(["-I", "-B", "-u", "-X", "utf8", "-c"]).arg(code).current_dir(root)
         .env_remove("PYTHONPATH").env_remove("PYTHONHOME")
         .env("HF_HUB_OFFLINE", "1").env("TRANSFORMERS_OFFLINE", "1").env("HF_DATASETS_OFFLINE", "1").env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")

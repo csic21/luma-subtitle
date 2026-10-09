@@ -291,9 +291,20 @@ async function publishComponents({ github, context, core, root, fetchImpl = fetc
     if (state.assets.some((a) => a.name === file.name)) throw new Error('Concurrent asset upload; stop instead of replacing');
     const checked = await digestStream(fs.createReadStream(file.file), file.bytes);
     if (!equal(checked, { bytes: file.bytes, sha256: file.sha256 })) throw new Error('Local artifact changed before upload');
-    const { data: uploaded } = await github.rest.repos.uploadReleaseAsset({ ...repo, release_id: releaseId, name: file.name,
-      headers: { 'content-type': file.name.endsWith('.zip') ? 'application/zip' : 'application/json', 'content-length': file.bytes },
-      data: fs.createReadStream(file.file) });
+    const uploadStream = fs.createReadStream(file.file);
+    // A transport can reject before it consumes the stream. Always close the
+    // owned descriptor before retry/cleanup (Windows prevents removing it).
+    const streamClosed = new Promise((resolve) => uploadStream.once('close', resolve));
+    uploadStream.on('error', () => {}); // transport/iteration still receives errors
+    let uploaded;
+    try {
+      ({ data: uploaded } = await github.rest.repos.uploadReleaseAsset({ ...repo, release_id: releaseId, name: file.name,
+        headers: { 'content-type': file.name.endsWith('.zip') ? 'application/zip' : 'application/json', 'content-length': file.bytes },
+        data: uploadStream }));
+    } finally {
+      uploadStream.destroy();
+      await streamClosed;
+    }
     if (uploaded.name !== file.name) throw new Error('Upload returned another asset name');
     validateRemoteAssets([uploaded], files, true);
     await verifyRemoteAsset(github, repo, uploaded);

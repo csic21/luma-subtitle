@@ -1,0 +1,205 @@
+{
+  "schema": 1,
+  "status": "review-required-before-catalog-activation",
+  "notes": "Exact upstream texts for explicit optional-install presentation; not a redistribution or legal-clearance assertion. Torch OpenMP mapping is supported by byte-identical sections; MKL version mapping still requires final review. No NVIDIA terms are offered to CPU-only users.",
+  "terms": [
+    {
+      "id": "intel-developer-tools-august-2024",
+      "version": "2024-08",
+      "title": "Intel Developer Tools EULA (August 2024)",
+      "path": "intel-developer-tools-august-2024.txt",
+      "sha256": "d8d33c22c4d8c33df9ad44bdc29b45beb41314c547c574dca0d4ed8cfb23d5f9",
+      "raw_sha256": "febfb69a5b058f55892dc7f341108a9ca29d50e9fe85723a57eebbb826436958",
+      "source_encoding": "cp1252",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html",
+      "source_url": "https://files.pythonhosted.org/packages/79/69/05addedd727061b61a85b4fd989754edb628b5be1cd5d161727f98cf4d86/intel_openmp-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "8ff899d01a41b92ffe0e618b221ea633127d16df726086082d381c431c31339d",
+      "source_member": "intel_openmp-2025.3.0.dist-info/LICENSE.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary"
+    },
+    {
+      "id": "intel-openmp-2025-3-third-party",
+      "version": "2025.3.0",
+      "title": "Intel OpenMP 2025.3 third-party terms and notices",
+      "path": "intel-openmp-2025-3-third-party.txt",
+      "sha256": "279308260bf2960d1c17174706852abe9e678480e5d5fb59bde5713661c937d5",
+      "raw_sha256": "f8ce918fe7311ce279e68380a2e233f8a42b1cd3dda8f4c48d6de97a0255c1d7",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://www.intel.com/content/www/us/en/developer/articles/license/end-user-license-agreement.html",
+      "source_url": "https://files.pythonhosted.org/packages/79/69/05addedd727061b61a85b4fd989754edb628b5be1cd5d161727f98cf4d86/intel_openmp-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "8ff899d01a41b92ffe0e618b221ea633127d16df726086082d381c431c31339d",
+      "source_member": "intel_openmp-2025.3.0.data/data/share/doc/compiler/licensing/openmp/third-party-programs.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-intelmpi",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-IntelMPI.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-intelmpi.txt",
+      "sha256": "82fa46762c37662a52ab9df58781813c1dc6c268ae2b6f9cf2d83183e706aa09",
+      "raw_sha256": "82fa46762c37662a52ab9df58781813c1dc6c268ae2b6f9cf2d83183e706aa09",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-IntelMPI.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-benchmarks",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-benchmarks.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-benchmarks.txt",
+      "sha256": "1f1224af12a7d3e51150ce6f762e32472076a31f6e44db41d3b651a7fa20f2f5",
+      "raw_sha256": "1f1224af12a7d3e51150ce6f762e32472076a31f6e44db41d3b651a7fa20f2f5",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-benchmarks.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-level-zero",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-level-zero.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-level-zero.txt",
+      "sha256": "cfe7d2ba4b4cd53271c7f91937e906256c0f14ea62ba33ffb556664b8d39aa59",
+      "raw_sha256": "cfe7d2ba4b4cd53271c7f91937e906256c0f14ea62ba33ffb556664b8d39aa59",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-level-zero.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-onemath",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-oneMath.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-onemath.txt",
+      "sha256": "2ba4e9858c253331691370f4e8e3899ca6a5baa20907f189f5970635870b860d",
+      "raw_sha256": "2ba4e9858c253331691370f4e8e3899ca6a5baa20907f189f5970635870b860d",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-oneMath.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-onetbb",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-oneTBB.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-onetbb.txt",
+      "sha256": "d507da4fffae647ebc1bbb7e12cc5cca8087d36b0d78cc75caa96cae37688cb1",
+      "raw_sha256": "d507da4fffae647ebc1bbb7e12cc5cca8087d36b0d78cc75caa96cae37688cb1",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-oneTBB.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-openmp",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-openmp.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-openmp.txt",
+      "sha256": "8fdfbbdfed13bca3641da35182e7ee1bb92a99f302ce8b0deb981ac1f18adee2",
+      "raw_sha256": "8fdfbbdfed13bca3641da35182e7ee1bb92a99f302ce8b0deb981ac1f18adee2",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-openmp.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs-safestring",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs-safestring.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs-safestring.txt",
+      "sha256": "415000d1887939ffc6826e0ed3f099cebcab6aaeda2da0acb017110a456b3d42",
+      "raw_sha256": "415000d1887939ffc6826e0ed3f099cebcab6aaeda2da0acb017110a456b3d42",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs-safestring.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-third-party-programs",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 third-party-programs.txt",
+      "path": "intel-onemkl-2025-3-third-party-programs.txt",
+      "sha256": "6fb57367c2107b8b3347e0e9db10d368c7b9ea898a08132b2f841b24b86f076f",
+      "raw_sha256": "6fb57367c2107b8b3347e0e9db10d368c7b9ea898a08132b2f841b24b86f076f",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.data/data/share/doc/mkl/licensing/third-party-programs.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary-and-third-party"
+    },
+    {
+      "id": "intel-onemkl-2025-3-license",
+      "version": "2025.3.0",
+      "title": "Intel oneMKL 2025.3 LICENSE.txt",
+      "path": "intel-onemkl-2025-3-license.txt",
+      "sha256": "7721633d0ddff43fae25ebfd405f8166a0ce730cbcec44f2f3ad9d5eb8ac9a6f",
+      "raw_sha256": "7721633d0ddff43fae25ebfd405f8166a0ce730cbcec44f2f3ad9d5eb8ac9a6f",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after decoding",
+      "url": "https://pypi.org/project/onemkl-license/2025.3.0/",
+      "source_url": "https://files.pythonhosted.org/packages/0e/8e/98ad8181e4af2ea7a6c7827ef6d24c73b6ee96a2890eacf46103f596195d/onemkl_license-2025.3.0-py2.py3-none-win_amd64.whl",
+      "source_archive_sha256": "35a179620bcadbcc3d17d74f7f72cab75889f3736b89685f6a68158325b65e91",
+      "source_member": "onemkl_license-2025.3.0.dist-info/LICENSE.txt",
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64"
+      ],
+      "classification": "proprietary"
+    }
+  ]
+}

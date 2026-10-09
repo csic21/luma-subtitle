@@ -1,6 +1,17 @@
 import { isAbsoluteLocalPath } from "@/lib/asr-config";
 import type { AsrConfig } from "@/types";
 
+export type AsrTermAcknowledgement = { id: string; version: string; sha256: string };
+export type AsrComponentTerm = AsrTermAcknowledgement & { url: string; text: string; raw_sha256?: string | null; source_encoding?: string | null };
+export type AsrInstallConsent = { plan_sha256: string; acknowledged_terms: AsrTermAcknowledgement[] };
+export type AsrRecordedConsent = { component_id: string; plan_sha256: string; terms: AsrTermAcknowledgement[] };
+export type AsrRuntimeRecipe = {
+  schema: 1;
+  python: { url: string; bytes: number; sha256: string; installed_bytes: number; max_files: number; entrypoint: string; site_packages: string; pip_version: string };
+  wheels: { name: string; version: string; filename: string; url: string; bytes: number; sha256: string; installed_bytes: number; max_files: number }[];
+  terms: AsrComponentTerm[];
+};
+
 export type AsrComponentFile = { path: string; url: string; bytes: number; sha256: string };
 export type AsrComponentInfo = {
   id: string;
@@ -20,6 +31,8 @@ export type AsrRuntimeComponent = AsrComponentInfo & {
   max_files: number;
   entrypoint: string;
   archive?: { url: string; bytes: number; sha256: string } | null;
+  recipe?: AsrRuntimeRecipe | null;
+  plan_sha256?: string | null;
 };
 export type AsrModelComponent = AsrComponentInfo & {
   role: "model" | "aligner";
@@ -39,24 +52,28 @@ export type AsrComponentStatus = {
   path: string | null;
   python_path: string | null;
   installed_bytes: number;
+  cached_bytes?: number;
   error: string | null;
 };
 export type AsrComponentProgress = {
   request_id: string;
   component_id: string;
-  phase: "preparing" | "downloading" | "verifying" | "extracting" | "testing" | "activating" | "removing" | "complete" | "cancelled" | "error";
+  phase: "preparing" | "downloading" | "verifying" | "extracting" | "assembling" | "testing" | "activating" | "removing" | "complete" | "cancelled" | "error";
   downloaded_bytes: number;
   total_bytes: number;
   message: string;
 };
 export type AsrComponentsSnapshot = {
   components: AsrComponentStatus[];
+  consents?: AsrRecordedConsent[];
   operation: AsrComponentProgress | null;
 };
 export type AsrComponentAction = "install" | "repair" | "remove";
 
 export function componentDownloadBytes(component: AsrRuntimeComponent | AsrModelComponent) {
-  return "files" in component ? component.files.reduce((total, file) => total + file.bytes, 0) : component.archive?.bytes ?? 0;
+  if ("files" in component) return component.files.reduce((total, file) => total + file.bytes, 0);
+  if (component.recipe) return component.recipe.python.bytes + component.recipe.wheels.reduce((total, wheel) => total + wheel.bytes, 0);
+  return component.archive?.bytes ?? 0;
 }
 
 export function isTerminalComponentPhase(phase: AsrComponentProgress["phase"]) {
@@ -89,4 +106,32 @@ export function managedAsrConfig(
     alignerPath = status.path;
   }
   return { ...current, python_path: runtimeStatus.python_path, model_path: modelStatus.path, aligner_path: alignerPath, device: runtime.device };
+}
+
+export function componentSources(component: AsrRuntimeComponent | AsrModelComponent): string[] {
+  if ("files" in component) return [...new Set(component.files.map((file) => file.url))];
+  if (component.recipe) return [component.recipe.python.url, ...component.recipe.wheels.map((wheel) => wheel.url)];
+  return component.archive ? [component.archive.url] : [];
+}
+
+export function runtimeAcknowledgement(runtime: AsrRuntimeComponent): AsrInstallConsent | null {
+  if (!runtime.recipe || !runtime.plan_sha256 || !/^[a-f0-9]{64}$/i.test(runtime.plan_sha256)) return null;
+  const terms = runtime.recipe.terms;
+  if (terms.length === 0 || new Set(terms.map((term) => term.id)).size !== terms.length || terms.some((term) => !term.id || !term.version || !term.text || !/^https:\/\//.test(term.url) || !/^[a-f0-9]{64}$/i.test(term.sha256))) return null;
+  return { plan_sha256: runtime.plan_sha256, acknowledged_terms: runtime.recipe.terms.map(({ id, version, sha256 }) => ({ id, version, sha256 })) };
+}
+
+function exactTermsKey(terms: AsrTermAcknowledgement[]) {
+  return JSON.stringify(terms.map(({ id, version, sha256 }) => JSON.stringify([id, version, sha256])).sort());
+}
+
+export function hasMatchingRuntimeConsent(runtime: AsrRuntimeComponent, consents: AsrRecordedConsent[]) {
+  const required = runtimeAcknowledgement(runtime);
+  return !!required && consents.some((consent) => consent.component_id === runtime.id && consent.plan_sha256 === required.plan_sha256 && exactTermsKey(consent.terms) === exactTermsKey(required.acknowledged_terms));
+}
+
+// Includes displayed content as well as its backend fingerprint. A stale dialog
+// must not acknowledge a changed component, source, size, or term set.
+export function runtimeConfirmationKey(runtime: AsrRuntimeComponent) {
+  return JSON.stringify(runtime);
 }

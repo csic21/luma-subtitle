@@ -35,6 +35,32 @@ describe("managed ASR component controller", () => {
     expect(listen).toHaveBeenCalledWith("asr-component-progress", expect.any(Function));
     expect(installAsrComponent).not.toHaveBeenCalled(); expect(repairAsrComponent).not.toHaveBeenCalled(); expect(removeAsrComponent).not.toHaveBeenCalled();
   });
+  it("forwards explicit exact consent and only caches the receipt confirmed by status", async () => {
+    const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "terms", version: "1", sha256: "b".repeat(64) }] };
+    const receipt = { component_id: "runtime", plan_sha256: consent.plan_sha256, terms: consent.acknowledged_terms };
+    vi.mocked(installAsrComponent).mockResolvedValue(installed);
+    vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockResolvedValueOnce({ components: [installed], operation: null, consents: [receipt] });
+    await mount(); expect(state.consents).toEqual([]);
+    await act(async () => state.perform("install", "runtime", consent));
+    expect(installAsrComponent).toHaveBeenCalledWith("runtime", "request-1", consent); expect(state.consents).toEqual([receipt]);
+  });
+  it("does not infer recorded assent from an installed runtime when receipt verification fails", async () => {
+    const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "terms", version: "1", sha256: "b".repeat(64) }] };
+    vi.mocked(installAsrComponent).mockResolvedValue(installed);
+    vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockRejectedValueOnce(new Error("receipt unavailable"));
+    await mount(); await act(async () => state.perform("install", "runtime", consent));
+    expect(state.components).toEqual([installed]); expect(state.consents).toEqual([]); expect(state.busy).toBe(false);
+  });
+  it("rejects a stale consent receipt that arrives after changing engines", async () => {
+    const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "terms", version: "1", sha256: "b".repeat(64) }] };
+    const receipt = { component_id: "runtime", plan_sha256: consent.plan_sha256, terms: consent.acknowledged_terms };
+    const late = deferred<AsrComponentsSnapshot>();
+    vi.mocked(installAsrComponent).mockResolvedValue(installed);
+    vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockReturnValueOnce(late.promise).mockResolvedValueOnce(empty);
+    await mount(); let operation!: Promise<void>; await act(async () => { operation = state.perform("install", "runtime", consent); });
+    await change("qwen3-asr"); await act(async () => { late.resolve({ components: [installed], operation: null, consents: [receipt] }); await operation; });
+    expect(state.consents).toEqual([]); expect(state.components).toEqual([]);
+  });
   it("coalesces duplicate clicks, filters request and component IDs, and uses the returned paths", async () => {
     const pending = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValue(pending.promise); await mount();
     let first!: Promise<void>; act(() => { first = state.perform("install", "runtime"); void state.perform("install", "runtime"); });

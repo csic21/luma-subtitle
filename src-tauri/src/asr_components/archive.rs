@@ -35,27 +35,7 @@ pub(super) fn validate_extra(mut bytes: &[u8]) -> Result<(), String> {
 pub(super) fn extract(zip_path: &Path, destination: &Path, byte_limit: u64, file_limit: usize, cancel: &AtomicBool) -> Result<Vec<FileReceipt>, String> {
     let input = File::open(zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(input).map_err(|e| format!("Invalid component ZIP: {e}"))?;
-    if zip.len() == 0 || zip.len() > file_limit || file_limit > 100_000 { return Err("Component ZIP exceeds its file-count limit or is empty.".into()); }
-    let mut local_headers = File::open(zip_path).map_err(|e| e.to_string())?;
-    let mut seen = HashSet::new(); let mut declared = 0u64;
-    // Validate every entry before writing any data.
-    for index in 0..zip.len() {
-        cancelled(cancel)?;
-        let file = zip.by_index(index).map_err(|e| e.to_string())?;
-        let path = relative_path(file.name())?;
-        if file.encrypted() { return Err("Encrypted component ZIP entries are not allowed.".into()); }
-        validate_local_header(&mut local_headers, file.header_start(), file.name())?;
-        let normalized = path.to_string_lossy().replace('\\', "/").to_lowercase();
-        if !seen.insert(normalized) { return Err("Duplicate or case-aliased ZIP path.".into()); }
-        if let Some(extra) = file.extra_data() { validate_extra(extra)?; }
-        let mode = file.unix_mode().unwrap_or(0);
-        let file_type = mode & 0o170000;
-        if file_type != 0 && file_type != 0o100000 && file_type != 0o040000 { return Err("Component ZIP contains a link or special file.".into()); }
-        if (file_type == 0o040000) != file.is_dir() && file_type != 0 { return Err("Component ZIP has inconsistent file metadata.".into()); }
-        if file.is_dir() && file.size() != 0 { return Err("ZIP directory contains unexpected data.".into()); }
-        declared = declared.checked_add(file.size()).ok_or("ZIP size overflow")?;
-        if declared > byte_limit { return Err("Component ZIP exceeds its unpacked-byte limit.".into()); }
-    }
+    validate_entries(&mut zip, zip_path, byte_limit, file_limit, cancel)?;
     let mut actual = 0u64; let mut receipts = Vec::new();
     for index in 0..zip.len() {
         cancelled(cancel)?;
@@ -90,6 +70,37 @@ pub(super) fn extract(zip_path: &Path, destination: &Path, byte_limit: u64, file
     }
     if receipts.is_empty() { return Err("Component ZIP contains no files.".into()); }
     Ok(receipts)
+}
+
+pub(super) fn inspect(zip_path: &Path, byte_limit: u64, file_limit: usize, cancel: &AtomicBool) -> Result<(), String> {
+    let input = File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(input).map_err(|e| format!("Invalid pinned wheel ZIP: {e}"))?;
+    validate_entries(&mut zip, zip_path, byte_limit, file_limit, cancel)
+}
+fn validate_entries(zip: &mut zip::ZipArchive<File>, zip_path: &Path, byte_limit: u64, file_limit: usize, cancel: &AtomicBool) -> Result<(), String> {
+    if zip.len() == 0 || zip.len() > file_limit.saturating_mul(4).saturating_add(1024) || file_limit == 0 || file_limit > 100_000 { return Err("Component ZIP exceeds its file-count limit or is empty.".into()); }
+    let mut local_headers = File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut seen = HashSet::new(); let mut declared = 0u64; let mut files = 0usize;
+    // Validate every entry before writing any data.
+    for index in 0..zip.len() {
+        cancelled(cancel)?;
+        let file = zip.by_index(index).map_err(|e| e.to_string())?;
+        let path = relative_path(file.name())?;
+        if !file.is_dir() { files += 1; if files > file_limit { return Err("Component ZIP exceeds its regular-file count.".into()); } }
+        if file.encrypted() { return Err("Encrypted component ZIP entries are not allowed.".into()); }
+        validate_local_header(&mut local_headers, file.header_start(), file.name())?;
+        let normalized = path.to_string_lossy().replace('\\', "/").to_lowercase();
+        if !seen.insert(normalized) { return Err("Duplicate or case-aliased ZIP path.".into()); }
+        if let Some(extra) = file.extra_data() { validate_extra(extra)?; }
+        let mode = file.unix_mode().unwrap_or(0);
+        let file_type = mode & 0o170000;
+        if file_type != 0 && file_type != 0o100000 && file_type != 0o040000 { return Err("Component ZIP contains a link or special file.".into()); }
+        if (file_type == 0o040000) != file.is_dir() && file_type != 0 { return Err("Component ZIP has inconsistent file metadata.".into()); }
+        if file.is_dir() && file.size() != 0 { return Err("ZIP directory contains unexpected data.".into()); }
+        declared = declared.checked_add(file.size()).ok_or("ZIP size overflow")?;
+        if declared > byte_limit { return Err("Component ZIP exceeds its unpacked-byte limit.".into()); }
+    }
+    Ok(())
 }
 
 fn validate_local_header(input: &mut File, offset: u64, expected_name: &str) -> Result<(), String> {

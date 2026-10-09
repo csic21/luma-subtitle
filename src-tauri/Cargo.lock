@@ -2193,6 +2193,7 @@ version = "1.2.0"
 dependencies = [
  "dirs 5.0.1",
  "fs2",
+ "flate2",
  "hashbrown 0.15.5",
  "home",
  "hyper-rustls",
@@ -2209,6 +2210,7 @@ dependencies = [
  "serde_with",
  "serde_with_macros",
  "sha2",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

@@ -1,0 +1,14 @@
+/*
+ * Project : SIMD_Utils
+ * Version : 0.2.5
+ * Author  : JishinMaster
+ * Licence : BSD-2
+ */
+
+/*
+   AVX implementation of sin, cos, sincos, exp and log
+
+   Based on "sse_mathfun.h", by Julien Pommier
+   and "avx_mathfun.h" by Giovanni Garberoglio
+   http://gruntthepeon.free.fr/ssemath/
+*/

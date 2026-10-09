@@ -38,6 +38,9 @@ pub(crate) struct Runtime {
     pub(crate) max_files: usize,
     pub(crate) entrypoint: String,
     pub(crate) archive: Option<Archive>,
+    pub(crate) recipe: Option<super::recipe::Recipe>,
+    #[serde(skip_deserializing)]
+    pub(crate) plan_sha256: Option<String>,
     pub(crate) unavailable_reason: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -74,14 +77,14 @@ impl Component {
     pub(super) fn version(&self) -> &str { match self { Self::Runtime(v) => &v.version, Self::Model(v) => &v.version } }
     pub(super) fn kind(&self) -> &str { match self { Self::Runtime(_) => "runtime", Self::Model(_) => "model" } }
     pub(super) fn installed_bytes(&self) -> u64 { match self { Self::Runtime(v) => v.installed_bytes, Self::Model(v) => v.installed_bytes } }
-    pub(super) fn download_bytes(&self) -> u64 { match self { Self::Runtime(v) => v.archive.as_ref().map_or(0, |a| a.bytes), Self::Model(v) => v.files.iter().map(|f| f.bytes).sum() } }
+    pub(super) fn download_bytes(&self) -> u64 { match self { Self::Runtime(v) => v.recipe.as_ref().map_or_else(|| v.archive.as_ref().map_or(0, |a| a.bytes), |r| r.download_bytes()), Self::Model(v) => v.files.iter().map(|f| f.bytes).sum() } }
     pub(super) fn availability(&self) -> Result<(), String> {
         match self {
             Self::Runtime(v) => {
                 check_os(v.min_os_version.as_deref())?;
                 if v.platform != platform() { return Err("This engine component is not available for this computer's platform.".into()); }
                 if let Some(reason) = &v.unavailable_reason { return Err(reason.clone()); }
-                if v.archive.is_none() { return Err("This engine component has not been published and verified yet.".into()); }
+                if v.archive.is_none() && v.recipe.is_none() { return Err("This engine component has not been published and verified yet.".into()); }
             }
             Self::Model(v) => {
                 if let Some(reason) = &v.unavailable_reason { return Err(reason.clone()); }
@@ -130,6 +133,8 @@ pub(super) fn parse(source: &str) -> Result<Catalog, String> {
                 }
                 if v.min_os_version.as_deref().is_some_and(|v| version_numbers(v).is_none()) { return Err("Invalid runtime minimum OS version.".into()); }
                 super::archive::relative_path(&v.entrypoint)?;
+                if v.archive.is_some() && v.recipe.is_some() { return Err("Runtime cannot mix a prebuilt archive and an upstream recipe.".into()); }
+                if let Some(recipe) = &v.recipe { recipe.validate(&v)?; }
                 if let Some(a) = v.archive {
                     validate_download(&a.url, a.bytes, &a.sha256, Source::Runtime)?;
                     if v.installed_bytes == 0 || v.max_files == 0 { return Err("Runtime extraction bounds are missing.".into()); }
@@ -148,6 +153,7 @@ pub(super) fn parse(source: &str) -> Result<Catalog, String> {
             }
         }
     }
+    for runtime in &mut catalog.runtimes { if runtime.recipe.is_some() { runtime.plan_sha256 = Some(super::recipe::plan_hash(runtime)?); } }
     Ok(catalog)
 }
 pub(super) fn safe_id(value: &str) -> bool {
@@ -157,7 +163,7 @@ fn safe_version(value: &str) -> bool {
     !value.is_empty() && value.len() <= 64 && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') && !value.starts_with('.')
 }
 #[derive(Clone, Copy)]
-pub(super) enum Source { Runtime, Model }
+pub(super) enum Source { Runtime, Model, Python, Wheel }
 pub(super) fn validate_download(raw: &str, bytes: u64, hash: &str, source: Source) -> Result<(), String> {
     if bytes == 0 || bytes > MAX_DOWNLOAD_BYTES || hash.len() != 64 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err("Embedded download is missing an exact size or SHA-256 digest.".into());
@@ -168,6 +174,8 @@ pub(super) fn validate_download(raw: &str, bytes: u64, hash: &str, source: Sourc
     let parts: Vec<_> = url.path().split('/').filter(|s| !s.is_empty()).collect();
     let trusted = match source {
         Source::Runtime => url.host_str() == Some("github.com") && parts.len() == 6 && parts[..4] == ["csic21", "luma-subtitle", "releases", "download"] && parts[4].starts_with("asr-components-") && parts[5].ends_with(".zip"),
+        Source::Python => url.host_str() == Some("github.com") && parts.len() == 6 && parts[..4] == ["astral-sh", "python-build-standalone", "releases", "download"] && parts[4] == "20261003" && parts[5].starts_with("cpython-3.12.15") && parts[5].ends_with("-install_only_stripped.tar.gz"),
+        Source::Wheel => url.host_str() == Some("files.pythonhosted.org") && parts.len() == 5 && parts[0] == "packages" && parts[1].len() == 2 && parts[2].len() == 2 && parts[3].len() >= 32 && parts[1..4].iter().all(|s| s.bytes().all(|b| b.is_ascii_hexdigit())) && parts[4].ends_with(".whl"),
         Source::Model => url.host_str() == Some("huggingface.co") && parts.len() >= 5 && matches!(parts[0], "Qwen" | "Systran" | "mobiuslabsgmbh" | "dropbox-dash" | "mlx-community") && parts[2] == "resolve" && parts[3].len() == 40 && parts[3].bytes().all(|b| b.is_ascii_hexdigit()),
     };
     if !trusted { return Err("Embedded download URL is outside the trusted immutable source allowlist.".into()); }
@@ -183,7 +191,8 @@ pub(super) fn allowed_redirect(url: &Url, source: Source) -> bool {
     if secure_url(url).is_err() { return false; }
     let host = url.host_str().unwrap_or("");
     match source {
-        Source::Runtime => matches!(host, "github.com" | "release-assets.githubusercontent.com" | "objects.githubusercontent.com"),
+        Source::Runtime | Source::Python => matches!(host, "github.com" | "release-assets.githubusercontent.com" | "objects.githubusercontent.com"),
+        Source::Wheel => host == "files.pythonhosted.org",
         Source::Model => matches!(host, "huggingface.co" | "cdn-lfs.huggingface.co" | "cdn-lfs.hf.co" | "cdn-lfs-us-1.hf.co" | "cdn-lfs-eu-1.hf.co") || host.ends_with(".xethub.hf.co"),
     }
 }

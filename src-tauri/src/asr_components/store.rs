@@ -209,6 +209,7 @@ fn sync_dir(path: &Path) { #[cfg(unix)] { if let Ok(file) = fs::File::open(path)
 pub(super) fn commit(root: &Path, component: &Component, staging: &Staging) -> Result<ComponentStatus, String> {
     let receipt = read_receipt(&staging.payload(), component)?;
     let total: u64 = receipt.files.iter().map(|f| f.bytes).sum();
+    let cached_bytes = cache_bytes(root, component.id())?;
     let component_dir = prepare_component(root, component)?;
     let name = format!("{}--{}", component.version(), Uuid::new_v4());
     let destination = component_dir.join("versions").join(&name);
@@ -220,7 +221,7 @@ pub(super) fn commit(root: &Path, component: &Component, staging: &Staging) -> R
     Ok(ComponentStatus {
         id: component.id().into(), kind: component.kind().into(), state: "installed".into(), version: Some(component.version().into()),
         python_path: match component { Component::Runtime(runtime) => Some(destination.join(&runtime.entrypoint).to_string_lossy().into_owned()), Component::Model(_) => None },
-        path: Some(destination.to_string_lossy().into_owned()), installed_bytes: total, error: None,
+        path: Some(destination.to_string_lossy().into_owned()), installed_bytes: total, cached_bytes, error: None,
     })
 }
 fn current(root: &Path, component: &Component) -> Result<Option<PathBuf>, String> {
@@ -263,7 +264,7 @@ pub(super) fn read_receipt(path: &Path, component: &Component) -> Result<Receipt
 pub(super) fn hash_file(path: &Path) -> Result<String, String> {
     hash_file_checked(path, &AtomicBool::new(false))
 }
-fn hash_file_checked(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
+pub(super) fn hash_file_checked(path: &Path, cancel: &AtomicBool) -> Result<String, String> {
     regular_file(path)?;
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let mut digest = Sha256::new(); let mut buffer = [0u8; 256 * 1024];
@@ -292,9 +293,10 @@ pub(super) fn status(root: &Path, component: &Component) -> ComponentStatus {
     status_with_cancel(root, component, &AtomicBool::new(false))
 }
 pub(super) fn status_with_cancel(root: &Path, component: &Component, cancel: &AtomicBool) -> ComponentStatus {
-    let mut status = ComponentStatus { id: component.id().into(), kind: component.kind().into(), state: "not_installed".into(), version: None, path: None, python_path: None, installed_bytes: 0, error: None };
+    let mut status = ComponentStatus { id: component.id().into(), kind: component.kind().into(), state: "not_installed".into(), version: None, path: None, python_path: None, installed_bytes: 0, cached_bytes: 0, error: None };
     if !root.exists() { return status; }
     let result: Result<Option<(PathBuf, u64)>, String> = (|| {
+        status.cached_bytes = cache_bytes(root, component.id())?;
         let Some(path) = current(root, component)? else { return Ok(None); };
         if let Component::Runtime(runtime) = component { super::catalog::check_os(runtime.min_os_version.as_deref())?; }
         let total = validate_files(&path, component, cancel)?;
@@ -314,7 +316,7 @@ pub(super) fn status_with_cancel(root: &Path, component: &Component, cancel: &At
 pub(super) fn remove(root: &Path, component: &Component) -> Result<(), String> {
     verify_owned(root)?;
     let directory = root.join(component.id());
-    if !directory.exists() { return Ok(()); }
+    if !directory.exists() { return remove_component_cache(root, component.id()); }
     verify_owned(&directory)?;
     // An atomic tombstone prevents old receipts becoming active after removal,
     // even if the process exits during deletion. No external model paths enter here.
@@ -338,5 +340,103 @@ pub(super) fn remove(root: &Path, component: &Component) -> Result<(), String> {
             }
         }
     }
+    remove_component_cache(root, component.id())
+}
+
+pub(super) fn record_consent(root: &Path, consent: &super::recipe::Consent) -> Result<(), String> {
+    verify_owned(root)?;
+    if !super::catalog::safe_id(&consent.component_id) || !super::recipe::valid_hash(&consent.plan_sha256) { return Err("Invalid consent record identity.".into()); }
+    let consent_root = root.join(".consents"); owned_dir(&consent_root)?;
+    let directory = consent_root.join(&consent.component_id); owned_dir(&directory)?;
+    if find_consent(&directory, consent)?.as_ref() == Some(consent) { return Ok(()); }
+    let name = format!("{}-{}", consent.plan_sha256, Uuid::new_v4());
+    let pending = directory.join(format!("{name}.pending"));
+    write_new(&pending, &serde_json::to_vec(consent).map_err(|e| e.to_string())?)?;
+    fs::rename(&pending, pending.with_extension("json")).map_err(|e| e.to_string())?;
+    sync_dir(&directory); Ok(())
+}
+fn find_consent(directory: &Path, expected: &super::recipe::Consent) -> Result<Option<super::recipe::Consent>, String> {
+    if !directory.exists() { return Ok(None); }
+    let plan = &expected.plan_sha256;
+    verify_owned(directory)?;
+    let mut count = 0;
+    for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
+        count += 1; if count > 10_000 { return Err("Too many local component consent records.".into()); }
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(&format!("{plan}-")) || !name.ends_with(".json") { continue; }
+        let path = entry.path();
+        if !regular_file(&path).is_ok_and(|meta| meta.len() <= 512 * 1024) { continue; }
+        let bytes = fs::read(path).map_err(|e| e.to_string())?;
+        if let Ok(consent) = serde_json::from_slice::<super::recipe::Consent>(&bytes) {
+            if &consent == expected { return Ok(Some(consent)); }
+        }
+    }
+    Ok(None)
+}
+pub(super) fn read_consents(root: &Path, catalog: &super::catalog::Catalog) -> Result<Vec<super::recipe::Consent>, String> {
+    if !root.exists() || !root.join(".consents").exists() { return Ok(Vec::new()); }
+    verify_owned(root)?; verify_owned(&root.join(".consents"))?;
+    let mut result = Vec::new();
+    for runtime in &catalog.runtimes {
+        let Some(recipe) = &runtime.recipe else { continue; };
+        let plan = super::recipe::plan_hash(runtime)?;
+        let expected = super::recipe::Consent { component_id: runtime.id.clone(), plan_sha256: plan.clone(), terms: recipe.acknowledgements() };
+        if let Some(consent) = find_consent(&root.join(".consents").join(&runtime.id), &expected)? {
+            if consent.component_id == runtime.id && consent.terms == recipe.acknowledgements() { result.push(consent); }
+        }
+    }
+    Ok(result)
+}
+
+pub(super) fn cache_directory(root: &Path, component_id: &str) -> Result<PathBuf, String> {
+    verify_owned(root)?;
+    if !super::catalog::safe_id(component_id) { return Err("Invalid managed cache owner.".into()); }
+    let cache_root = root.join(".downloads"); owned_dir(&cache_root)?;
+    // Per-component cache ownership keeps Remove precise and avoids deleting
+    // artifacts needed by another engine's active installation or retry.
+    let directory = cache_root.join(component_id); owned_dir(&directory)?;
+    // Clean only recognized incomplete cache filenames after obtaining the
+    // cross-process setup lease; valid completed hashes remain reusable.
+    for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let parts: Vec<_> = name.split('.').collect();
+        if parts.len() == 3 && super::recipe::valid_hash(parts[0]) && Uuid::parse_str(parts[1]).is_ok() && parts[2] == "partial" {
+            regular_file(&entry.path())?; fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(directory)
+}
+
+/// Completed cache size is storage disclosure, not a reuse-integrity claim.
+/// Every artifact is rehashed against the embedded recipe before reuse.
+pub(super) fn cache_bytes(root: &Path, component_id: &str) -> Result<u64, String> {
+    if !super::catalog::safe_id(component_id) { return Err("Invalid managed cache owner.".into()); }
+    if !root.exists() { return Ok(0); }
+    verify_owned(root)?;
+    let cache_root = root.join(".downloads");
+    if !cache_root.exists() { return Ok(0); }
+    verify_owned(&cache_root)?;
+    let directory = cache_root.join(component_id);
+    if !directory.exists() { return Ok(0); }
+    verify_owned(&directory)?;
+    let mut bytes = 0u64;
+    for (index, entry) in fs::read_dir(directory).map_err(|e| e.to_string())?.enumerate() {
+        if index >= 10_000 { return Err("Too many managed component cache entries.".into()); }
+        let entry = entry.map_err(|e| e.to_string())?;
+        if super::recipe::valid_hash(&entry.file_name().to_string_lossy()) {
+            bytes = bytes.checked_add(regular_file(&entry.path())?.len()).ok_or("Managed component cache size overflow")?;
+        }
+    }
+    Ok(bytes)
+}
+
+fn remove_component_cache(root: &Path, component_id: &str) -> Result<(), String> {
+    let cache_root = root.join(".downloads");
+    if !cache_root.exists() { return Ok(()); }
+    verify_owned(&cache_root)?;
+    let directory = cache_root.join(component_id);
+    if directory.exists() { verify_owned(&directory)?; fs::remove_dir_all(directory).map_err(|e| e.to_string())?; }
     Ok(())
 }

@@ -170,12 +170,12 @@ for (const [label, mutate] of [
 ]) test(`immutable retry rejects ${label} without writes`,async t=>{const f=fixture(t);await f.publish();f.state.mutations.length=0;mutate(f);await assert.rejects(f.publish());assert.deepEqual(f.state.mutations,[]);});
 test('permission failure is surfaced without retargeting or alternate mutation',async t=>{const f=fixture(t);f.github.rest.repos.createRelease=async()=>{throw Object.assign(new Error('Workflows permission required'),{status:403});};await assert.rejects(f.publish(),/Workflows permission/);assert.deepEqual(f.state.mutations.map(x=>x[0]),['tag']);});
 test('latest-app race stops before publication',async t=>{const f=fixture(t);const upload=f.github.rest.repos.uploadReleaseAsset;f.github.rest.repos.uploadReleaseAsset=async args=>{const result=await upload(args);f.state.latest.tag_name='v1.2.0';return result;};await assert.rejects(f.publish(),/Latest application release changed/);assert(!f.state.mutations.some(x=>x[0]==='publish'));});
-test('workflow grants only ephemeral contents write in gated publication and keeps reusable builds read-only',()=>{
+test('retired whole-runtime publication workflow has no mutation entry point or permission',()=>{
   const workflow=fs.readFileSync(path.join(__dirname,'../../.github/workflows/asr-components-publish.yml'),'utf8');
-  assert(workflow.includes("branches: ['feat/optional-asr-engines']"));assert(workflow.includes("paths: ['.github/asr-components-request.json']"));
-  assert(workflow.includes('contents: read'));assert.equal((workflow.match(/contents: write/g)||[]).length,1);
-  assert(!/^\s+(actions|id-token|packages|workflows):/m.test(workflow));assert(!/secrets: inherit|github-token:|run-id:|workflow_dispatch:/m.test(workflow));
-  assert(workflow.includes('group: luma-release-pipeline'));assert(workflow.includes('needs: [prepare, rebuild]'));
+  assert(workflow.includes('pull_request:')); assert(workflow.includes('contents: read'));
+  assert(!/contents: write|workflow_dispatch:|^  push:|asr-components-request\.json|publishComponents|prepareComponents/m.test(workflow));
+  assert(!/^\s+(actions|id-token|packages|workflows):/m.test(workflow));
+  assert(!/secrets: inherit|github-token:|run-id:/.test(workflow));
 });
 
 test('manifest rejects foreign URLs, traversal entrypoints and installer-exceeding bounds', t=>{

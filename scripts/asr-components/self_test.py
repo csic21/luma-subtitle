@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import site
 import sys
 
@@ -21,6 +22,14 @@ def platform_description():
     # platform.platform() may lazily query processor information via subprocess.
     # These fields use OS/runtime metadata without weakening the offline guard.
     return f'{sys.platform} {platform.release()}'
+
+
+def optional_vc_runtime(filename):
+    name = filename.lower()
+    # msvcp_win.dll is an OS component on supported Windows 10, unlike the
+    # numbered Visual C++ redistributables. Never equate the whole prefix with
+    # optional app-local CRT libraries.
+    return re.fullmatch(r'(?:msvcp|vcruntime|concrt|vcomp|vccorlib)[0-9][a-z0-9_]*\.dll', name) is not None
 
 
 def local_module(name):
@@ -62,6 +71,8 @@ def loaded_native_libraries():
     for path in paths:
         resolved = Path(path).resolve()
         test = str(resolved).lower() if sys.platform == 'win32' else str(resolved)
+        if sys.platform == 'win32' and optional_vc_runtime(resolved.name) and not resolved.is_relative_to(ROOT):
+            raise AssertionError(f'Optional Visual C++ runtime came from outside the private component: {path}')
         if not resolved.is_relative_to(ROOT) and not test.startswith(allowed):
             raise AssertionError(f'Loaded non-system library outside component: {path}')
     return len(paths)

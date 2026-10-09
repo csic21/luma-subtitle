@@ -49,7 +49,11 @@ pub(super) async fn fetch(url: &str, expected_bytes: u64, expected_digest: &str,
     #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
     let mut output = options.open(destination).map_err(|e| format!("Cannot create staged download: {e}"))?;
     let mut integrity = Integrity::new(expected_bytes, expected_digest); let mut last = Instant::now();
-    while let Some(chunk) = cancellable(response.chunk(), cancel).await?.map_err(|_| "The component download was interrupted. Retry to start a fresh verified download.")? {
+    loop {
+        let chunk = cancellable(tokio::time::timeout(Duration::from_secs(60), response.chunk()), cancel).await?
+            .map_err(|_| "The component download stalled. Retry the verified source.")?
+            .map_err(|_| "The component download was interrupted. Retry to start a fresh verified download.")?;
+        let Some(chunk) = chunk else { break; };
         integrity.write_chunk(&mut output, &chunk, cancel)?;
         if last.elapsed() >= Duration::from_millis(200) { progress(integrity.bytes); last = Instant::now(); }
     }
@@ -58,4 +62,47 @@ pub(super) async fn fetch(url: &str, expected_bytes: u64, expected_digest: &str,
     output.sync_all().map_err(|e| e.to_string())?;
     progress(expected_bytes);
     Ok(())
+}
+
+struct PartialDownload(std::path::PathBuf);
+impl Drop for PartialDownload { fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); } }
+/// Caller holds the app-owned setup lease. Cache entries are content addressed,
+/// fully rehashed before reuse, and never become executable active components.
+pub(super) async fn cached(root: &Path, component_id: &str, artifact: &super::catalog::Archive, source: Source, cancel: &std::sync::Arc<AtomicBool>, mut progress: impl FnMut(u64)) -> Result<std::path::PathBuf, String> {
+    validate_download(&artifact.url, artifact.bytes, &artifact.sha256, source)?;
+    let cache = super::store::cache_directory(root, component_id)?;
+    let path = cache.join(&artifact.sha256);
+    if std::fs::symlink_metadata(&path).is_ok() {
+        let metadata = super::store::regular_file(&path)?;
+        let cached_path = path.clone(); let digest = artifact.sha256.clone();
+        let expected_bytes = artifact.bytes;
+        // Small cache verification reads occur here per chunk; task cancellation
+        // is observed before each chunk even when the file is already cached.
+        let cancellation = cancel.clone();
+        let valid = if metadata.len() == expected_bytes {
+            tauri::async_runtime::spawn_blocking(move || super::store::hash_file_checked(&cached_path, &cancellation).map(|hash| hash.eq_ignore_ascii_case(&digest))).await.map_err(|e| e.to_string())??
+        } else { false };
+        if valid { progress(artifact.bytes); return Ok(path); }
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        cancelled(cancel)?;
+        let temporary = PartialDownload(cache.join(format!("{}.{}.partial", artifact.sha256, uuid::Uuid::new_v4())));
+        match fetch(&artifact.url, artifact.bytes, &artifact.sha256, source, &temporary.0, cancel, &mut progress).await {
+            Ok(()) => {
+                cancelled(cancel)?;
+                std::fs::rename(&temporary.0, &path).map_err(|e| e.to_string())?;
+                return Ok(path);
+            }
+            Err(error) => {
+                cancelled(cancel)?;
+                let retryable = error.contains("could not connect") || error.contains("interrupted") || error.contains("stalled") || error.contains("HTTP 429") || error.contains("HTTP 5");
+                last_error = error;
+                if !retryable || attempt == 2 { break; }
+                cancellable(tokio::time::sleep(Duration::from_secs(1 << attempt)), cancel).await?;
+            }
+        }
+    }
+    Err(last_error)
 }

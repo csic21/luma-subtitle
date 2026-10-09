@@ -1,26 +1,20 @@
-name: Publish reviewed ASR components
+name: ASR recipe guard tests
 
+# Whole-runtime binary publication is retired. End-user runtimes are assembled
+# privately from pinned upstream inputs; this workflow has no write permissions
+# or request/push/manual entry point. Keep historical controller regressions.
 on:
   pull_request:
     paths:
       - 'scripts/asr-components/**'
       - '.github/workflows/asr-components*.yml'
-  push:
-    branches: ['feat/optional-asr-engines']
-    paths: ['.github/asr-components-request.json']
 
 permissions:
   contents: read
 
-# Share the application release lock: component publication must never race the
-# stable updater publisher. No tag trigger and no workflow_dispatch entry point.
-concurrency:
-  group: luma-release-pipeline
-  cancel-in-progress: false
-
 jobs:
   tests:
-    name: Component publication guards
+    name: Historical component publication guards
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -31,59 +25,3 @@ jobs:
         with:
           node-version: 20
       - run: node --test scripts/asr-components/publish.node-test.cjs
-
-  prepare:
-    name: Validate reviewed component request
-    timeout-minutes: 10
-    needs: tests
-    if: github.event_name == 'push' && github.repository == 'csic21/luma-subtitle' && github.ref == 'refs/heads/feat/optional-asr-engines'
-    runs-on: ubuntu-latest
-    outputs:
-      source_sha: ${{ steps.prepare.outputs.source_sha }}
-      tag: ${{ steps.prepare.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/github-script@v7
-        id: prepare
-        with:
-          script: |
-            const { prepareComponents } = require('./scripts/asr-components/publish.cjs');
-            await prepareComponents({ github, context, core });
-
-  rebuild:
-    name: Rebuild pinned components
-    needs: prepare
-    permissions:
-      contents: read
-    uses: ./.github/workflows/asr-components.yml
-    with:
-      source_sha: ${{ needs.prepare.outputs.source_sha }}
-      tag: ${{ needs.prepare.outputs.tag }}
-
-  publish:
-    name: Verify immutable components and publish prerelease
-    timeout-minutes: 60
-    needs: [prepare, rebuild]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          persist-credentials: false
-      # Same-run artifacts use the runtime token. No Actions read permission,
-      # cross-run artifact token, new secret, or inherited credentials.
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: asr-component-*
-          path: component-artifacts
-          merge-multiple: false
-      - uses: actions/github-script@v7
-        with:
-          retries: 0
-          script: |
-            const { publishComponents } = require('./scripts/asr-components/publish.cjs');
-            await publishComponents({ github, context, core, root: 'component-artifacts' });

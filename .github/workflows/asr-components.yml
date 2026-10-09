@@ -5,6 +5,13 @@ on:
     paths:
       - 'scripts/asr-components/**'
       - 'src-tauri/src/asr/worker.py'
+      - 'src-tauri/src/asr_components.rs'
+      - 'src-tauri/src/asr_components/**'
+      - 'src-tauri/resources/asr/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/build.rs'
+      - 'src-tauri/tauri.conf.json'
       - '.github/workflows/asr-components.yml'
   workflow_dispatch:
     inputs:
@@ -72,6 +79,32 @@ jobs:
           PY
       - name: Test deterministic packaging and license locks
         run: python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+      - name: Reproduce review-only recipes from exact pinned sources
+        shell: bash
+        run: |
+          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates.json"
+          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates-second.json"
+          python - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          first = root / 'asr-recipe-candidates.json'
+          second = root / 'asr-recipe-candidates-second.json'
+          assert first.read_bytes() == second.read_bytes(), 'Review-only recipe generation differs'
+          print('RECIPE_CANDIDATES_SHA256=' + hashlib.sha256(first.read_bytes()).hexdigest())
+          second.unlink()
+          PY
+      - name: Prove private offline-pip assembly without system Python packages
+        shell: bash
+        run: |
+          python -B scripts/asr-components/prove_offline_pip.py --pack "$PACK_ID" --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/asr-pip-proof/$PACK_ID" --cache "$RUNNER_TEMP/asr-downloads" --worker src-tauri/src/asr/worker.py --recipe-candidates "$RUNNER_TEMP/asr-recipe-candidates.json"
+      - name: Upload offline assembly proof metadata only
+        uses: actions/upload-artifact@v4
+        with:
+          name: asr-offline-pip-proof-${{ matrix.pack }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/asr-pip-proof/${{ matrix.pack }}/*.offline-pip-proof.json
       - name: Build byte-locked private runtime
         shell: bash
         run: |
@@ -81,7 +114,7 @@ jobs:
         run: |
           python -B scripts/asr-components/build.py --pack "$PACK_ID" --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/asr-rebuild/$PACK_ID" --cache "$RUNNER_TEMP/asr-downloads"
           python - <<'PY'
-          import hashlib, json, os
+          import hashlib, json, os, shutil
           from pathlib import Path
           pack = os.environ['PACK_ID']
           first = Path('dist/asr-components') / pack
@@ -92,6 +125,7 @@ jobs:
                   assert other.is_file()
                   assert hashlib.file_digest(path.open('rb'), 'sha256').digest() == hashlib.file_digest(other.open('rb'), 'sha256').digest(), path
           print('REPRODUCIBLE_ARCHIVE_AND_MANIFEST=true')
+          shutil.rmtree(second)
           PY
       - name: Smoke relocated private interpreter and offline worker
         shell: bash
@@ -123,3 +157,17 @@ jobs:
           retention-days: 14
           path: |
             dist/asr-components/${{ matrix.pack }}/*.json
+      - name: Reclaim disposable reference binaries after metadata upload
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+          pack = os.environ['PACK_ID']
+          output = Path('dist/asr-components') / pack
+          manifest = json.loads((output / (pack + '.manifest.json')).read_text())
+          archive = output / manifest['archive']['url'].rsplit('/', 1)[-1]
+          assert archive.parent == output and archive.suffix == '.zip'
+          archive.unlink()
+          shutil.rmtree(output / 'staging')
+          PY

@@ -31,8 +31,10 @@ def extract(archive, destination):
 
 def clean_environment(home):
     home.mkdir(parents=True)
-    keep = {'SystemRoot', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'SYSTEMDRIVE'}
-    env = {k: v for k, v in os.environ.items() if k in keep}
+    keep = {'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'SYSTEMDRIVE',
+            'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'PROCESSOR_IDENTIFIER',
+            'PROCESSOR_LEVEL', 'PROCESSOR_REVISION', 'NUMBER_OF_PROCESSORS'}
+    env = {k: v for k, v in os.environ.items() if k.upper() in keep}
     env.update({'HOME': str(home), 'USERPROFILE': str(home), 'APPDATA': str(home / 'AppData'),
                 'LOCALAPPDATA': str(home / 'Local'), 'PATH': str(home / 'no-executables'),
                 'PYTHONPATH': str(home / 'poison'), 'PYTHONHOME': str(home / 'not-python'),
