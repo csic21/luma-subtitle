@@ -3,7 +3,6 @@ import base64
 from contextlib import contextmanager
 import io
 import json
-import os
 from pathlib import Path
 import struct
 import sys
@@ -129,10 +128,18 @@ class WindowsProofTests(unittest.TestCase):
             self.assertEqual(str(crt.verbatim_disk_path(path)), r'\\?\C:\Managed runtime é 测试')
         for path in (r'\\server\share\cab', r'\\?\UNC\server\share\cab', r'C:cab', 'relative', r'C:\x\..\cab'):
             with self.assertRaises(ValueError): crt.verbatim_disk_path(path)
-        with patch.dict(os.environ, {'SystemRoot': r'C:\Windows', 'PATH': 'poisoned', 'PYTHONPATH': 'poisoned', 'TEMP': 'poisoned'}, clear=True):
-            env = crt.cab_environment(Path('/private/work'), Path('/private/temp'), Path('/system'))
-        self.assertEqual(env['SystemRoot'], r'C:\Windows'); self.assertNotIn('PYTHONPATH', env)
-        self.assertNotIn('poisoned', str(env)); self.assertEqual(env['TEMP'], '/private/temp')
+        work, temporary, system = Path('/private/work'), Path('/private/temp'), Path('/system')
+        # Exercise both returned spellings on every host. Windows os.environ
+        # uppercases keys, while the filtered result is an ordinary dictionary.
+        for spelling in ('SystemRoot', 'SYSTEMROOT'):
+            with self.subTest(system_root_key=spelling), patch.object(crt.os, 'environ',
+                    {spelling: r'C:\Windows', 'PATH': 'poisoned', 'PYTHONPATH': 'poisoned', 'TEMP': 'poisoned'}):
+                env = crt.cab_environment(work, temporary, system)
+            self.assertIn(spelling, env)
+            normalized = {key.upper(): value for key, value in env.items()}
+            self.assertEqual(normalized['SYSTEMROOT'], r'C:\Windows'); self.assertNotIn('PYTHONPATH', normalized)
+            self.assertNotIn('poisoned', str(env)); self.assertEqual(normalized['TEMP'], str(temporary))
+            self.assertEqual(normalized['PATH'], ';'.join(map(str, (work, work / 'bin', system))))
 
     def test_cab_path_probe_records_legacy_failure_and_requires_all_fixed_hashes(self):
         def pin(data, member=None):

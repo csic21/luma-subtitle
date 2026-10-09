@@ -95,7 +95,7 @@ class PackagingTests(unittest.TestCase):
                    'compute_types': ['float32', 'int8'], 'loaded_modules': [{'scope': 'private', 'path': 'msvcp140.dll'}],
                    'inference': {'cold_and_warm': True, 'cpu_only': True, 'model': 'SYSTRAN/faster-whisper-tiny',
                                  'segments': [{'start_ms': 1, 'end_ms': 10, 'text': 'country'}]}})
-        worker = (self.repo / 'src-tauri/src/asr/worker.py').read_text()
+        worker = (self.repo / 'src-tauri/src/asr/worker.py').read_text(encoding='utf-8')
         prepared = worker.replace('# LUMA_MANAGED_CT2_CPU_POLICY', 'LUMA_MANAGED_CT2_CPU_POLICY = "luma-cpu-seq-1"', 1)
         identities = {}
         for key, path in (('host_auditor', 'scripts/asr-components/self_test.py'), ('verifier', 'scripts/asr-components/ct2-cpu/verify_runtime.py')):
