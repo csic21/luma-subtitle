@@ -317,6 +317,10 @@ pub(super) mod tests {
                         thread::sleep(Duration::from_millis(2));
                         continue;
                     };
+                    // Windows inherits the listener's nonblocking mode. Keep
+                    // accepting cancellable, but wait for the complete request
+                    // on each accepted connection before writing a response.
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
@@ -388,6 +392,29 @@ pub(super) mod tests {
             cli_args: String::new(),
             local_model_path: String::new(),
         }
+    }
+
+    #[test]
+    fn mock_server_waits_for_the_complete_request() {
+        let server = MockServer::new(vec![(200, "", "ok".to_string())], Duration::ZERO);
+        let mut stream =
+            std::net::TcpStream::connect(server.url.trim_start_matches("http://")).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(server.count(), 0, "must wait for request headers");
+        stream
+            .write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n")
+            .unwrap();
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(server.count(), 0, "must also wait for the request body");
+        stream.write_all(b"{}").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 "));
+        assert!(response.ends_with("ok"));
+        assert_eq!(server.count(), 1);
     }
 
     #[test]
