@@ -28,9 +28,9 @@ use events::{
     DownloadMetrics,
 };
 pub(crate) use events::{DependencyInstallEvent, DownloadStatus, ModelDownloadEvent};
-pub(crate) use llama::llama_backend_label;
 #[cfg(not(target_os = "macos"))]
 use install::extract_dependency_archive;
+pub(crate) use llama::llama_backend_label;
 #[cfg(target_os = "macos")]
 use source_build::{install_ffmpeg_from_official_source, install_whisper_cpp_from_official_source};
 
@@ -43,8 +43,10 @@ const FFMPEG_SOURCE_URL: &str = "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz
 const FFMPEG_SOURCE_ARCHIVE_NAME: &str = "ffmpeg-8.1.1.tar.xz";
 #[cfg(target_os = "macos")]
 const MACOS_ARM64_DEPLOYMENT_TARGET: &str = "11.0";
-const WHISPER_RELEASES_API_URL: &str =
-    "https://api.github.com/repos/ggml-org/whisper.cpp/releases";
+const WHISPER_RELEASES_API_URL: &str = "https://api.github.com/repos/ggml-org/whisper.cpp/releases";
+#[cfg(any(target_os = "macos", test))]
+const WHISPER_LATEST_RELEASE_API_URL: &str =
+    "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
 const WHISPER_VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
 const WHISPER_VAD_MODEL_URL: &str =
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
@@ -128,6 +130,13 @@ struct GithubRelease {
 struct GithubAsset {
     name: String,
     browser_download_url: String,
+}
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Deserialize)]
+struct WhisperSourceRelease {
+    tag_name: String,
+    tarball_url: String,
 }
 
 #[tauri::command]
@@ -713,6 +722,19 @@ mod tests {
         select_whisper_cpp_asset_from_releases, select_whisper_cpp_asset_name, GithubAsset,
         GithubRelease,
     };
+
+    #[test]
+    fn macos_source_release_uses_the_single_release_contract() {
+        assert_eq!(
+            super::WHISPER_LATEST_RELEASE_API_URL,
+            format!("{}/latest", super::WHISPER_RELEASES_API_URL)
+        );
+        let body = r#"{"tag_name":"v1.8.3","tarball_url":"https://api.github.com/repos/ggml-org/whisper.cpp/tarball/v1.8.3","assets":[]}"#;
+        let release: super::WhisperSourceRelease = serde_json::from_str(body).unwrap();
+        assert_eq!(release.tag_name, "v1.8.3");
+        assert!(release.tarball_url.ends_with("/tarball/v1.8.3"));
+        assert!(serde_json::from_str::<super::WhisperSourceRelease>(&format!("[{body}]")).is_err());
+    }
 
     #[test]
     fn selects_cuda_package_for_nvidia_windows() {

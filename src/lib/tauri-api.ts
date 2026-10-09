@@ -173,6 +173,15 @@ export function saveSourceSubtitles(taskId: string, originalSourceSrt: string, e
   return invoke<TaskRecord>("save_source_subtitles", { taskId, originalSourceSrt, edits });
 }
 
+export function saveTranslatedSubtitles(
+  taskId: string,
+  originalSourceSrt: string,
+  originalTranslatedSrt: string,
+  edits: SourceSubtitleEdit[],
+) {
+  return invoke<TaskRecord>("save_translated_subtitles", { taskId, originalSourceSrt, originalTranslatedSrt, edits });
+}
+
 export function openPath(path: string) {
   return invoke("open_path", { path });
 }

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectAudio, selectVideo, subtitlePreview } from "./tauri-api";
+import { saveTranslatedSubtitles, selectAudio, selectVideo, subtitlePreview } from "./tauri-api";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -75,5 +75,15 @@ describe("subtitlePreview", () => {
     void subtitlePreview("task-1");
 
     expect(invoke).toHaveBeenCalledWith("subtitle_preview", { jobId: "task-1" });
+  });
+});
+
+describe("saveTranslatedSubtitles", () => {
+  it("sends both original snapshots for optimistic concurrency validation", async () => {
+    const edits = [{ id: 1, text: "Corrected translation" }];
+    await saveTranslatedSubtitles("task-1", "source snapshot", "translation snapshot", edits);
+    expect(invoke).toHaveBeenCalledWith("save_translated_subtitles", {
+      taskId: "task-1", originalSourceSrt: "source snapshot", originalTranslatedSrt: "translation snapshot", edits,
+    });
   });
 });

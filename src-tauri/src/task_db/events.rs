@@ -1,9 +1,41 @@
+use crate::state::{ensure_not_cancelled, JobError, JobResult};
 use rusqlite::{params, Connection, Transaction};
+use std::sync::{atomic::AtomicBool, Arc};
 use tauri::{AppHandle, Emitter};
 
 use crate::job_events::{ExportedSubtitlePaths, JobEvent, JobStatus};
 
-use super::{get_task, require_task, schema::connection, TaskRecord};
+use super::{
+    get_task, require_task,
+    schema::{connection, task_from_row},
+    TaskRecord,
+};
+
+const SOURCE_RESULT_SQL: &str = "UPDATE tasks SET
+            source_srt_path = ?1,
+            source_file_name = ?2,
+            output_dir = ?3,
+            segment_count = ?4,
+            translated_srt_path = NULL,
+            translated_file_name = NULL,
+            translation_completed_count = NULL,
+            exported_source_srt = NULL,
+            exported_translated_srt = NULL,
+            exported_output_dir = NULL,
+            result_revision = result_revision + 1,
+            updated_at = ?5
+        WHERE id = ?6";
+
+const TRANSLATION_RESULT_SQL: &str = "UPDATE tasks SET
+            translated_srt_path = ?1,
+            translated_file_name = ?2,
+            translation_completed_count = NULL,
+            exported_source_srt = NULL,
+            exported_translated_srt = NULL,
+            exported_output_dir = NULL,
+            result_revision = result_revision + 1,
+            updated_at = ?3
+        WHERE id = ?4";
 
 pub(crate) fn set_queued(
     app: &AppHandle,
@@ -35,56 +67,104 @@ pub(crate) fn set_interrupted(app: &AppHandle, task_id: &str) -> Result<TaskReco
 
 pub(crate) fn set_subtitle_result(
     app: &AppHandle,
-    task_id: &str,
+    expected: &TaskRecord,
+    cancel: &Arc<AtomicBool>,
     source_srt_path: String,
     source_file_name: String,
     output_dir: String,
     segment_count: usize,
-) -> Result<TaskRecord, String> {
-    let conn = connection(app)?;
-    let now = super::now_ts();
-    conn.execute(
-        "UPDATE tasks SET
-            source_srt_path = ?1,
-            source_file_name = ?2,
-            output_dir = ?3,
-            segment_count = ?4,
-            updated_at = ?5
-        WHERE id = ?6",
+) -> JobResult<TaskRecord> {
+    let mut conn = connection(app).map_err(JobError::failed)?;
+    let saved = apply_result_in_transaction(
+        &mut conn,
+        expected,
+        cancel,
+        SOURCE_RESULT_SQL,
         params![
             source_srt_path,
             source_file_name,
             output_dir,
             segment_count as i64,
-            now,
-            task_id,
+            super::now_ts(),
+            expected.id
         ],
-    )
-    .map_err(|error| error.to_string())?;
-    emit_task(app, task_id);
-    require_task(app, task_id)
+    )?;
+    emit_task(app, &expected.id);
+    Ok(saved)
 }
 
 pub(crate) fn set_translation_result(
     app: &AppHandle,
-    task_id: &str,
+    expected: &TaskRecord,
+    cancel: &Arc<AtomicBool>,
     translated_srt_path: String,
     translated_file_name: String,
-) -> Result<TaskRecord, String> {
-    let conn = connection(app)?;
-    let now = super::now_ts();
-    conn.execute(
-        "UPDATE tasks SET
-            translated_srt_path = ?1,
-            translated_file_name = ?2,
-            translation_completed_count = NULL,
-            updated_at = ?3
-        WHERE id = ?4",
-        params![translated_srt_path, translated_file_name, now, task_id],
-    )
-    .map_err(|error| error.to_string())?;
-    emit_task(app, task_id);
-    require_task(app, task_id)
+) -> JobResult<TaskRecord> {
+    let mut conn = connection(app).map_err(JobError::failed)?;
+    let saved = apply_result_in_transaction(
+        &mut conn,
+        expected,
+        cancel,
+        TRANSLATION_RESULT_SQL,
+        params![
+            translated_srt_path,
+            translated_file_name,
+            super::now_ts(),
+            expected.id
+        ],
+    )?;
+    emit_task(app, &expected.id);
+    Ok(saved)
+}
+
+fn apply_result_in_transaction<P: rusqlite::Params>(
+    conn: &mut Connection,
+    expected: &TaskRecord,
+    cancel: &Arc<AtomicBool>,
+    sql: &str,
+    params: P,
+) -> JobResult<TaskRecord> {
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    ensure_result_owner(&tx, expected, cancel)?;
+    tx.execute(sql, params)
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    let saved = tx
+        .query_row(
+            "SELECT * FROM tasks WHERE id = ?1",
+            params![expected.id],
+            task_from_row,
+        )
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    ensure_not_cancelled(cancel)?;
+    tx.commit()
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    Ok(saved)
+}
+
+fn ensure_result_owner(
+    tx: &Transaction<'_>,
+    expected: &TaskRecord,
+    cancel: &Arc<AtomicBool>,
+) -> JobResult<()> {
+    ensure_not_cancelled(cancel)?;
+    let current = tx
+        .query_row(
+            "SELECT * FROM tasks WHERE id = ?1",
+            params![expected.id],
+            task_from_row,
+        )
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    if current.run_generation != expected.run_generation
+        || current.result_revision != expected.result_revision
+        || current.source_srt_path != expected.source_srt_path
+        || current.translated_srt_path != expected.translated_srt_path
+        || current.status != "running"
+    {
+        return Err(JobError::Cancelled);
+    }
+    Ok(())
 }
 
 pub(crate) fn set_translation_progress(
@@ -126,35 +206,57 @@ pub(crate) fn clear_translation_progress(
 
 pub(crate) fn set_exported(
     app: &AppHandle,
-    task_id: &str,
-    exported: &ExportedSubtitlePaths,
-) -> Result<TaskRecord, String> {
-    let conn = connection(app)?;
+    expected: &TaskRecord,
+    cancel: &Arc<AtomicBool>,
+    publish: impl FnOnce() -> JobResult<ExportedSubtitlePaths>,
+) -> JobResult<TaskRecord> {
+    let mut conn = connection(app).map_err(JobError::failed)?;
+    let saved = commit_export_in_transaction(&mut conn, expected, cancel, publish)?;
+    emit_task(app, &expected.id);
+    Ok(saved)
+}
+
+fn commit_export_in_transaction(
+    conn: &mut Connection,
+    expected: &TaskRecord,
+    cancel: &Arc<AtomicBool>,
+    publish: impl FnOnce() -> JobResult<ExportedSubtitlePaths>,
+) -> JobResult<TaskRecord> {
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    ensure_result_owner(&tx, expected, cancel)?;
+    // The caller holds task_mutations through this entire non-async publication.
+    // It owns rollback guards for any newly created export files.
+    let exported = publish()?;
+    ensure_not_cancelled(cancel)?;
     let now = super::now_ts();
-    conn.execute(
-        "UPDATE tasks SET
-            status = 'exported',
-            stage = 'exported',
-            message = '字幕已导出',
-            progress = 1.0,
-            exported_source_srt = ?1,
-            exported_translated_srt = ?2,
-            exported_output_dir = ?3,
-            error = NULL,
-            updated_at = ?4
-        WHERE id = ?5",
+    tx.execute(
+        "UPDATE tasks SET status = 'exported', stage = 'exported', message = '字幕已导出',
+         progress = 1.0, exported_source_srt = ?1, exported_translated_srt = ?2,
+         exported_output_dir = ?3, error = NULL, updated_at = ?4 WHERE id = ?5",
         params![
             exported.source_srt,
             exported.translated_srt,
             exported.output_dir,
             now,
-            task_id,
+            expected.id
         ],
     )
-    .map_err(|error| error.to_string())?;
-    append_log(app, task_id, "exported · 字幕已导出")?;
-    emit_task(app, task_id);
-    require_task(app, task_id)
+    .map_err(|error| JobError::failed(error.to_string()))?;
+    append_log_in_transaction(&tx, &expected.id, "exported · 字幕已导出", now)
+        .map_err(JobError::failed)?;
+    let saved = tx
+        .query_row(
+            "SELECT * FROM tasks WHERE id = ?1",
+            params![expected.id],
+            task_from_row,
+        )
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    ensure_not_cancelled(cancel)?;
+    tx.commit()
+        .map_err(|error| JobError::failed(error.to_string()))?;
+    Ok(saved)
 }
 
 pub(crate) fn record_job_event(app: &AppHandle, event: &JobEvent) -> Result<(), String> {
@@ -281,6 +383,7 @@ fn update_status(
     conn.execute(
         "UPDATE tasks SET
             status = ?1,
+            run_generation = run_generation + CASE WHEN ?1 = 'queued' THEN 1 ELSE 0 END,
             stage = ?2,
             message = ?3,
             progress = COALESCE(?4, progress),
@@ -320,6 +423,240 @@ mod tests {
     use super::*;
     use crate::job_events::{JobEvent, JobStatus};
     use crate::task_db::schema::migrate;
+
+    fn running_fixture() -> (Connection, TaskRecord) {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let settings = r#"{"output_dir":null,"target_language":"简体中文","whisper_model_path":"","whisper_language":"auto","base_url":"","model":"test","temperature":0.2}"#;
+        conn.execute(
+            "INSERT INTO tasks(id, source_type, file_name, status, stage, message,
+            progress, settings_json, source_srt_path, translated_srt_path, run_generation,
+            created_at, updated_at) VALUES('task', 'video', 'clip', 'running', 'translate', '',
+            0.5, ?1, 'source', 'previous-translation', 1, 1, 1)",
+            params![settings],
+        )
+        .unwrap();
+        let task = conn
+            .query_row("SELECT * FROM tasks", [], task_from_row)
+            .unwrap();
+        (conn, task)
+    }
+
+    #[test]
+    fn cancelled_or_obsolete_export_never_publishes_files() {
+        for obsolete in [false, true] {
+            let (mut conn, attempt) = running_fixture();
+            if obsolete {
+                conn.execute("UPDATE tasks SET run_generation = 2", [])
+                    .unwrap();
+            }
+            let result = commit_export_in_transaction(
+                &mut conn,
+                &attempt,
+                &Arc::new(AtomicBool::new(!obsolete)),
+                || panic!("rejected export must not publish"),
+            );
+            assert!(matches!(result, Err(JobError::Cancelled)));
+        }
+    }
+
+    #[test]
+    fn export_database_failure_rolls_back_new_files_and_preserves_prior_export() {
+        let (mut conn, attempt) = running_fixture();
+        let dir =
+            std::env::temp_dir().join(format!("luma-export-transaction-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let previous = dir.join("clip.srt");
+        std::fs::write(&previous, "previous export").unwrap();
+        conn.execute(
+            "UPDATE tasks SET exported_source_srt = ?1",
+            params![previous.to_str()],
+        )
+        .unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_export_log BEFORE INSERT ON task_logs BEGIN SELECT RAISE(ABORT, 'no log'); END;").unwrap();
+        {
+            let mut files = crate::jobs::ExportFiles::default();
+            let staged = files.stage_path(&dir);
+            std::fs::write(&staged, "new export").unwrap();
+            let result = commit_export_in_transaction(
+                &mut conn,
+                &attempt,
+                &Arc::new(AtomicBool::new(false)),
+                || {
+                    let published = files.publish(&dir, "clip.srt", "task", &staged)?;
+                    Ok(ExportedSubtitlePaths {
+                        source_srt: published.to_string_lossy().into_owned(),
+                        translated_srt: None,
+                        output_dir: dir.to_string_lossy().into_owned(),
+                    })
+                },
+            );
+            assert!(matches!(result, Err(JobError::Failed(_))));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&previous).unwrap(),
+            "previous export"
+        );
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let saved: String = conn
+            .query_row("SELECT exported_source_srt FROM tasks", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(saved, previous.to_string_lossy());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cancelled_after_export_publication_rolls_back_metadata_and_new_files() {
+        let (mut conn, attempt) = running_fixture();
+        let dir = std::env::temp_dir().join(format!("luma-export-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut files = crate::jobs::ExportFiles::default();
+            let staged = files.stage_path(&dir);
+            std::fs::write(&staged, "new export").unwrap();
+            let result = commit_export_in_transaction(&mut conn, &attempt, &cancel, || {
+                let published = files.publish(&dir, "clip.srt", "task", &staged)?;
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(ExportedSubtitlePaths {
+                    source_srt: published.to_string_lossy().into_owned(),
+                    translated_srt: None,
+                    output_dir: dir.to_string_lossy().into_owned(),
+                })
+            });
+            assert!(matches!(result, Err(JobError::Cancelled)));
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let status: String = conn
+            .query_row("SELECT status FROM tasks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(status, "running");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn obsolete_worker_cannot_attach_a_result_after_restart_or_source_change() {
+        for update in [
+            "UPDATE tasks SET run_generation = 2",
+            "UPDATE tasks SET result_revision = 1, source_srt_path = 'new-source'",
+            "UPDATE tasks SET status = 'cancelled'",
+        ] {
+            let (mut conn, old_attempt) = running_fixture();
+            conn.execute(update, []).unwrap();
+            let result = apply_result_in_transaction(
+                &mut conn,
+                &old_attempt,
+                &Arc::new(AtomicBool::new(false)),
+                TRANSLATION_RESULT_SQL,
+                params!["late-result", "late.srt", 3, "task"],
+            );
+            assert!(matches!(result, Err(JobError::Cancelled)), "{update}");
+            let path: String = conn
+                .query_row("SELECT translated_srt_path FROM tasks", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(path, "previous-translation");
+        }
+    }
+
+    #[test]
+    fn cancellation_is_checked_inside_result_transaction() {
+        let (mut conn, attempt) = running_fixture();
+        let result = apply_result_in_transaction(
+            &mut conn,
+            &attempt,
+            &Arc::new(AtomicBool::new(true)),
+            TRANSLATION_RESULT_SQL,
+            params!["cancelled-result", "target.srt", 3, "task"],
+        );
+        assert!(matches!(result, Err(JobError::Cancelled)));
+        let path: String = conn
+            .query_row("SELECT translated_srt_path FROM tasks", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(path, "previous-translation");
+    }
+
+    #[test]
+    fn current_attempt_commits_result_and_advances_version_atomically() {
+        let (mut conn, attempt) = running_fixture();
+        let saved = apply_result_in_transaction(
+            &mut conn,
+            &attempt,
+            &Arc::new(AtomicBool::new(false)),
+            TRANSLATION_RESULT_SQL,
+            params!["new-result", "target.srt", 3, "task"],
+        )
+        .unwrap();
+        assert_eq!(saved.translated_srt_path.as_deref(), Some("new-result"));
+        assert_eq!(saved.run_generation, 1);
+        assert_eq!(saved.result_revision, 1);
+    }
+
+    #[test]
+    fn new_source_invalidates_old_translation_exports_and_resume() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tasks(id, source_type, file_name, status, stage, message,
+            progress, settings_json, source_srt_path, translated_srt_path, translated_file_name,
+            translation_completed_count, exported_source_srt, exported_translated_srt,
+            exported_output_dir, created_at, updated_at)
+            VALUES('task', 'video', 'clip', 'exported', 'exported', '', 1, '{}', 'old.source',
+            'old.target', 'target.srt', 25, 'export.source', 'export.target', 'exports', 1, 1);",
+        )
+        .unwrap();
+        conn.execute(
+            SOURCE_RESULT_SQL,
+            params!["new.source", "source.srt", "out", 30, 2, "task"],
+        )
+        .unwrap();
+        let row: (String, Option<String>, Option<String>, Option<i64>, i64) = conn
+            .query_row(
+                "SELECT source_srt_path, translated_srt_path, exported_translated_srt,
+             translation_completed_count, result_revision FROM tasks",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row, ("new.source".into(), None, None, None, 1));
+    }
+
+    #[test]
+    fn same_path_translation_still_advances_revision_and_invalidates_exports() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch("INSERT INTO tasks(id, source_type, file_name, status, stage, message,
+            progress, settings_json, translated_srt_path, exported_translated_srt, created_at, updated_at)
+            VALUES('task', 'srt', 'clip', 'completed', 'completed', '', 1, '{}', 'target', 'old-export', 1, 1);").unwrap();
+        for revision in 1..=2 {
+            conn.execute(
+                TRANSLATION_RESULT_SQL,
+                params!["target", "target.srt", 2, "task"],
+            )
+            .unwrap();
+            let row: (i64, Option<String>) = conn
+                .query_row(
+                    "SELECT result_revision, exported_translated_srt FROM tasks",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row, (revision, None));
+        }
+    }
 
     #[test]
     fn job_event_rolls_back_task_update_when_log_insert_fails() {

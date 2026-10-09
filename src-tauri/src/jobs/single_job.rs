@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Arc},
+    time::Instant,
 };
 
 use tauri::{AppHandle, Manager};
@@ -11,19 +12,18 @@ use crate::{
     state::{ensure_not_cancelled, AppState, JobError, JobResult},
     subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition, SubtitleSegment},
     translation::{
-        is_api_provider, normalize_translation_cli_args,
-        normalize_translation_cli_command, normalize_translation_cli_model,
-        normalize_translation_cli_tool, normalize_translation_local_model_path,
-        normalize_translation_provider, normalize_translation_shard_size,
-        translate_with_single_request, TranslationConfig, TranslationResume,
-        DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
+        is_api_provider, normalize_translation_cli_args, normalize_translation_cli_command,
+        normalize_translation_cli_model, normalize_translation_cli_tool,
+        normalize_translation_local_model_path, normalize_translation_provider,
+        normalize_translation_shard_size, translate_with_single_request, TranslationConfig,
+        TranslationResume, DEFAULT_TRANSLATION_CLI_COMMAND, DEFAULT_TRANSLATION_CLI_TOOL,
         DEFAULT_TRANSLATION_PROVIDER, DEFAULT_TRANSLATION_SHARD_SIZE,
     },
 };
 
 use super::{
     helpers::translated_file_name,
-    process::{prepare_audio, transcribe_audio, TranscriptionMode},
+    process::{prepare_audio, transcribe_audio, TranscriptionMode, TranscriptionPaths},
     JobRequest, TranslateSubtitlesRequest,
 };
 
@@ -166,8 +166,7 @@ pub(super) async fn run_job(
         .insert(job_id.clone(), stored);
     publish_job_event(
         &app,
-        JobEventDraft::running(&job_id, "source-srt", "原文字幕已生成到内存", 0.9)
-            .with_outputs(outputs.clone()),
+        JobEventDraft::running(&job_id, "source-srt", "原文字幕已生成到内存", 0.9),
     );
 
     Ok(outputs)
@@ -189,7 +188,21 @@ async fn prepare_transcription_audio(
     };
     ensure_not_cancelled(&cancel)?;
     publish_job_event(app, JobEventDraft::running(job_id, stage, message, 0.08));
-    prepare_audio(app, media_path, &audio_path, cancel).await?;
+    let started = Instant::now();
+    prepare_audio(app, media_path, &audio_path, cancel.clone()).await?;
+    ensure_not_cancelled(&cancel)?;
+    publish_job_event(
+        app,
+        JobEventDraft::running(
+            job_id,
+            stage,
+            format!(
+                "音频准备完成 · 耗时 {:.1} 秒",
+                started.elapsed().as_secs_f64()
+            ),
+            0.24,
+        ),
+    );
     Ok(audio_path)
 }
 
@@ -210,22 +223,27 @@ async fn transcribe_prepared_audio(
     );
     transcribe_audio(
         app,
-        model_path,
-        audio_path,
-        transcript_base,
+        job_id,
+        TranscriptionPaths {
+            model: model_path,
+            audio: audio_path,
+            output: transcript_base,
+        },
         language,
         TranscriptionMode::Standard,
         cancel.clone(),
     )
     .await?;
+    ensure_not_cancelled(&cancel)?;
     let mut segments = parse_whisper_json(&transcript_json)?;
     if segments.is_empty() {
         return Err(JobError::failed("Whisper 没有返回可用字幕段"));
     }
     if let Err(first_error) = validate_whisper_repetition(&segments) {
+        ensure_not_cancelled(&cancel)?;
         let first_message = job_error_message(first_error);
         publish_job_event(
-            &app,
+            app,
             JobEventDraft::running(
                 job_id,
                 "transcribing-retry",
@@ -235,14 +253,18 @@ async fn transcribe_prepared_audio(
         );
         transcribe_audio(
             app,
-            model_path,
-            audio_path,
-            transcript_base,
+            job_id,
+            TranscriptionPaths {
+                model: model_path,
+                audio: audio_path,
+                output: transcript_base,
+            },
             language,
             TranscriptionMode::ConservativeRetry,
             cancel.clone(),
         )
         .await?;
+        ensure_not_cancelled(&cancel)?;
         segments = parse_whisper_json(&transcript_json)?;
         if segments.is_empty() {
             return Err(JobError::failed("Whisper 重试后没有返回可用字幕段"));

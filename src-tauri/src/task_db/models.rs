@@ -55,6 +55,9 @@ pub(crate) struct TaskRecord {
     pub(crate) exported_translated_srt: Option<String>,
     pub(crate) exported_output_dir: Option<String>,
     pub(crate) translation_completed_count: Option<usize>,
+    pub(crate) result_revision: u64,
+    #[serde(skip_serializing)]
+    pub(crate) run_generation: u64,
     pub(crate) error: Option<String>,
     pub(crate) created_at: i64,
     pub(crate) updated_at: i64,

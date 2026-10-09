@@ -59,12 +59,10 @@ pub(crate) fn parse_delimited_translation_content(
     content: &str,
     segments: &[SubtitleSegment],
 ) -> JobResult<Vec<TranslatedSegment>> {
+    validate_source_ids(segments)?;
     let cleaned = strip_code_fences(content);
     if segments.len() == 1 {
-        return Ok(vec![TranslatedSegment {
-            id: segments[0].id,
-            text: summarize_repeated_vocalization(&cleaned),
-        }]);
+        return Ok(vec![translated_segment(segments[0].id, &cleaned)?]);
     }
     let mut parts = cleaned
         .split(LOCAL_CUE_DELIMITER)
@@ -83,14 +81,11 @@ pub(crate) fn parse_delimited_translation_content(
             parts.len()
         )));
     }
-    Ok(segments
+    segments
         .iter()
         .zip(parts)
-        .map(|(segment, text)| TranslatedSegment {
-            id: segment.id,
-            text,
-        })
-        .collect())
+        .map(|(segment, text)| translated_segment(segment.id, &text))
+        .collect()
 }
 
 fn strip_code_fences(content: &str) -> String {
@@ -118,24 +113,24 @@ fn parse_translation_value(
     value: serde_json::Value,
     segments: &[SubtitleSegment],
 ) -> JobResult<Vec<TranslatedSegment>> {
+    let expected_ids = validate_source_ids(segments)?;
     let items = translation_items_value(&value)
         .ok_or_else(|| JobError::failed("翻译 JSON 缺少 items 数组或译文数组"))?;
+    if items.len() != segments.len() {
+        return Err(JobError::failed(format!(
+            "翻译返回的字幕数量与请求不一致：请求 {} 条，返回 {} 条",
+            segments.len(),
+            items.len()
+        )));
+    }
     if items.iter().all(serde_json::Value::is_string) {
-        if items.len() != segments.len() {
-            return Err(JobError::failed(format!(
-                "翻译返回的字幕数量与请求不一致：请求 {} 条，返回 {} 条",
-                segments.len(),
-                items.len()
-            )));
-        }
-        return Ok(items
+        return items
             .iter()
-            .zip(segments.iter())
-            .map(|(item, segment)| TranslatedSegment {
-                id: segment.id,
-                text: summarize_repeated_vocalization(item.as_str().unwrap_or_default()),
+            .zip(segments)
+            .map(|(item, segment)| {
+                translated_segment(segment.id, item.as_str().unwrap_or_default())
             })
-            .collect());
+            .collect();
     }
 
     let parsed_items = items
@@ -144,38 +139,56 @@ fn parse_translation_value(
         .map(serde_json::from_value::<TranslationItem>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| JobError::failed(format!("翻译 JSON 条目解析失败: {error}")))?;
-    let expected_ids = segments
-        .iter()
-        .map(|segment| segment.id)
-        .collect::<HashSet<_>>();
     let actual_ids = parsed_items
         .iter()
         .map(|item| item.id)
         .collect::<HashSet<_>>();
-    if expected_ids == actual_ids {
-        return Ok(parsed_items
-            .into_iter()
-            .map(|item| TranslatedSegment {
-                id: item.id,
-                text: summarize_repeated_vocalization(&item.text),
-            })
-            .collect());
+    if actual_ids.len() != parsed_items.len() {
+        return Err(JobError::failed("翻译返回了重复的字幕 id"));
     }
-    if parsed_items.len() == segments.len() {
-        return Ok(parsed_items
+    if expected_ids == actual_ids {
+        return parsed_items
             .into_iter()
-            .zip(segments.iter())
-            .map(|(item, segment)| TranslatedSegment {
-                id: segment.id,
-                text: summarize_repeated_vocalization(&item.text),
-            })
-            .collect());
+            .map(|item| translated_segment(item.id, &item.text))
+            .collect();
+    }
+    // Some models restart each shard at 1. Keep that known compatibility case,
+    // but arbitrary or shuffled IDs must never silently shift cue alignment.
+    if parsed_items
+        .iter()
+        .enumerate()
+        .all(|(index, item)| item.id == index + 1)
+    {
+        return parsed_items
+            .into_iter()
+            .zip(segments)
+            .map(|(item, segment)| translated_segment(segment.id, &item.text))
+            .collect();
     }
     Err(JobError::failed(format!(
-        "翻译返回的字幕数量或 id 与请求不一致：请求 {} 条，返回 {} 条",
+        "翻译返回的字幕 id 与请求不一致：请求 {} 条，返回 {} 条",
         segments.len(),
         parsed_items.len()
     )))
+}
+
+pub(super) fn validate_source_ids(segments: &[SubtitleSegment]) -> JobResult<HashSet<usize>> {
+    let ids = segments
+        .iter()
+        .map(|segment| segment.id)
+        .collect::<HashSet<_>>();
+    if ids.len() != segments.len() {
+        return Err(JobError::failed("原字幕包含重复的 id，无法安全对齐译文"));
+    }
+    Ok(ids)
+}
+
+fn translated_segment(id: usize, text: &str) -> JobResult<TranslatedSegment> {
+    let text = summarize_repeated_vocalization(text);
+    if text.trim().is_empty() {
+        return Err(JobError::failed(format!("字幕 {id} 返回了空译文")));
+    }
+    Ok(TranslatedSegment { id, text })
 }
 
 fn translation_items_value(value: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
@@ -219,7 +232,7 @@ fn is_wrapped_json_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_delimited_translation_content;
+    use super::{parse_delimited_translation_content, parse_translation_content};
     use crate::subtitles::SubtitleSegment;
 
     fn segment(id: usize, text: &str) -> SubtitleSegment {
@@ -234,8 +247,9 @@ mod tests {
     #[test]
     fn splits_delimited_local_translations_in_order() {
         let segments = [segment(7, "a"), segment(8, "b"), segment(9, "c")];
-        let parsed = parse_delimited_translation_content("Hello<<<CUE>>>World<<<CUE>>>!", &segments)
-            .expect("delimited output should parse");
+        let parsed =
+            parse_delimited_translation_content("Hello<<<CUE>>>World<<<CUE>>>!", &segments)
+                .expect("delimited output should parse");
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0].id, 7);
         assert_eq!(parsed[0].text, "Hello");
@@ -246,7 +260,79 @@ mod tests {
     #[test]
     fn uses_the_whole_output_for_a_single_cue() {
         let segments = [segment(1, "hello")];
-        let parsed = parse_delimited_translation_content("  你好  ", &segments).expect("single cue");
+        let parsed =
+            parse_delimited_translation_content("  你好  ", &segments).expect("single cue");
         assert_eq!(parsed[0].text, "你好");
+    }
+
+    #[test]
+    fn rejects_duplicate_source_ids_in_all_formats() {
+        let segments = [segment(7, "a"), segment(7, "b")];
+        assert!(parse_translation_content(r#"["one","two"]"#, &segments).is_err());
+        assert!(parse_delimited_translation_content("one<<<CUE>>>two", &segments).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_output_ids_even_when_count_or_id_set_matches() {
+        let segments = [segment(7, "a"), segment(9, "b")];
+        assert!(parse_translation_content(
+            r#"[{"id":7,"text":"one"},{"id":7,"text":"two"}]"#,
+            &segments
+        )
+        .is_err());
+        assert!(parse_translation_content(
+            r#"[{"id":7,"text":"one"},{"id":9,"text":"two"},{"id":9,"text":"extra"}]"#,
+            &segments
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_blank_translations_in_all_formats() {
+        let segments = [segment(7, "a"), segment(9, "b")];
+        assert!(parse_translation_content(r#"["one","  "]"#, &segments).is_err());
+        assert!(parse_translation_content(
+            r#"[{"id":7,"text":"one"},{"id":9,"text":""}]"#,
+            &segments
+        )
+        .is_err());
+        assert!(parse_delimited_translation_content("one<<<CUE>>>  ", &segments).is_err());
+        assert!(parse_delimited_translation_content("  ", &segments[..1]).is_err());
+    }
+
+    #[test]
+    fn only_remaps_ordered_sequential_ids() {
+        let segments = [segment(7, "a"), segment(9, "b")];
+        let parsed = parse_translation_content(
+            r#"[{"id":1,"text":"one"},{"id":2,"text":"two"}]"#,
+            &segments,
+        )
+        .unwrap();
+        assert_eq!(parsed[0].id, 7);
+        assert_eq!(parsed[1].id, 9);
+        assert!(parse_translation_content(
+            r#"[{"id":11,"text":"one"},{"id":12,"text":"two"}]"#,
+            &segments
+        )
+        .is_err());
+        assert!(parse_translation_content(
+            r#"[{"id":2,"text":"two"},{"id":1,"text":"one"}]"#,
+            &segments
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn preserves_exact_ids_when_response_is_out_of_order() {
+        let segments = [segment(7, "a"), segment(9, "b")];
+        let parsed = parse_translation_content(
+            r#"[{"id":9,"text":"two"},{"id":7,"text":"one"}]"#,
+            &segments,
+        )
+        .unwrap();
+        assert_eq!(parsed[0].id, 9);
+        assert_eq!(parsed[0].text, "two");
+        assert_eq!(parsed[1].id, 7);
+        assert_eq!(parsed[1].text, "one");
     }
 }

@@ -50,6 +50,17 @@ export function mergeTaskLogs(snapshot: string[], realtime: string[]) {
   return [...snapshot, ...realtime.filter((line) => !known.has(line))];
 }
 
+export function subtitleResultChanged(previous: TaskRecord | null, next: TaskRecord) {
+  return previous?.id !== next.id ||
+    previous?.source_srt_path !== next.source_srt_path ||
+    previous?.translated_srt_path !== next.translated_srt_path ||
+    (previous?.result_revision ?? 0) !== (next.result_revision ?? 0);
+}
+
+export function nextSubtitleView(current: "source" | "translated" | "parallel", hasTranslation: boolean) {
+  return hasTranslation ? current : "source";
+}
+
 export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSettingsSnapshot {
   return {
     ...settings,

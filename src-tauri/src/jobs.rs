@@ -17,6 +17,8 @@ mod queue;
 mod requests;
 mod single_job;
 mod task_runner;
+#[cfg(test)]
+pub(crate) use task_runner::ExportFiles;
 
 use helpers::{
     display_file_name, job_error_to_string, task_settings_from_audio_request,
@@ -64,7 +66,14 @@ pub(crate) fn subtitle_preview(app: AppHandle, job_id: String) -> Result<Subtitl
         .transpose()
         .map_err(|error| error.to_string())?;
 
+    let translated_segments = translated_srt
+        .as_deref()
+        .map(parse_srt_text)
+        .transpose()
+        .map_err(job_error_to_string)?;
+
     Ok(SubtitlePreview {
+        translated_segments,
         source_srt,
         source_segments,
         translated_srt,
@@ -94,6 +103,32 @@ pub(crate) async fn save_source_subtitles(
     .map_err(|error| format!("保存原文字幕失败: {error}"))?
 }
 
+#[tauri::command]
+pub(crate) async fn save_translated_subtitles(
+    app: AppHandle,
+    task_id: String,
+    original_source_srt: String,
+    original_translated_srt: String,
+    edits: Vec<SourceSubtitleEdit>,
+) -> Result<TaskRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _mutation = state.task_mutations.lock();
+        ensure_task_is_not_busy(&state, &task_id)?;
+        let task = task_db::save_translated_subtitles(
+            &app,
+            &task_id,
+            &original_source_srt,
+            &original_translated_srt,
+            edits,
+        )?;
+        state.subtitle_results.lock().remove(&task_id);
+        Ok(task)
+    })
+    .await
+    .map_err(|error| format!("保存译文字幕失败: {error}"))?
+}
+
 fn ensure_task_is_not_busy(state: &AppState, task_id: &str) -> Result<(), String> {
     if state.running_operations.lock().contains_key(task_id)
         || state.tasks.lock().contains_key(task_id)
@@ -103,7 +138,7 @@ fn ensure_task_is_not_busy(state: &AppState, task_id: &str) -> Result<(), String
             .iter()
             .any(|operation| operation.task_id == task_id)
     {
-        return Err("任务正在运行或排队中，稍后再编辑原文".to_string());
+        return Err("任务正在运行或排队中，稍后再编辑字幕".to_string());
     }
     Ok(())
 }
@@ -120,7 +155,16 @@ pub(crate) fn apply_current_settings_to_task(
         return Err("任务正在运行或排队中，稍后再应用当前设置".to_string());
     }
     let settings = settings::task_settings_from_current(&app, task.settings.output_dir.clone())?;
-    task_db::update_task_settings(&app, &task_id, settings)
+    let saved = task_db::update_task_settings(&app, &task_id, settings)?;
+    if saved.result_revision != task.result_revision {
+        state.subtitle_results.lock().remove(&task_id);
+        if let Ok(work_dir) = task_db::task_work_dir(&app, &task_id) {
+            let _ = crate::translation::checkpoint::clear_checkpoint(
+                &crate::translation::checkpoint::checkpoint_path(&work_dir),
+            );
+        }
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -136,7 +180,16 @@ pub(crate) fn update_task_settings(
         return Err("任务正在运行或排队中，稍后再修改配置".to_string());
     }
     let settings = task_settings_from_update_request(task.settings.output_dir.clone(), &settings);
-    task_db::update_task_settings(&app, &task_id, settings)
+    let saved = task_db::update_task_settings(&app, &task_id, settings)?;
+    if saved.result_revision != task.result_revision {
+        state.subtitle_results.lock().remove(&task_id);
+        if let Ok(work_dir) = task_db::task_work_dir(&app, &task_id) {
+            let _ = crate::translation::checkpoint::clear_checkpoint(
+                &crate::translation::checkpoint::checkpoint_path(&work_dir),
+            );
+        }
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -224,6 +277,8 @@ fn create_media_task(
         exported_translated_srt: None,
         exported_output_dir: None,
         translation_completed_count: None,
+        result_revision: 0,
+        run_generation: 0,
         error: None,
         created_at: now,
         updated_at: now,
@@ -290,6 +345,8 @@ pub(crate) async fn create_srt_task(
         exported_translated_srt: None,
         exported_output_dir: None,
         translation_completed_count: None,
+        result_revision: 0,
+        run_generation: 0,
         error: None,
         created_at: now,
         updated_at: now,

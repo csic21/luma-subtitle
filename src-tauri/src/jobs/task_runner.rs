@@ -6,9 +6,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    job_events::{
-        publish_job_event, ExportedSubtitlePaths, JobEventDraft, JobOutputs, StoredSubtitleResult,
-    },
+    job_events::{publish_job_event, ExportedSubtitlePaths, JobEventDraft, StoredSubtitleResult},
     paths::path_to_string,
     state::{ensure_not_cancelled, AppState, JobError, JobResult, QueuedTaskOperation},
     subtitles::{parse_srt_file, write_srt_text},
@@ -35,6 +33,9 @@ pub(super) async fn execute_task_operation(
     queued: QueuedTaskOperation,
     cancel: Arc<AtomicBool>,
 ) -> bool {
+    let generation = task_db::require_task(&app, &queued.task_id)
+        .ok()
+        .map(|task| task.run_generation);
     let result = match queued.operation.as_str() {
         "transcribe" => run_transcribe_task(app.clone(), &queued.task_id, cancel).await,
         "translate" => run_translate_task(app.clone(), &queued.task_id, cancel, false).await,
@@ -43,6 +44,15 @@ pub(super) async fn execute_task_operation(
         _ => Err(JobError::failed("未知任务操作")),
     };
 
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
+    if task_db::require_task(&app, &queued.task_id)
+        .ok()
+        .map(|task| task.run_generation)
+        != generation
+    {
+        return false;
+    }
     match result {
         Ok(()) => true,
         Err(JobError::Cancelled) => {
@@ -105,7 +115,7 @@ async fn run_transcribe_task(
         JobEventDraft::running(task_id, "transcribe", "转写已开始", 0.0),
     );
 
-    let outputs = run_job(app.clone(), task_id.to_string(), request, cancel).await?;
+    let outputs = run_job(app.clone(), task_id.to_string(), request, cancel.clone()).await?;
     let stored = app
         .state::<AppState>()
         .subtitle_results
@@ -114,17 +124,27 @@ async fn run_transcribe_task(
         .cloned()
         .ok_or_else(|| JobError::failed("转写结果未写入内存"))?;
     let work_dir = task_db::task_work_dir(&app, task_id).map_err(JobError::failed)?;
-    let source_srt_path = work_dir.join(&stored.source_file_name);
+    let source_srt_path = work_dir.join(format!("source-{}.srt", uuid::Uuid::new_v4()));
     write_srt_text(&source_srt_path, &stored.source_srt).await?;
-    task_db::set_subtitle_result(
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
+    if let Err(error) = ensure_not_cancelled(&cancel) {
+        let _ = std::fs::remove_file(&source_srt_path);
+        return Err(error);
+    }
+    let saved = task_db::set_subtitle_result(
         &app,
-        task_id,
-        path_to_string(source_srt_path),
+        &task,
+        &cancel,
+        path_to_string(source_srt_path.clone()),
         stored.source_file_name,
         stored.output_dir,
         stored.segments.len(),
-    )
-    .map_err(JobError::failed)?;
+    );
+    if let Err(error) = saved {
+        let _ = std::fs::remove_file(&source_srt_path);
+        return Err(error);
+    }
     publish_job_event(
         &app,
         JobEventDraft::completed(task_id, "completed", "SRT 已生成").with_outputs(outputs),
@@ -243,8 +263,15 @@ async fn run_translate_task(
             0.54,
         ),
     );
-    let (stored, outputs) =
-        run_translation(&app, &request, stored, api_key.as_deref(), cancel, resume_state).await?;
+    let (stored, outputs) = run_translation(
+        &app,
+        &request,
+        stored,
+        api_key.as_deref(),
+        cancel.clone(),
+        resume_state,
+    )
+    .await?;
     let translated_srt = stored
         .translated_srt
         .clone()
@@ -253,20 +280,31 @@ async fn run_translate_task(
         .translated_file_name
         .clone()
         .ok_or_else(|| JobError::failed("翻译文件名为空"))?;
-    let translated_srt_path = work_dir.join(&translated_file_name);
+    let translated_srt_path = work_dir.join(format!("translation-{}.srt", uuid::Uuid::new_v4()));
     write_srt_text(&translated_srt_path, &translated_srt).await?;
-    clear_checkpoint(&checkpoint_file)?;
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
+    if let Err(error) = ensure_not_cancelled(&cancel) {
+        let _ = std::fs::remove_file(&translated_srt_path);
+        return Err(error);
+    }
+    let saved = task_db::set_translation_result(
+        &app,
+        &task,
+        &cancel,
+        path_to_string(translated_srt_path.clone()),
+        translated_file_name,
+    );
+    if let Err(error) = saved {
+        let _ = std::fs::remove_file(&translated_srt_path);
+        return Err(error);
+    }
     app.state::<AppState>()
         .subtitle_results
         .lock()
         .insert(task_id.to_string(), stored);
-    task_db::set_translation_result(
-        &app,
-        task_id,
-        path_to_string(translated_srt_path),
-        translated_file_name,
-    )
-    .map_err(JobError::failed)?;
+
+    let _ = clear_checkpoint(&checkpoint_file);
     publish_job_event(
         &app,
         JobEventDraft::completed(task_id, "completed", "译文字幕已生成").with_outputs(outputs),
@@ -313,72 +351,127 @@ async fn run_export_task(app: AppHandle, task_id: &str, cancel: Arc<AtomicBool>)
         .or(task.settings.output_dir.clone())
         .ok_or_else(|| JobError::failed("无法确定导出目录"))?;
     let output_dir_path = Path::new(&output_dir);
-
     publish_job_event(
         &app,
         JobEventDraft::running(task_id, "exporting", "正在导出字幕", 0.92),
     );
-
     tokio::fs::create_dir_all(output_dir_path)
         .await
         .map_err(|error| JobError::failed(format!("创建导出目录失败: {error}")))?;
-    let source_path = resolve_export_path(
-        output_dir_path,
-        &source_file_name,
-        task_id,
-        task.exported_source_srt.as_deref(),
-    )?;
-    let translated_export = if let (Some(translated_path), Some(translated_file_name)) = (
-        task.translated_srt_path.clone(),
-        task.translated_file_name.clone(),
-    ) {
-        Some((
-            translated_path,
-            resolve_export_path(
-                output_dir_path,
-                &translated_file_name,
-                task_id,
-                task.exported_translated_srt.as_deref(),
-            )?,
-        ))
-    } else {
-        None
-    };
-    let source_srt = tokio::fs::read_to_string(&source_srt_path)
+
+    let mut files = ExportFiles::default();
+    let source_stage = files.stage_path(output_dir_path);
+    let source = tokio::fs::read_to_string(&source_srt_path)
         .await
         .map_err(|error| JobError::failed(format!("读取原文字幕失败: {error}")))?;
-    write_srt_text(&source_path, &source_srt).await?;
+    write_srt_text(&source_stage, &source).await?;
     ensure_not_cancelled(&cancel)?;
+    let translated_stage =
+        if let (Some(path), Some(name)) = (&task.translated_srt_path, &task.translated_file_name) {
+            let body = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|error| JobError::failed(format!("读取译文字幕失败: {error}")))?;
+            let stage = files.stage_path(output_dir_path);
+            write_srt_text(&stage, &body).await?;
+            Some((stage, name.clone()))
+        } else {
+            None
+        };
 
-    let translated_srt = if let Some((translated_path, target)) = translated_export {
-        let body = tokio::fs::read_to_string(&translated_path)
-            .await
-            .map_err(|error| JobError::failed(format!("读取译文字幕失败: {error}")))?;
-        write_srt_text(&target, &body).await?;
-        Some(path_to_string(target))
-    } else {
-        None
-    };
-
-    let exported = ExportedSubtitlePaths {
-        source_srt: path_to_string(source_path),
-        translated_srt,
-        output_dir: path_to_string(output_dir_path.to_path_buf()),
-    };
-    publish_job_event(
-        &app,
-        JobEventDraft::completed(task_id, "completed", "字幕已导出").with_outputs(JobOutputs {
-            source_file_name: task
-                .source_file_name
-                .clone()
-                .unwrap_or_else(|| "source.srt".to_string()),
-            translated_file_name: task.translated_file_name.clone(),
-            output_dir: exported.output_dir.clone(),
-            segment_count: task.segment_count.unwrap_or(0),
-        }),
-    );
-    task_db::set_exported(&app, task_id, &exported).map_err(JobError::failed)?;
+    let state = app.state::<AppState>();
+    let _mutation = state.task_mutations.lock();
+    task_db::set_exported(&app, &task, &cancel, || {
+        let source_path =
+            files.publish(output_dir_path, &source_file_name, task_id, &source_stage)?;
+        let translated_path = if let Some((stage, name)) = &translated_stage {
+            ensure_not_cancelled(&cancel)?;
+            let path = files.publish(output_dir_path, name, task_id, stage)?;
+            Some(path_to_string(path))
+        } else {
+            None
+        };
+        Ok(ExportedSubtitlePaths {
+            source_srt: path_to_string(source_path),
+            translated_srt: translated_path,
+            output_dir: output_dir.clone(),
+        })
+    })?;
+    files.keep_published = true;
     Ok(())
+}
+
+#[derive(Default)]
+pub(crate) struct ExportFiles {
+    staged: Vec<PathBuf>,
+    published: Vec<PathBuf>,
+    keep_published: bool,
+}
+
+impl ExportFiles {
+    pub(crate) fn publish(
+        &mut self,
+        output_dir: &Path,
+        file_name: &str,
+        task_id: &str,
+        staged: &Path,
+    ) -> JobResult<PathBuf> {
+        let path = publish_export_file(output_dir, file_name, task_id, staged)?;
+        self.published.push(path.clone());
+        Ok(path)
+    }
+
+    pub(crate) fn stage_path(&mut self, output_dir: &Path) -> PathBuf {
+        let path = output_dir.join(format!(".luma-export-{}.tmp", uuid::Uuid::new_v4()));
+        self.staged.push(path.clone());
+        path
+    }
+}
+
+impl Drop for ExportFiles {
+    fn drop(&mut self) {
+        for path in &self.staged {
+            let _ = std::fs::remove_file(path);
+        }
+        if !self.keep_published {
+            for path in &self.published {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+fn publish_export_file(
+    output_dir: &Path,
+    file_name: &str,
+    task_id: &str,
+    staged: &Path,
+) -> JobResult<PathBuf> {
+    for _ in 0..10_000 {
+        // Never overwrite any existing export, including an earlier revision
+        // belonging to this task. create_new also closes external filename races.
+        let target = resolve_export_path(output_dir, file_name, task_id, None)?;
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(JobError::failed(format!("创建导出文件失败: {error}"))),
+        };
+        let result = (|| -> std::io::Result<()> {
+            let mut source = std::fs::File::open(staged)?;
+            std::io::copy(&mut source, &mut file)?;
+            file.sync_all()
+        })();
+        drop(file);
+        if let Err(error) = result {
+            let _ = std::fs::remove_file(&target);
+            return Err(JobError::failed(format!("导出字幕失败: {error}")));
+        }
+        return Ok(target);
+    }
+    Err(JobError::failed("导出文件名持续冲突，请选择其他导出目录"))
 }
 
 fn resolve_export_path(
@@ -445,6 +538,36 @@ mod tests {
         process,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn source_and_translation_with_identical_preferred_names_never_overwrite() {
+        let dir = temp_test_dir("same-preferred-name");
+        {
+            let mut files = super::ExportFiles::default();
+            let source_stage = files.stage_path(&dir);
+            let translated_stage = files.stage_path(&dir);
+            fs::write(&source_stage, "source subtitle").unwrap();
+            fs::write(&translated_stage, "translated subtitle").unwrap();
+            let source = files
+                .publish(&dir, "clip.srt", "task-id", &source_stage)
+                .unwrap();
+            let translated = files
+                .publish(&dir, "clip.srt", "task-id", &translated_stage)
+                .unwrap();
+            assert_ne!(source, translated);
+            assert_eq!(fs::read_to_string(&source).unwrap(), "source subtitle");
+            assert_eq!(
+                fs::read_to_string(&translated).unwrap(),
+                "translated subtitle"
+            );
+        }
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            0,
+            "rollback removes only this attempt's files"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn export_path_keeps_the_original_name_when_available() {

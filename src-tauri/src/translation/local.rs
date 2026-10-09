@@ -9,7 +9,7 @@ use std::{
 use serde::Deserialize;
 use serde_json::json;
 use tauri::AppHandle;
-use tokio::{process::Child, time::sleep};
+use tokio::{process::Child, task::JoinSet, time::sleep};
 
 use crate::{
     job_events::{publish_job_event, JobEventDraft},
@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::{
-    parser::parse_delimited_translation_content, TranslationConfig,
+    parser::parse_delimited_translation_content, runtime::cancellable, TranslationConfig,
     DEFAULT_LOCAL_TRANSLATION_SHARD_SIZE, MAX_LOCAL_TRANSLATION_SHARD_SIZE,
 };
 
@@ -31,6 +31,35 @@ const SHARD_TIMEOUT_SECS: u64 = 600;
 struct LocalLlamaServer {
     child: Child,
     base_url: String,
+    readers: JoinSet<()>,
+}
+
+impl LocalLlamaServer {
+    fn new(mut child: Child, base_url: String) -> Self {
+        let mut readers = JoinSet::new();
+        if let Some(mut stdout) = child.stdout.take() {
+            readers.spawn(async move {
+                let _ = tokio::io::copy(&mut stdout, &mut tokio::io::sink()).await;
+            });
+        }
+        if let Some(mut stderr) = child.stderr.take() {
+            readers.spawn(async move {
+                let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+            });
+        }
+        Self {
+            child,
+            base_url,
+            readers,
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        // kill() also waits/reaps. Abort and join readers as inherited pipe
+        // handles in a descendant must not hold cancellation open.
+        let _ = self.child.kill().await;
+        self.readers.shutdown().await;
+    }
 }
 
 impl Drop for LocalLlamaServer {
@@ -68,61 +97,65 @@ pub(super) async fn translate_shards_via_local(
     );
 
     let mut server = start_llama_server(&llama_server, &model_path, cancel.clone()).await?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(SHARD_TIMEOUT_SECS))
-        .build()
-        .map_err(|error| JobError::failed(format!("创建本地翻译客户端失败: {error}")))?;
+    let result = async {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(SHARD_TIMEOUT_SECS))
+            .build()
+            .map_err(|error| JobError::failed(format!("创建本地翻译客户端失败: {error}")))?;
 
-    let shards = remaining
-        .chunks(shard_size)
-        .map(|chunk| chunk.to_vec())
-        .collect::<Vec<_>>();
-    let total_shards = shards.len().max(1);
-    let total_cues = all_segments.len();
+        let shards = remaining
+            .chunks(shard_size)
+            .map(|chunk| chunk.to_vec())
+            .collect::<Vec<_>>();
+        let total_shards = shards.len().max(1);
+        let total_cues = all_segments.len();
 
-    for (index, shard) in shards.iter().enumerate() {
-        ensure_not_cancelled(&cancel)?;
-        let shard_index = index + 1;
-        publish_job_event(
-            app,
-            JobEventDraft::running(
-                job_id,
-                "translate-shard",
-                format!(
-                    "本地分片 {shard_index}/{total_shards} 翻译中（{} 条字幕）",
-                    shard.len()
+        for (index, shard) in shards.iter().enumerate() {
+            ensure_not_cancelled(&cancel)?;
+            let shard_index = index + 1;
+            publish_job_event(
+                app,
+                JobEventDraft::running(
+                    job_id,
+                    "translate-shard",
+                    format!(
+                        "本地分片 {shard_index}/{total_shards} 翻译中（{} 条字幕）",
+                        shard.len()
+                    ),
+                    super::cue_progress(progress.completed_count(), total_cues),
                 ),
-                super::cue_progress(progress.completed_count(), total_cues),
-            ),
-        );
-        let items = translate_shard_via_local(
-            &client,
-            &server.base_url,
-            config,
-            shard,
-            shard_index,
-            total_shards,
-            cancel.clone(),
-        )
-        .await
-        .map_err(|error| prefix_shard_error(error, shard_index, total_shards))?;
-        progress.append_and_persist(items)?;
-        publish_job_event(
-            app,
-            JobEventDraft::running(
-                job_id,
-                "translate-shard",
-                format!(
-                    "本地分片 {shard_index}/{total_shards} 已完成（累计 {}/{total_cues}）",
-                    progress.completed_count()
+            );
+            let items = translate_shard_via_local(
+                &client,
+                &server.base_url,
+                config,
+                shard,
+                shard_index,
+                total_shards,
+                cancel.clone(),
+            )
+            .await
+            .map_err(|error| prefix_shard_error(error, shard_index, total_shards))?;
+            progress.append_and_persist(items)?;
+            publish_job_event(
+                app,
+                JobEventDraft::running(
+                    job_id,
+                    "translate-shard",
+                    format!(
+                        "本地分片 {shard_index}/{total_shards} 已完成（累计 {}/{total_cues}）",
+                        progress.completed_count()
+                    ),
+                    super::cue_progress(progress.completed_count(), total_cues),
                 ),
-                super::cue_progress(progress.completed_count(), total_cues),
-            ),
-        );
+            );
+        }
+
+        Ok(progress.into_completed())
     }
-
-    let _ = server.child.start_kill();
-    Ok(progress.into_completed())
+    .await;
+    server.shutdown().await;
+    result
 }
 
 pub(crate) fn normalize_local_shard_size(size: usize) -> usize {
@@ -221,14 +254,27 @@ async fn start_llama_server(
         .arg("1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
-    let mut child = command
+    launch_llama_server(command, format!("http://127.0.0.1:{port}"), cancel).await
+}
+
+async fn launch_llama_server(
+    mut command: tokio::process::Command,
+    base_url: String,
+    cancel: Arc<AtomicBool>,
+) -> JobResult<LocalLlamaServer> {
+    ensure_not_cancelled(&cancel)?;
+    let child = command
         .spawn()
         .map_err(|error| JobError::failed(format!("启动 llama-server 失败: {error}")))?;
-    let base_url = format!("http://127.0.0.1:{port}");
-    wait_for_server(&base_url, &mut child, cancel).await?;
-    Ok(LocalLlamaServer { child, base_url })
+    let mut server = LocalLlamaServer::new(child, base_url);
+    if let Err(error) = wait_for_server(&server.base_url, &mut server.child, cancel).await {
+        server.shutdown().await;
+        return Err(error);
+    }
+    Ok(server)
 }
 
 async fn wait_for_server(
@@ -244,15 +290,17 @@ async fn wait_for_server(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(SERVER_START_TIMEOUT_SECS);
     loop {
         ensure_not_cancelled(&cancel)?;
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| JobError::failed(format!("读取 llama-server 状态失败: {error}")))?
+        {
             return Err(JobError::failed(format!(
                 "llama-server 在模型加载完成前退出: {status}"
             )));
         }
-        if let Ok(response) = client.get(&health).send().await {
-            if response.status().is_success() {
-                return Ok(());
-            }
+        let response = cancellable(&cancel, async { Ok(client.get(&health).send().await) }).await?;
+        if response.is_ok_and(|response| response.status().is_success()) {
+            return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
             let _ = child.start_kill();
@@ -260,7 +308,11 @@ async fn wait_for_server(
                 "llama-server 启动超时。请确认模型文件完整，并检查本机内存是否足够",
             ));
         }
-        sleep(Duration::from_millis(400)).await;
+        cancellable(&cancel, async {
+            sleep(Duration::from_millis(400)).await;
+            Ok(())
+        })
+        .await?;
     }
 }
 
@@ -273,8 +325,10 @@ async fn translate_shard_via_local(
     total_shards: usize,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<Vec<TranslatedSegment>> {
-    match translate_shard_once(client, base_url, config, shard).await {
+    let content = translate_local_content(client, base_url, config, shard, &cancel).await?;
+    match parse_delimited_translation_content(&content, shard) {
         Ok(items) => Ok(items),
+        Err(JobError::Cancelled) => Err(JobError::Cancelled),
         Err(error) => {
             if shard.len() <= 1 {
                 return Err(error);
@@ -282,15 +336,21 @@ async fn translate_shard_via_local(
             let mut items = Vec::with_capacity(shard.len());
             for (offset, segment) in shard.iter().enumerate() {
                 ensure_not_cancelled(&cancel)?;
-                let one = translate_shard_once(client, base_url, config, std::slice::from_ref(segment))
-                    .await
-                    .map_err(|inner| match inner {
-                        JobError::Cancelled => JobError::Cancelled,
-                        JobError::Failed(message) => JobError::failed(format!(
-                            "分片 {shard_index}/{total_shards} 第 {} 条回退翻译失败: {message}",
-                            offset + 1
-                        )),
-                    })?;
+                let one = translate_shard_once(
+                    client,
+                    base_url,
+                    config,
+                    std::slice::from_ref(segment),
+                    &cancel,
+                )
+                .await
+                .map_err(|inner| match inner {
+                    JobError::Cancelled => JobError::Cancelled,
+                    JobError::Failed(message) => JobError::failed(format!(
+                        "分片 {shard_index}/{total_shards} 第 {} 条回退翻译失败: {message}",
+                        offset + 1
+                    )),
+                })?;
                 items.extend(one);
             }
             Ok(items)
@@ -303,7 +363,19 @@ async fn translate_shard_once(
     base_url: &str,
     config: &TranslationConfig,
     shard: &[SubtitleSegment],
+    cancel: &Arc<AtomicBool>,
 ) -> JobResult<Vec<TranslatedSegment>> {
+    let content = translate_local_content(client, base_url, config, shard, cancel).await?;
+    parse_delimited_translation_content(&content, shard)
+}
+
+async fn translate_local_content(
+    client: &reqwest::Client,
+    base_url: &str,
+    config: &TranslationConfig,
+    shard: &[SubtitleSegment],
+    cancel: &Arc<AtomicBool>,
+) -> JobResult<String> {
     let prompt = local_translation_prompt(&config.target_language, shard);
     let payload = json!({
         "model": "local",
@@ -314,17 +386,14 @@ async fn translate_shard_once(
         "max_tokens": 4096,
         "messages": [{ "role": "user", "content": prompt }]
     });
-    let response = client
-        .post(format!("{base_url}/v1/chat/completions"))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|error| JobError::failed(format!("本地翻译请求失败: {error}")))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| JobError::failed(format!("本地翻译响应读取失败: {error}")))?;
+    let (status, body) = super::client::send_chat_request(
+        client,
+        &format!("{base_url}/v1/chat/completions"),
+        None,
+        &payload,
+        cancel,
+    )
+    .await?;
     if !status.is_success() {
         return Err(JobError::failed(format!(
             "本地翻译失败: HTTP {status}: {}",
@@ -339,7 +408,7 @@ async fn translate_shard_once(
         .map(|choice| choice.message.content.trim())
         .filter(|content| !content.is_empty())
         .ok_or_else(|| JobError::failed("本地翻译没有返回文本"))?;
-    parse_delimited_translation_content(content, shard)
+    Ok(content.to_string())
 }
 
 fn unused_localhost_port() -> JobResult<u16> {
@@ -394,7 +463,6 @@ fn prefix_shard_error(error: JobError, shard_index: usize, total_shards: usize) 
     }
 }
 
-
 fn trim_error_body(body: &str) -> String {
     const MAX_ERROR_BODY: usize = 1_500;
     let trimmed = body.trim();
@@ -425,7 +493,9 @@ struct ChatMessage {
 mod tests {
     use super::{hy_mt2_target_language, local_translation_prompt, normalize_local_shard_size};
     use crate::subtitles::SubtitleSegment;
-    use crate::translation::{DEFAULT_LOCAL_TRANSLATION_SHARD_SIZE, MAX_LOCAL_TRANSLATION_SHARD_SIZE};
+    use crate::translation::{
+        DEFAULT_LOCAL_TRANSLATION_SHARD_SIZE, MAX_LOCAL_TRANSLATION_SHARD_SIZE,
+    };
 
     fn segment(id: usize, text: &str) -> SubtitleSegment {
         SubtitleSegment {
@@ -463,10 +533,7 @@ mod tests {
 
     #[test]
     fn builds_delimited_prompt_for_multi_cue_shards() {
-        let prompt = local_translation_prompt(
-            "English",
-            &[segment(1, "你好"), segment(2, "世界")],
-        );
+        let prompt = local_translation_prompt("English", &[segment(1, "你好"), segment(2, "世界")]);
         assert!(prompt.contains("英语"));
         assert!(prompt.contains("<<<CUE>>>"));
         assert!(prompt.contains("你好<<<CUE>>>世界"));
@@ -478,5 +545,149 @@ mod tests {
         let prompt = local_translation_prompt("简体中文", &[segment(1, "Hello")]);
         assert!(prompt.contains("Hello"));
         assert!(!prompt.contains("<<<CUE>>>"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn cancelled_startup_reaps_server_and_joins_pipe_readers() {
+        tauri::async_runtime::block_on(async {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let marker =
+                std::env::temp_dir().join(format!("luma-local-cancel-{}", uuid::Uuid::new_v4()));
+            let mut command = tokio::process::Command::new("sh");
+            command
+                .args(["-c", "echo $$ > \"$1\"; exec sleep 30", "sh"])
+                .arg(&marker)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            let trigger = cancel.clone();
+            let task = tokio::spawn(async move {
+                sleep(Duration::from_millis(100)).await;
+                trigger.store(true, Ordering::SeqCst);
+            });
+            let start = tokio::time::Instant::now();
+            let result =
+                launch_llama_server(command, "http://127.0.0.1:1".to_string(), cancel).await;
+            assert!(matches!(result, Err(JobError::Cancelled)));
+            assert!(start.elapsed() < Duration::from_secs(2));
+            task.await.unwrap();
+            let pid = std::fs::read_to_string(&marker).unwrap();
+            let alive = std::process::Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            let _ = std::fs::remove_file(marker);
+            assert!(
+                !alive,
+                "llama process must be reaped even when startup is cancelled"
+            );
+        });
+    }
+
+    #[test]
+    fn drains_server_output_larger_than_pipe_capacity() {
+        tauri::async_runtime::block_on(async {
+            let child = tokio::process::Command::new("sh")
+                .args([
+                    "-c",
+                    "head -c 262144 /dev/zero; head -c 262144 /dev/zero >&2",
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let mut server = LocalLlamaServer::new(child, String::new());
+            let status = tokio::time::timeout(Duration::from_secs(3), server.child.wait())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(status.success());
+            server.shutdown().await;
+            assert!(server.readers.is_empty());
+        });
+    }
+
+    #[test]
+    fn dropping_server_stops_process_during_unwinding() {
+        tauri::async_runtime::block_on(async {
+            let child = tokio::process::Command::new("sleep")
+                .arg("30")
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let pid = child.id().unwrap().to_string();
+            drop(LocalLlamaServer::new(child, String::new()));
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let alive = std::process::Command::new("kill")
+                    .args(["-0", &pid])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success();
+                if !alive {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "dropped server still running"
+                );
+                sleep(Duration::from_millis(10)).await;
+            }
+        });
+    }
+
+    #[test]
+    fn local_request_cancels_without_per_cue_fallback() {
+        use crate::translation::client::tests::{config, MockServer};
+        tauri::async_runtime::block_on(async {
+            let server = MockServer::new(
+                vec![(200, "", "never finishes".to_string())],
+                Duration::from_secs(10),
+            );
+            let cancel = Arc::new(AtomicBool::new(false));
+            let trigger = cancel.clone();
+            let task = tokio::spawn(async move {
+                sleep(Duration::from_millis(80)).await;
+                trigger.store(true, Ordering::SeqCst);
+            });
+            let segments = [
+                SubtitleSegment {
+                    id: 8,
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "one".to_string(),
+                },
+                SubtitleSegment {
+                    id: 10,
+                    start_ms: 1000,
+                    end_ms: 2000,
+                    text: "two".to_string(),
+                },
+            ];
+            let result = translate_shard_via_local(
+                &reqwest::Client::new(),
+                &server.url,
+                &config(&server.url),
+                &segments,
+                1,
+                1,
+                cancel,
+            )
+            .await;
+            assert!(matches!(result, Err(JobError::Cancelled)));
+            task.await.unwrap();
+        });
     }
 }

@@ -17,6 +17,6 @@ describe("useTaskDetailState resume behavior", () => {
     expect(source).toContain("Promise.all([getTask(taskId), getTaskLogs(taskId).catch(() => [])])");
     expect(source).toContain("shouldReplaceTaskSettingsDraft");
     expect(taskUpdatedHandler?.[1]).not.toContain("refreshLogs");
-    expect(taskUpdatedHandler?.[1]).toContain("subtitlePathsChanged");
+    expect(taskUpdatedHandler?.[1]).toContain("subtitleResultChanged");
   });
 });

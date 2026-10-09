@@ -17,6 +17,7 @@ mod client;
 pub(crate) mod local;
 mod parser;
 mod prompt;
+mod runtime;
 
 #[cfg(test)]
 pub(crate) use client::chat_endpoint;
@@ -146,10 +147,8 @@ pub(crate) async fn translate_with_single_request(
                 cue_progress(kept, segments.len()),
             ),
         );
-        return local::translate_shards_via_local(
-            app, job_id, config, segments, cancel, progress,
-        )
-        .await;
+        return local::translate_shards_via_local(app, job_id, config, segments, cancel, progress)
+            .await;
     }
     if is_cli_provider(&config.provider) {
         cli::validate_cli_config(config)?;
@@ -228,68 +227,42 @@ async fn translate_shards_via_cli(
     let total_shards = shards.len().max(1);
     let total_cues = all_segments.len();
 
-    for (group_index, group) in shards.chunks(MAX_CONCURRENT_CLI_SHARDS).enumerate() {
-        ensure_not_cancelled(&cancel)?;
-        let mut handles = Vec::with_capacity(group.len());
-        for (offset, shard) in group.iter().cloned().enumerate() {
-            let shard_index = group_index * MAX_CONCURRENT_CLI_SHARDS + offset + 1;
-            publish_job_event(
+    runtime::run_bounded(
+        shards.into_iter().enumerate(),
+        MAX_CONCURRENT_CLI_SHARDS,
+        cancel,
+        |(index, shard), stop| {
+            let shard_index = index + 1;
+            publish_shard_submitted(
                 app,
-                JobEventDraft::running(
-                    job_id,
-                    "translate-shard",
-                    format!(
-                        "分片 {shard_index}/{total_shards} 已提交 CLI（{} 条字幕）",
-                        shard.len()
-                    ),
-                    cue_progress(progress.completed_count(), total_cues),
-                ),
+                job_id,
+                shard_index,
+                total_shards,
+                shard.len(),
+                cue_progress(progress.completed_count(), total_cues),
+                " CLI",
             );
-
-            let config = (*config).clone();
-            let cancel = cancel.clone();
-            handles.push(tauri::async_runtime::spawn(async move {
-                cli::translate_shard_via_cli(&config, &shard, shard_index, total_shards, cancel)
+            async move {
+                cli::translate_shard_via_cli(config, &shard, shard_index, total_shards, stop)
                     .await
                     .map(|items| (shard_index, items))
                     .map_err(|error| prefix_shard_error(error, shard_index, total_shards))
-            }));
-        }
-
-        let mut group_error = None;
-        for handle in handles {
-            ensure_not_cancelled(&cancel)?;
-            match handle
-                .await
-                .map_err(|error| JobError::failed(format!("翻译分片任务失败: {error}")))?
-            {
-                Ok((shard_index, items)) => {
-                    progress.append_and_persist(items)?;
-                    publish_job_event(
-                        app,
-                        JobEventDraft::running(
-                            job_id,
-                            "translate-shard",
-                            format!(
-                                "分片 {shard_index}/{total_shards} 已完成（累计 {}/{}）",
-                                progress.completed_count(),
-                                total_cues
-                            ),
-                            cue_progress(progress.completed_count(), total_cues),
-                        ),
-                    );
-                }
-                Err(error) => {
-                    if group_error.is_none() {
-                        group_error = Some(error);
-                    }
-                }
             }
-        }
-        if let Some(error) = group_error {
-            return Err(error);
-        }
-    }
+        },
+        |(shard_index, items)| {
+            progress.append_and_persist(items)?;
+            publish_shard_completed(
+                app,
+                job_id,
+                shard_index,
+                total_shards,
+                progress.completed_count(),
+                total_cues,
+            );
+            Ok(())
+        },
+    )
+    .await?;
 
     Ok(progress.into_completed())
 }
@@ -316,78 +289,91 @@ async fn translate_shards(
     let total_shards = shards.len().max(1);
     let total_cues = all_segments.len();
 
-    for (group_index, group) in shards.chunks(MAX_CONCURRENT_SHARDS).enumerate() {
-        ensure_not_cancelled(&cancel)?;
-        let mut handles = Vec::with_capacity(group.len());
-        for (offset, shard) in group.iter().cloned().enumerate() {
-            let shard_index = group_index * MAX_CONCURRENT_SHARDS + offset + 1;
-            publish_job_event(
+    runtime::run_bounded(
+        shards.into_iter().enumerate(),
+        MAX_CONCURRENT_SHARDS,
+        cancel,
+        |(index, shard), stop| {
+            let shard_index = index + 1;
+            publish_shard_submitted(
                 app,
-                JobEventDraft::running(
-                    job_id,
-                    "translate-shard",
-                    format!(
-                        "分片 {shard_index}/{total_shards} 已提交（{} 条字幕）",
-                        shard.len()
-                    ),
-                    cue_progress(progress.completed_count(), total_cues),
-                ),
+                job_id,
+                shard_index,
+                total_shards,
+                shard.len(),
+                cue_progress(progress.completed_count(), total_cues),
+                "",
             );
-
-            let client = client.clone();
-            let config = (*config).clone();
-            let api_key = api_key.to_string();
-            handles.push(tauri::async_runtime::spawn(async move {
+            async move {
                 translate_shard_once(
-                    &client,
-                    &config,
-                    &api_key,
+                    client,
+                    config,
+                    api_key,
                     &shard,
                     shard_index,
                     total_shards,
+                    &stop,
                 )
                 .await
                 .map(|items| (shard_index, items))
                 .map_err(|error| prefix_shard_error(error, shard_index, total_shards))
-            }));
-        }
-
-        let mut group_error = None;
-        for handle in handles {
-            ensure_not_cancelled(&cancel)?;
-            match handle
-                .await
-                .map_err(|error| JobError::failed(format!("翻译分片任务失败: {error}")))?
-            {
-                Ok((shard_index, items)) => {
-                    progress.append_and_persist(items)?;
-                    publish_job_event(
-                        app,
-                        JobEventDraft::running(
-                            job_id,
-                            "translate-shard",
-                            format!(
-                                "分片 {shard_index}/{total_shards} 已完成（累计 {}/{}）",
-                                progress.completed_count(),
-                                total_cues
-                            ),
-                            cue_progress(progress.completed_count(), total_cues),
-                        ),
-                    );
-                }
-                Err(error) => {
-                    if group_error.is_none() {
-                        group_error = Some(error);
-                    }
-                }
             }
-        }
-        if let Some(error) = group_error {
-            return Err(error);
-        }
-    }
+        },
+        |(shard_index, items)| {
+            progress.append_and_persist(items)?;
+            publish_shard_completed(
+                app,
+                job_id,
+                shard_index,
+                total_shards,
+                progress.completed_count(),
+                total_cues,
+            );
+            Ok(())
+        },
+    )
+    .await?;
 
     Ok(progress.into_completed())
+}
+
+fn publish_shard_submitted(
+    app: &AppHandle,
+    job_id: &str,
+    index: usize,
+    total: usize,
+    cues: usize,
+    progress: f32,
+    provider: &str,
+) {
+    publish_job_event(
+        app,
+        JobEventDraft::running(
+            job_id,
+            "translate-shard",
+            format!("分片 {index}/{total} 已提交{provider}（{cues} 条字幕）"),
+            progress,
+        ),
+    );
+}
+
+fn publish_shard_completed(
+    app: &AppHandle,
+    job_id: &str,
+    index: usize,
+    total: usize,
+    completed: usize,
+    total_cues: usize,
+) {
+    publish_job_event(
+        app,
+        JobEventDraft::running(
+            job_id,
+            "translate-shard",
+            format!("分片 {index}/{total} 已完成（累计 {completed}/{total_cues}）"),
+            cue_progress(completed, total_cues),
+        ),
+    );
 }
 
 pub(crate) struct TranslationProgress {
@@ -405,6 +391,7 @@ impl TranslationProgress {
         segments: &[SubtitleSegment],
         resume: Option<TranslationResume>,
     ) -> JobResult<Self> {
+        parser::validate_source_ids(segments)?;
         let (checkpoint_path, source_fingerprint, completed, on_progress) =
             if let Some(resume) = resume {
                 (
@@ -432,14 +419,15 @@ impl TranslationProgress {
     }
 
     pub(crate) fn completed_count(&self) -> usize {
-        self.completed
-            .lock()
-            .map(|items| items.len())
-            .unwrap_or(0)
+        self.completed.lock().map(|items| items.len()).unwrap_or(0)
     }
 
     pub(crate) fn remaining_owned(&self) -> Vec<SubtitleSegment> {
-        let completed = self.completed.lock().map(|items| items.clone()).unwrap_or_default();
+        let completed = self
+            .completed
+            .lock()
+            .map(|items| items.clone())
+            .unwrap_or_default();
         checkpoint::remaining_segments(&self.all_segments, &completed)
             .into_iter()
             .cloned()
@@ -471,9 +459,7 @@ impl TranslationProgress {
     }
 
     pub(crate) fn into_completed(self) -> Vec<TranslatedSegment> {
-        self.completed
-            .into_inner()
-            .unwrap_or_default()
+        self.completed.into_inner().unwrap_or_default()
     }
 }
 

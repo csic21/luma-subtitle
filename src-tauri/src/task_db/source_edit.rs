@@ -28,11 +28,13 @@ pub(crate) fn save_source_subtitles(
     original_source_srt: &str,
     edits: Vec<SourceSubtitleEdit>,
 ) -> Result<TaskRecord, String> {
-    super::require_task(app, task_id)?;
+    let previous = super::require_task(app, task_id)?;
     let mut conn = connection(app)?;
     let work_dir = task_work_dir(app, task_id)?;
     let task = save_in_connection(&mut conn, &work_dir, task_id, original_source_srt, edits)?;
-    let _ = clear_checkpoint(&checkpoint_path(&work_dir));
+    if task.result_revision != previous.result_revision {
+        let _ = clear_checkpoint(&checkpoint_path(&work_dir));
+    }
     emit_task(app, task_id);
     Ok(task)
 }
@@ -89,6 +91,7 @@ fn save_in_connection(
                 translated_srt_path = NULL,
                 translated_file_name = NULL,
                 translation_completed_count = NULL,
+                result_revision = result_revision + 1,
                 exported_source_srt = NULL,
                 exported_translated_srt = NULL,
                 exported_output_dir = NULL,
@@ -130,7 +133,7 @@ fn save_in_connection(
     result
 }
 
-fn apply_text_edits(
+pub(super) fn apply_text_edits(
     source_srt: &str,
     edits: Vec<SourceSubtitleEdit>,
 ) -> Result<Vec<SubtitleSegment>, String> {
@@ -143,7 +146,7 @@ fn apply_text_edits(
         .iter()
         .any(|segment| !original_ids.insert(segment.id))
     {
-        return Err("原文字幕包含重复编号，无法安全编辑".to_string());
+        return Err("字幕包含重复编号，无法安全编辑".to_string());
     }
     let mut by_id = HashMap::new();
     for edit in edits {
@@ -152,7 +155,7 @@ fn apply_text_edits(
         }
         let text = normalize_subtitle_text(&edit.text);
         if text.is_empty() {
-            return Err(format!("第 {} 条字幕原文不能为空", edit.id));
+            return Err(format!("第 {} 条字幕不能为空", edit.id));
         }
         by_id.insert(edit.id, text);
     }
@@ -324,6 +327,7 @@ mod tests {
             "previous exported translation"
         );
 
+        assert_eq!(saved.result_revision, 1);
         assert_eq!(saved.status, "completed");
         assert_eq!(saved.stage, "source-ready");
         assert_eq!(saved.message, SAVED_MESSAGE);

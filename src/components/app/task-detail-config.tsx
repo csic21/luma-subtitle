@@ -28,6 +28,7 @@ export function TaskConfigCard({
   task,
   taskConfig,
   taskSettingsDirty,
+  commandPending = false,
   t,
   onApplyCurrentSettings,
   onPickTranslationModel,
@@ -38,6 +39,7 @@ export function TaskConfigCard({
   task: TaskRecord;
   taskConfig: TaskSettingsSnapshot;
   taskSettingsDirty: boolean;
+  commandPending?: boolean;
   t: Translate;
   onApplyCurrentSettings: () => void | Promise<void>;
   onPickTranslationModel: () => void | Promise<void>;
@@ -96,7 +98,7 @@ export function TaskConfigCard({
             variant="secondary"
             size="sm"
             onClick={onApplyCurrentSettings}
-            disabled={taskBusy(task)}
+            disabled={(taskBusy(task) || commandPending)}
             title={t("settings.applyGlobalTitle")}
           >
             <RefreshCw data-icon="inline-start" />
@@ -118,12 +120,12 @@ export function TaskConfigCard({
                   current ? { ...current, whisper_model_path: event.target.value } : current,
                 )
               }
-              disabled={taskBusy(task)}
+              disabled={(taskBusy(task) || commandPending)}
               placeholder={t("settings.notSet")}
               title={taskConfig.whisper_model_path || t("settings.selectWhisper")}
               aria-invalid={missingWhisperModel}
             />
-            <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel} disabled={taskBusy(task)}>
+            <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel} disabled={(taskBusy(task) || commandPending)}>
               <FolderOpen />
             </IconAction>
           </div>
@@ -136,7 +138,7 @@ export function TaskConfigCard({
               onValueChange={(value) =>
                 setSettingsDraft((current) => (current ? { ...current, whisper_language: value } : current))
               }
-              disabled={taskBusy(task)}
+              disabled={(taskBusy(task) || commandPending)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -158,7 +160,7 @@ export function TaskConfigCard({
               onValueChange={(value) =>
                 setSettingsDraft((current) => (current ? { ...current, target_language: value } : current))
               }
-              disabled={taskBusy(task)}
+              disabled={(taskBusy(task) || commandPending)}
             >
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -196,7 +198,7 @@ export function TaskConfigCard({
                   : current,
               )
             }
-            disabled={taskBusy(task)}
+            disabled={(taskBusy(task) || commandPending)}
           >
             <SelectTrigger className="w-full">
               <SelectValue />
@@ -223,14 +225,14 @@ export function TaskConfigCard({
                 readOnly
                 placeholder={t("settings.notSet")}
                 onClick={onPickTranslationModel}
-                disabled={taskBusy(task)}
+                disabled={(taskBusy(task) || commandPending)}
                 title={taskConfig.translation_local_model_path || t("settings.selectTranslationModel")}
                 aria-invalid={missingLocalModel}
               />
               <IconAction
                 label={t("settings.selectTranslationModel")}
                 onClick={onPickTranslationModel}
-                disabled={taskBusy(task)}
+                disabled={(taskBusy(task) || commandPending)}
               >
                 <FolderOpen />
               </IconAction>
@@ -250,7 +252,7 @@ export function TaskConfigCard({
                 onChange={(event) =>
                   setSettingsDraft((current) => (current ? { ...current, base_url: event.target.value } : current))
                 }
-                disabled={taskBusy(task)}
+                disabled={(taskBusy(task) || commandPending)}
                 aria-invalid={missingBaseUrl}
               />
               <label className="checkbox-row">
@@ -261,7 +263,7 @@ export function TaskConfigCard({
                       current ? { ...current, base_url_is_complete: checked === true } : current,
                     )
                   }
-                  disabled={taskBusy(task)}
+                  disabled={(taskBusy(task) || commandPending)}
                 />
                 <span>{t("settings.baseUrlComplete")}</span>
               </label>
@@ -281,7 +283,7 @@ export function TaskConfigCard({
                 onChange={(event) =>
                   setSettingsDraft((current) => (current ? { ...current, model: event.target.value } : current))
                 }
-                disabled={taskBusy(task)}
+                disabled={(taskBusy(task) || commandPending)}
                 aria-invalid={missingTranslationModel}
               />
             </FieldBlock>
@@ -299,7 +301,7 @@ export function TaskConfigCard({
                       current ? { ...current, translation_cli_tool: value } : current,
                     )
                   }
-                  disabled={taskBusy(task)}
+                  disabled={(taskBusy(task) || commandPending)}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -325,7 +327,7 @@ export function TaskConfigCard({
                       current ? { ...current, translation_cli_command: event.target.value } : current,
                     )
                   }
-                  disabled={taskBusy(task)}
+                  disabled={(taskBusy(task) || commandPending)}
                   aria-invalid={missingCliCommand}
                 />
               </FieldBlock>
@@ -345,13 +347,13 @@ export function TaskConfigCard({
                         current ? { ...current, translation_cli_model: event.target.value } : current,
                       )
                     }
-                    disabled={taskBusy(task)}
+                    disabled={(taskBusy(task) || commandPending)}
                     aria-invalid={missingCliModel}
                   />
                   <IconAction
                     label={t("settings.cliLoadModels")}
                     onClick={handleLoadCliModels}
-                    disabled={taskBusy(task) || cliModelsLoading}
+                    disabled={(taskBusy(task) || commandPending) || cliModelsLoading}
                   >
                     {cliModelsLoading ? <Loader2 className="spin" /> : <RefreshCw />}
                   </IconAction>
@@ -364,7 +366,7 @@ export function TaskConfigCard({
                         current ? { ...current, translation_cli_model: value } : current,
                       )
                     }
-                    disabled={taskBusy(task)}
+                    disabled={(taskBusy(task) || commandPending)}
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue placeholder={t("settings.cliModelPlaceholder")} />
@@ -394,7 +396,7 @@ export function TaskConfigCard({
                         current ? { ...current, translation_cli_model: event.target.value } : current,
                       )
                     }
-                    disabled={taskBusy(task)}
+                    disabled={(taskBusy(task) || commandPending)}
                   />
                 </FieldBlock>
                 <FieldBlock label={t("settings.cliArgs")} description={t("settings.cliArgsHint")}>
@@ -406,7 +408,7 @@ export function TaskConfigCard({
                         current ? { ...current, translation_cli_args: event.target.value } : current,
                       )
                     }
-                    disabled={taskBusy(task)}
+                    disabled={(taskBusy(task) || commandPending)}
                   />
                 </FieldBlock>
               </>
@@ -427,7 +429,7 @@ export function TaskConfigCard({
                   current ? { ...current, temperature: Number.parseFloat(event.target.value) || 0 } : current,
                 )
               }
-              disabled={taskBusy(task)}
+              disabled={(taskBusy(task) || commandPending)}
             />
           </FieldBlock>
           <FieldBlock label={t("settings.shardSize")}>
@@ -448,20 +450,21 @@ export function TaskConfigCard({
                     : current,
                 )
               }
-              disabled={taskBusy(task)}
+              disabled={(taskBusy(task) || commandPending)}
             />
           </FieldBlock>
         </div>
 
+        {taskSettingsDirty && <p role="status" className="text-sm text-muted-foreground">{t("settings.unsavedRunHint")}</p>}
         <div className="action-row end">
           <Button
             variant="secondary"
             onClick={() => setSettingsDraft(normalizeTaskSettings(task.settings))}
-            disabled={taskBusy(task) || !taskSettingsDirty}
+            disabled={(taskBusy(task) || commandPending) || !taskSettingsDirty}
           >
             {t("settings.undo")}
           </Button>
-          <Button onClick={onSaveTaskSettings} disabled={taskBusy(task) || !taskSettingsDirty}>
+          <Button onClick={onSaveTaskSettings} disabled={(taskBusy(task) || commandPending) || !taskSettingsDirty}>
             <Save data-icon="inline-start" />
             {t("settings.saveTask")}
           </Button>

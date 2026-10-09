@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use tauri::{AppHandle, Manager, State};
@@ -87,13 +90,13 @@ pub(super) fn dispatch_queue(app: AppHandle) {
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
             let completed =
-                execute_task_operation(app_handle.clone(), next.0.clone(), next.1).await;
+                execute_task_operation(app_handle.clone(), next.0.clone(), next.1.clone()).await;
             {
                 let state = app_handle.state::<AppState>();
                 let _mutation = state.task_mutations.lock();
                 state.tasks.lock().remove(&next.0.task_id);
                 state.running_operations.lock().remove(&next.0.task_id);
-                if completed {
+                if completed && !next.1.load(Ordering::SeqCst) {
                     enqueue_next_link(&app_handle, &next.0);
                 }
             }
