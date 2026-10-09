@@ -143,7 +143,7 @@ def main():
     sys.addaudithook(audit)
     numpy = local_module('numpy')
     assert numpy.asarray([1, 2, 3]).sum() == 6
-    backend = config['backend']; device = 'cpu'; versions = {}; metal = None; metal_tested = False
+    backend = config['backend']; device = 'cpu'; versions = {}; metal = None; metal_tested = False; numba_threading = None
     if backend == 'faster-whisper':
         assert not list(ROOT.rglob('cudnn*.dll')), 'CPU pack must omit unused cuDNN redistributables'
         fw = local_module('faster_whisper'); ct = local_module('ctranslate2')
@@ -167,7 +167,9 @@ def main():
         # This is evidence only, never a path or dependency workaround.
         print(json.dumps(nagisa_data_diagnostic(), sort_keys=True), file=sys.stderr, flush=True)
         if sys.platform == 'win32':
+            luma_configure_numba_workqueue()
             luma_prepare_nagisa()
+            numba_threading = luma_probe_numba_workqueue()
         torch = local_module('torch')
         assert torch.version.cuda is None, 'CUDA libraries are outside this CPU pack'
         qwen = local_module('qwen_asr')
@@ -176,6 +178,9 @@ def main():
         assert callable(qwen.Qwen3ASRModel.from_pretrained)
         assert 'forced_aligner' in inspect.signature(qwen.Qwen3ASRModel.from_pretrained).parameters
         assert torch.ones((2, 2), device='cpu').sum().item() == 4
+        if sys.platform == 'win32':
+            assert luma_check_numba_workqueue(require_initialized=True) == 'workqueue'
+            numba_threading['checked_after_qwen_imports'] = True
         packages = ['qwen-asr', 'torch', 'transformers', 'nagisa', 'DyNet38', 'numpy']
     else:
         raise AssertionError('Unknown engine')
@@ -189,6 +194,7 @@ def main():
                       'private_native_libraries_checked': libraries, 'versions': versions,
                       'tested_device': device, 'inference_tested': False,
                       'metal_available': metal, 'metal_tested': metal_tested,
+                      'numba_threading': numba_threading,
                       'scope': 'Offline import/API and tiny tensor operations; no model weights loaded.'}, ensure_ascii=False))
 
 

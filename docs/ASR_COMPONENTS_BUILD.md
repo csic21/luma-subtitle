@@ -350,6 +350,48 @@ must remain private. Unknown missing libraries fail rather than widening the
 two-DLL policy. A CI-only CPU test copy from the licensed hosted Visual Studio
 installation is technical evidence, never authority to publish a CRT sidecar.
 
+### Managed Windows Qwen: configured Numba threading
+
+Numba 0.68.0 contains an optional `tbbpool.cp312-win_amd64.pyd` plugin whose
+`tbb12.dll` dependency is not installed. Numba documents its built-in
+[`workqueue` backend](https://numba.readthedocs.io/en/stable/user/threading-layer.html)
+and tolerates unavailable optional threading libraries. The managed Windows
+Qwen child explicitly selects workqueue before importing Numba/Qwen. Its
+private setup self-test uses the same embedded initializer. Inherited Numba
+developer settings are replaced inside that child with a fixed JIT-enabled,
+CPU-only, two-thread policy; manual runtimes are unchanged. An unexpected
+working-directory `.numba_config.yaml` or conflicting initialized state fails
+closed. The managed child uses its verified owned runtime as its working
+directory, never modifying a user's launcher directory or configuration file.
+
+The optional plugin is retained unchanged. Native inventory compares its
+unique member bytes against the complete SHA-256-pinned official Windows Numba
+wheel already in the verified input cache, then records the member size/hash.
+Only that exact member's normal `tbb12.dll` edge can be labeled inactive. Every
+other missing required import remains a failure. Evidence distinguishes
+`required_closure_passed` from `full_tree_closure_passed:false`; it does not
+claim unconditional closure for an installed but inactive optional plugin.
+
+A real parallel JIT reduction checks numerical results, selected workqueue,
+the private module origin, and absence of loaded TBB before/after compilation
+and after Qwen imports. The configured-policy gate passes only with those
+results. The actual managed worker runs the same proof at its first runtime
+initialization, caches only successful proof, and rechecks initialized workqueue
+after imports and each transcription. Native CI calls the real embedded
+`worker.runtime()` twice in an isolated, offline child to verify initial JIT,
+proof reuse and every loaded native origin without loading model weights;
+the owned child has a 120-second/16-KiB output bound.
+Numba workqueue is not reentrant: the application serializes worker
+requests and makes no nested/concurrent Numba calls; heartbeat threads only
+emit progress. These checks do not establish Qwen model inference. Native
+success for the exact final source remains required.
+
+Adding current official TBB wheels is not a simpler unconditional-closure fix:
+the inspected `tbb==2023.1.0` plus `tcmlib==1.5.0` add 795,220 download bytes,
+1,974,592 unpacked bytes and Intel Simplified notices, while the latter also
+contains an optional debug DLL requiring debug CRTs. Neither dependency is
+added to the shipping recipe by this policy.
+
 The direct-CRT proof compiles the real application's `main.rs` with
 `cargo rustc --locked --bin luma-subtitle -- -C debug-assertions=no`, checks its
 Windows GUI subsystem, and invokes only the fixed early signature-helper mode.

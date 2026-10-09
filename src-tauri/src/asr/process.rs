@@ -39,6 +39,27 @@ fn prepared_worker_source(source: &str, managed_windows_qwen: bool) -> Result<St
         &format!("{NAGISA_COMPAT_SOURCE}\nLUMA_MANAGED_QWEN_RUNTIME = True\n"), 1))
 }
 
+// Called only after the active managed-runtime receipt check. This sets the
+// child's cwd, never the application's cwd, so Numba cannot adopt a launcher's
+// unrelated .numba_config.yaml. External runtimes keep their existing behavior.
+fn managed_worker_directory(python: &str, managed_windows_qwen: bool) -> JobResult<Option<PathBuf>> {
+    if !managed_windows_qwen {
+        return Ok(None);
+    }
+    let path = Path::new(python);
+    if !path.is_absolute() {
+        return Err(JobError::failed("The verified managed interpreter must have an absolute path."));
+    }
+    let executable = std::fs::canonicalize(path)
+        .map_err(|e| JobError::failed(format!("Cannot resolve the managed runtime directory: {e}")))?;
+    if !executable.is_file() {
+        return Err(JobError::failed("The verified managed interpreter is not a regular file."));
+    }
+    let directory = executable.parent()
+        .ok_or_else(|| JobError::failed("The managed interpreter has no runtime directory."))?;
+    Ok(Some(directory.to_path_buf()))
+}
+
 #[derive(Default)]
 pub(crate) struct AsrRuntime {
     worker: AsyncMutex<Option<Worker>>,
@@ -209,6 +230,7 @@ impl Worker {
             && crate::asr_components::verified_managed_windows_qwen_runtime(&config.python_path)
                 .map_err(JobError::failed)?;
         let source = prepared_worker_source(source, managed_windows_qwen).map_err(JobError::failed)?;
+        let working_directory = managed_worker_directory(&config.python_path, managed_windows_qwen)?;
         // A file avoids Windows' 32K command-line limit. It contains only the
         // embedded application code, never user media, settings or credentials.
         let script_path =
@@ -241,6 +263,9 @@ impl Worker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        if let Some(directory) = working_directory {
+            command.current_dir(directory);
+        }
         hide_tokio_command_window(&mut command);
         let mut child = command.spawn().map_err(|e| {
             let _ = std::fs::remove_file(&script_path);
@@ -523,6 +548,29 @@ mod tests {
         assert!(prepared.find("from __future__ import annotations").unwrap() < prepared.find("def luma_prepare_nagisa()").unwrap());
         assert!(prepared_worker_source("print('manual')", true).is_err());
         assert!(prepared_worker_source(&format!("{NAGISA_COMPAT_MARKER}\n{NAGISA_COMPAT_MARKER}"), true).is_err());
+    }
+    #[test]
+    fn managed_worker_directory_is_canonical_and_does_not_change_app_cwd() {
+        let base = std::env::temp_dir().join(format!("luma-asr-cwd-é-测试-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&base).unwrap();
+        let base = std::fs::canonicalize(base).unwrap();
+        let executable = base.join("python.exe");
+        std::fs::write(&executable, b"owned fixture, never executed").unwrap();
+        let before = std::env::current_dir().unwrap();
+        let selected = managed_worker_directory(executable.to_str().unwrap(), true).unwrap().unwrap();
+        assert_eq!(selected, base);
+        let mut command = Command::new(&executable);
+        command.current_dir(&selected);
+        assert_eq!(command.as_std().get_current_dir(), Some(base.as_path()));
+        assert_eq!(std::env::current_dir().unwrap(), before);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn external_worker_directory_is_untouched_and_managed_paths_fail_closed() {
+        assert!(managed_worker_directory("unresolved-external-python", false).unwrap().is_none());
+        assert!(managed_worker_directory("relative-managed-python", true).is_err());
+        let missing = std::env::temp_dir().join(format!("luma-missing-asr-{}", uuid::Uuid::new_v4()));
+        assert!(managed_worker_directory(missing.to_str().unwrap(), true).is_err());
     }
     fn python_config() -> AsrConfig {
         AsrConfig {

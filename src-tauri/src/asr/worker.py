@@ -275,9 +275,13 @@ def runtime(backend, requested):
     if requested == "metal":
         raise WorkerError("device_unavailable", "Qwen3-ASR Metal is not supported in this version. Choose CPU or CUDA.")
     if globals().get("LUMA_MANAGED_QWEN_RUNTIME", False):
+        luma_configure_numba_workqueue()
         luma_prepare_nagisa()
+        luma_probe_numba_workqueue()
     torch = optional_import("torch", "qwen-asr and PyTorch")
     module = optional_import("qwen_asr", "qwen-asr")
+    if globals().get("LUMA_MANAGED_QWEN_RUNTIME", False):
+        luma_check_numba_workqueue(require_initialized=True)
     hip = bool(getattr(getattr(torch, "version", None), "hip", None))
     cuda = bool(torch.cuda.is_available()) and not hip if requested != "cpu" else False
     if hip and requested == "auto":
@@ -576,6 +580,8 @@ class Worker:
                 results = self.model.transcribe(audio=(audio, SAMPLE_RATE), language=selected_language, return_time_stamps=True)
             if not isinstance(results, (list, tuple)) or len(results) != 1:
                 raise WorkerError("invalid_result", "Qwen returned an unexpected number of results for one audio file.")
+            if globals().get("LUMA_MANAGED_QWEN_RUNTIME", False):
+                luma_check_numba_workqueue(require_initialized=True)
             segments = qwen_segments(results[0], duration)
         return {"id": request.get("id"), "event": "result", "segments": segments,
                 "backend": config["backend"], "device": info["device"], "reused": reused,

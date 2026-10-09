@@ -89,6 +89,64 @@ def nagisa_probe(executable, probe, env, cwd, *flags):
     return json.loads(result.stdout.splitlines()[-1])
 
 
+MANAGED_RUNTIME_PROBE = '''import json, os, runpy, sys
+from pathlib import Path
+namespace = runpy.run_path(sys.argv[1], run_name='luma_native_runtime_probe')
+namespace = namespace['runtime'].__globals__
+assert namespace.get('LUMA_MANAGED_QWEN_RUNTIME') is True
+namespace['configure_offline']()
+protocol = os.fdopen(os.dup(sys.stdout.fileno()), 'w', encoding='utf-8', buffering=1)
+os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+sys.addaudithook(namespace['offline_audit'])
+try:
+    first = namespace['runtime']('qwen3-asr-transformers', 'cpu')
+    proof = namespace['_luma_numba_proof']
+    assert proof['selected'] == 'workqueue' and proof['numeric_passed'] and proof['parallel_jit_tested']
+    second = namespace['runtime']('qwen3-asr-transformers', 'cpu')
+    assert namespace['_luma_numba_proof'] is proof
+    assert first['device'] == second['device'] == 'cpu'
+    for name in ('core', 'module'):
+        assert first[name] is second[name]
+        assert Path(first[name].__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    assert namespace['luma_check_numba_workqueue'](require_initialized=True) == 'workqueue'
+    checks = runpy.run_path(str(Path(sys.prefix) / 'self_test.py'), run_name='luma_native_library_check')
+    libraries = checks['loaded_native_libraries']()
+    assert libraries > 0
+    print(json.dumps({'schema':1, 'first_jit_initialization':True, 'successful_proof_reused':True,
+                      'numba_threading':proof, 'checked_after_qwen_imports':True,
+                      'private_native_libraries_checked':libraries,
+                      'device':'cpu', 'inference':False, 'model_weights_loaded':False}),file=protocol)
+finally:
+    protocol.close()
+'''
+
+
+def managed_worker_runtime_probe(executable, worker, env, cwd):
+    # Reuse the existing owned/file-backed 120-second, 16-KiB child primitive.
+    # This calls the actual embedded worker entrypoint; no substitute backend,
+    # model files, model loading or private-package modification is involved.
+    from windows_crt_proof import helper_process
+    try:
+        code, out, err = helper_process([str(executable), '-I', '-B', '-u', '-X', 'utf8', '-c',
+                                        MANAGED_RUNTIME_PROBE, str(worker)], env, cwd)
+    except BaseException as exc:
+        raise RuntimeError('Managed worker runtime probe failed: ' + str(exc)) from exc
+    if code:
+        raise RuntimeError(f'Managed worker runtime probe failed ({code}):\n{out}\n{err}')
+    lines = [line for line in out.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ValueError('Managed runtime probe must emit exactly one metadata record')
+    result = json.loads(lines[0])
+    expected = {'schema':1, 'first_jit_initialization':True, 'successful_proof_reused':True,
+                'checked_after_qwen_imports':True, 'device':'cpu', 'inference':False, 'model_weights_loaded':False}
+    if any(result.get(key) != value for key, value in expected.items()):
+        raise ValueError('Managed runtime probe returned unexpected evidence')
+    if type(result.get('private_native_libraries_checked')) is not int or result['private_native_libraries_checked'] <= 0:
+        raise ValueError('Managed runtime probe did not verify loaded native origins')
+    result['embedded_worker_sha256'] = sha256(worker)
+    return result
+
+
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--manifest', type=Path, required=True); p.add_argument('--worker', type=Path, required=True); p.add_argument('--cache', type=Path, required=True)
     a = p.parse_args(); manifest = json.loads(a.manifest.read_text()); output = a.manifest.parent
@@ -119,17 +177,33 @@ def main():
             print('NAGISA_UNICODE_PROOF=' + diagnostic_json(nagisa), flush=True)
         native_inventory = None
         if manifest['platform'] == 'windows-x64':
-            from windows_native_inventory import inventory
-            native_inventory = inventory(relocated)
+            from windows_native_inventory import inventory, inactive_numba_plugin, validate_configured_closure
+            optional = None
+            if managed_qwen:
+                lock = json.loads((ROOT / 'locks/qwen3-asr-cpu-windows-x64.json').read_text(encoding='utf-8'))
+                wheel = next(item for item in lock['wheels'] if item['name'] == 'numba')
+                optional = inactive_numba_plugin(relocated, a.cache, wheel)
+            native_inventory = inventory(relocated, optional)
             print('WINDOWS_NATIVE_CLOSURE=' + json.dumps({'passed': native_inventory['passed'],
                   'native_files': len(native_inventory['files']), 'blocked_dependencies': native_inventory['blocked_dependencies'],
-                  'gpu_files': native_inventory['gpu_files']}, sort_keys=True), flush=True)
-            assert native_inventory['passed'], 'Whole Windows runtime has unresolved normal/delay native dependencies'
+                  'gpu_files': native_inventory['gpu_files'], 'inactive_optional_plugins': native_inventory['inactive_optional_plugins'],
+                  'required_closure_passed': native_inventory['required_closure_passed'],
+                  'full_tree_closure_passed': native_inventory['full_tree_closure_passed']}, sort_keys=True), flush=True)
+            assert native_inventory['required_closure_passed'], 'Configured Windows runtime has unresolved required native dependencies'
         result = subprocess.run([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(relocated / 'self_test.py')],
                                 capture_output=True, text=True, encoding='utf-8', env=env, cwd=work, timeout=240)
         if result.returncode:
             raise RuntimeError(f'Private self-test failed ({result.returncode}):\n{result.stdout}\n{result.stderr}')
         imports = json.loads(result.stdout.splitlines()[-1])
+        actual_worker_runtime = None
+        if managed_qwen:
+            actual_worker_runtime = managed_worker_runtime_probe(executable, worker, env, relocated)
+            print('MANAGED_QWEN_WORKER_RUNTIME=' + diagnostic_json(actual_worker_runtime), flush=True)
+        if native_inventory is not None:
+            validate_configured_closure(native_inventory, imports)
+            print('WINDOWS_CONFIGURED_RUNTIME_POLICY=' + diagnostic_json({key: native_inventory[key] for key in (
+                'passed', 'required_closure_passed', 'full_tree_closure_passed', 'inactive_optional_plugins', 'configured_threading_proof')
+                if key in native_inventory}), flush=True)
         requests = [{'id': 'offline-url', 'op': 'probe', 'engine': manifest['engine'], 'device': manifest['device'], 'model_path': 'https://invalid.example/never-download'}]
         frames = worker_requests(executable, worker, requests, env, work)
         response = frames[-1]
@@ -170,6 +244,7 @@ def main():
                   'worker_test': {'passed': True, 'checks': ['json-lines', 'offline-path-rejection', 'clean-eof-shutdown', 'idle-termination', 'recovery']},
                   'imports': imports, 'inference': inference,
                   'nagisa_unicode': nagisa,
+                  'actual_worker_runtime': actual_worker_runtime,
                   'windows_native_inventory': native_inventory,
                   'limitations': ['No CUDA validation or CUDA redistribution.', 'No Developer ID signing, notarization, Gatekeeper bypass, or clean-GUI-machine validation.']}
         dump(output / f'{manifest["id"]}.smoke.json', report)

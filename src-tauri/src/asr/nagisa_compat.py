@@ -25,6 +25,183 @@ _luma_nagisa_state = 'new'
 _luma_nagisa_module = None
 _luma_nagisa_original_init = None
 _luma_nagisa_restoration = None
+_luma_numba_root = None
+_luma_numba_failed = False
+_luma_numba_proof = None
+_luma_numba_module = None
+_luma_numba_environment = {'NUMBA_THREADING_LAYER': 'workqueue',
+                           'NUMBA_THREADING_LAYER_PRIORITY': 'workqueue omp tbb',
+                           'NUMBA_DISABLE_JIT': '0', 'NUMBA_DISABLE_CUDA': '1',
+                           'NUMBA_NUM_THREADS': '2'}
+
+
+class LumaManagedThreadingError(BaseException):
+    """Fatal: a managed worker must not continue with changed threading policy."""
+
+
+def _luma_numba_origin():
+    root = _LumaPath(_luma_sys.prefix).resolve()
+    site = root / 'Lib' / 'site-packages'
+    info = site / 'numba-0.68.0.dist-info'
+    metadata = info / 'METADATA'
+    if (not _luma_sys.flags.isolated or not _LumaPath(_luma_sys.executable).resolve().is_relative_to(root)
+            or info.is_symlink() or metadata.is_symlink() or not metadata.is_file()
+            or not metadata.resolve().is_relative_to(site) or not 0 < metadata.stat().st_size <= 1024 * 1024):
+        raise ValueError('Managed threading requires the isolated private Numba distribution')
+    dist = _luma_metadata.Distribution.at(info)
+    expected = site / 'numba' / '__init__.py'
+    spec = _luma_machinery.PathFinder.find_spec('numba', [str(site)])
+    if (dist.version != '0.68.0' or dist.metadata['Name'].lower() != 'numba'
+            or _LumaPath(dist.locate_file('')).resolve() != site
+            or expected.is_symlink() or not expected.is_file()
+            or spec is None or _LumaPath(spec.origin or '').resolve() != expected
+            or type(spec.loader) is not _luma_machinery.SourceFileLoader):
+        raise ValueError('Unsupported managed Numba version or origin')
+    return root
+
+
+def _luma_is_tbb_dll(path):
+    name = str(path).replace('\\', '/').rsplit('/', 1)[-1].lower()
+    return name.startswith(('tbb', 'libtbb')) and name.endswith('.dll')
+
+
+def _luma_assert_no_tbb():
+    if any(name == 'numba.np.ufunc.tbbpool' or name.startswith('tbb.') or name == 'tbb'
+           for name in _luma_sys.modules):
+        raise ValueError('Inactive TBB module was loaded')
+    import ctypes
+    from ctypes import wintypes
+    psapi = ctypes.WinDLL('psapi', use_last_error=True)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi.EnumProcessModules.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.HMODULE), wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+    process = kernel.GetCurrentProcess(); handles = (wintypes.HMODULE * 4096)(); needed = wintypes.DWORD()
+    if not psapi.EnumProcessModules(process, handles, ctypes.sizeof(handles), ctypes.byref(needed)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if needed.value > ctypes.sizeof(handles):
+        raise ValueError('Native module enumeration overflow')
+    for handle in handles[:needed.value // ctypes.sizeof(wintypes.HMODULE)]:
+        path = ctypes.create_unicode_buffer(32768)
+        if not psapi.GetModuleFileNameExW(process, handle, path, len(path)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if _luma_is_tbb_dll(path.value):
+            raise ValueError('Inactive TBB native library was loaded: ' + path.value)
+
+
+def luma_configure_numba_workqueue():
+    """Managed Windows Qwen only; called before Numba or activity threads.
+
+    Numba documents workqueue as its built-in backend. It is not reentrant:
+    this worker serializes requests, and its heartbeat never calls Numba.
+    No package bytes, global environment, or manual runtime are changed.
+    """
+    global _luma_numba_root, _luma_numba_failed
+    try:
+        if _luma_numba_failed:
+            raise ValueError('Managed threading previously failed')
+        if _luma_sys.platform != 'win32':
+            raise ValueError('Managed workqueue policy is Windows-only')
+        if _luma_numba_root is not None:
+            return luma_check_numba_workqueue()
+        if (_luma_threading.current_thread() is not _luma_threading.main_thread()
+                or _luma_threading.active_count() != 1
+                or any(name == 'numba' or name.startswith('numba.') for name in _luma_sys.modules)):
+            raise ValueError('Managed Numba must be configured before imports and worker activity')
+        _luma_numba_root = _luma_numba_origin()
+        # Only this managed child is normalized. Inherited developer options
+        # must not silently disable JIT or alter its parallel backend/limits.
+        for name in tuple(_luma_os.environ):
+            if name.upper().startswith('NUMBA_'):
+                del _luma_os.environ[name]
+        _luma_os.environ.update(_luma_numba_environment)
+        if (_LumaPath.cwd() / '.numba_config.yaml').exists():
+            raise ValueError('Managed Numba cannot use a working-directory configuration file')
+        _luma_assert_no_tbb()
+    except BaseException as exc:
+        _luma_numba_failed = True
+        raise LumaManagedThreadingError('Managed threading initialization failed; discard worker: ' + str(exc)) from exc
+
+
+def luma_check_numba_workqueue(require_initialized=False):
+    global _luma_numba_failed
+    try:
+        actual_env = {name: value for name, value in _luma_os.environ.items() if name.upper().startswith('NUMBA_')}
+        if (_luma_numba_failed or _luma_numba_root is None or _LumaPath(_luma_sys.prefix).resolve() != _luma_numba_root
+                or not _LumaPath(_luma_sys.executable).resolve().is_relative_to(_luma_numba_root)
+                or actual_env != _luma_numba_environment or (_LumaPath.cwd() / '.numba_config.yaml').exists()):
+            raise ValueError('Managed threading configuration changed')
+        module = _luma_sys.modules.get('numba')
+        if _luma_numba_module is not None and module is not _luma_numba_module:
+            raise ValueError('Successfully initialized Numba module identity changed')
+        layer = None
+        if module is not None:
+            site = _luma_numba_root / 'Lib' / 'site-packages'
+            if (module.__version__ != '0.68.0' or _LumaPath(module.__file__).resolve() != site / 'numba' / '__init__.py'
+                    or module.config.THREADING_LAYER != 'workqueue' or module.config.DISABLE_JIT or module.config.DISABLE_CUDA != 1
+                    or module.config.NUMBA_NUM_THREADS != 2
+                    or module.config.THREADING_LAYER_PRIORITY != ['workqueue', 'omp', 'tbb']):
+                raise ValueError('Imported Numba identity or configured layer changed')
+            try:
+                layer = module.threading_layer()
+            except ValueError:
+                pass  # A valid configuration need not have compiled parallel code yet.
+            if layer not in (None, 'workqueue'):
+                raise ValueError('Numba initialized a conflicting threading layer')
+            workqueue = _luma_sys.modules.get('numba.np.ufunc.workqueue')
+            if workqueue is not None and _LumaPath(workqueue.__file__).resolve() != site / 'numba/np/ufunc/workqueue.cp312-win_amd64.pyd':
+                raise ValueError('Workqueue came from outside the exact private module')
+            if layer == 'workqueue' and workqueue is None:
+                raise ValueError('Selected private workqueue module is absent')
+        if require_initialized and layer != 'workqueue':
+            raise ValueError('Real parallel compilation did not select workqueue')
+        _luma_assert_no_tbb()
+        return layer
+    except BaseException as exc:
+        _luma_numba_failed = True
+        raise LumaManagedThreadingError('Managed threading verification failed; discard worker: ' + str(exc)) from exc
+
+
+def _luma_run_numba_workqueue_probe():
+    """Small real native JIT/reduction, not model inference or a speed claim."""
+    luma_check_numba_workqueue()
+    numba = _luma_importlib.import_module('numba')
+    numpy = _luma_importlib.import_module('numpy')
+    luma_check_numba_workqueue()
+
+    @numba.njit(parallel=True, cache=False)
+    def squares(values):
+        total = 0.0
+        for index in numba.prange(values.size):
+            total += values[index] * values[index]
+        return total
+
+    result = squares(numpy.arange(1024, dtype=numpy.float64))
+    if result != sum(index * index for index in range(1024)) or not squares.nopython_signatures:
+        raise LumaManagedThreadingError('Managed workqueue numerical/JIT proof failed')
+    layer = luma_check_numba_workqueue(require_initialized=True)
+    return {'schema': 1, 'numba': '0.68.0', 'configured': 'workqueue', 'selected': layer,
+            'parallel_jit_tested': True, 'numeric_passed': True, 'elements': 1024,
+            'private_workqueue': True, 'tbb_loaded': False,
+            'tbb_checked_before_jit': True, 'tbb_checked_after_jit': True,
+            'scope': 'Serialized single-request worker; no nested or concurrent Numba parallel calls.'}
+
+
+def luma_probe_numba_workqueue():
+    """Actual worker and setup share a once-only, successful native JIT proof."""
+    global _luma_numba_proof, _luma_numba_failed, _luma_numba_module
+    try:
+        if _luma_numba_proof is None:
+            proof = _luma_run_numba_workqueue_probe()
+            luma_check_numba_workqueue(require_initialized=True)
+            _luma_numba_module = _luma_sys.modules['numba']
+            _luma_numba_proof = proof
+        else:
+            luma_check_numba_workqueue(require_initialized=True)
+        return dict(_luma_numba_proof)
+    except BaseException as exc:
+        _luma_numba_failed = True
+        raise LumaManagedThreadingError('Managed threading JIT proof failed; discard worker: ' + str(exc)) from exc
 
 
 def _luma_validate_nagisa():

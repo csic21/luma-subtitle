@@ -126,6 +126,7 @@ sys.meta_path.append(upstream_finder)
         namespace = {'__name__': 'worker_test'}; exec(compile(source.replace(marker, code), str(WORKER), 'exec'), namespace)
         fatal = namespace['LumaNagisaInitializationError']('fatal fixture')
         namespace['configuration'] = lambda request: {'backend': 'qwen3-asr', 'engine': 'qwen3-asr', 'model_bytes': 1, 'aligner_bytes': 1, 'requested_device': 'cpu'}
+        namespace['luma_configure_numba_workqueue'] = lambda: None
         namespace['luma_prepare_nagisa'] = lambda: (_ for _ in ()).throw(fatal)
         with self.assertRaises(type(fatal)):
             namespace['serve'](io.StringIO(json.dumps({'id': 1, 'op': 'probe'}) + '\n'), io.StringIO())

@@ -7,7 +7,7 @@ import sys
 import unittest
 from fixture_paths import temporary_root
 
-from smoke import terminate_idle_worker, clean_environment, diagnostic_json
+from smoke import terminate_idle_worker, clean_environment, diagnostic_json, managed_worker_runtime_probe
 from unittest.mock import patch
 
 
@@ -45,6 +45,43 @@ class SmokeHarnessTests(unittest.TestCase):
         with temporary_root() as tmp:
             with self.assertRaisesRegex(AssertionError, 'exited without EOF'):
                 terminate_idle_worker([sys.executable, '-I', '-B', '-c', 'pass'], os.environ.copy(), tmp)
+
+    def test_managed_runtime_probe_calls_actual_entrypoint_twice_in_owned_child(self):
+        # A dependency-free stub proves the harness path; only native CI can
+        # establish the real engine/JIT evidence represented by these fields.
+        with temporary_root() as tmp:
+            worker = tmp/'worker é 测试.py'
+            worker.write_text('''import os, sys
+from pathlib import Path
+from types import SimpleNamespace
+sys.prefix = str(Path(__file__).resolve().parent)
+LUMA_MANAGED_QWEN_RUNTIME = True
+_luma_numba_proof = None
+calls = 0
+module = SimpleNamespace(__file__=__file__)
+def configure_offline(): pass
+def offline_audit(event, args): pass
+def luma_check_numba_workqueue(require_initialized=False):
+    assert require_initialized and calls == 2
+    return 'workqueue'
+def runtime(backend, device):
+    global calls, _luma_numba_proof
+    print('legitimate upstream diagnostic')
+    os.write(1,b'native stdout diagnostic\\n')
+    calls += 1
+    assert backend == 'qwen3-asr-transformers' and device == 'cpu' and calls <= 2
+    if _luma_numba_proof is None:
+        _luma_numba_proof = dict(selected='workqueue',numeric_passed=True,parallel_jit_tested=True)
+    return dict(device='cpu',core=module,module=module)
+''',encoding='utf-8')
+            (tmp/'self_test.py').write_text('def loaded_native_libraries(): return 3\n')
+            report = managed_worker_runtime_probe(sys.executable,worker,os.environ.copy(),tmp)
+            self.assertTrue(report['successful_proof_reused']); self.assertFalse(report['inference'])
+            self.assertEqual(report['private_native_libraries_checked'],3)
+            self.assertEqual(len(report['embedded_worker_sha256']),64)
+            with patch('windows_crt_proof.helper_process',return_value=(0,'{}\n{}\n','')):
+                with self.assertRaisesRegex(ValueError,'exactly one'):
+                    managed_worker_runtime_probe(sys.executable,worker,os.environ.copy(),tmp)
 
 
 if __name__ == '__main__': unittest.main()
