@@ -127,6 +127,25 @@ class OfflineAssemblyTests(unittest.TestCase):
             different_drive = 'Z' if ordinary.drive.upper() != 'Z:' else 'Y'
             self.assertFalse(within_private_root(f'{different_drive}:\\not-the-private-root\\python.exe', verbatim, allow_missing=True))
 
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows pip-style path parsing regression')
+    def test_native_pip_mixed_separator_script_path_requires_ordinary_namespace(self):
+        with temporary_root(prefix='Pip path é 测试 ') as tmp:
+            root = tmp / 'runtime'; (root / 'Lib' / 'site-packages').mkdir(parents=True); (root / 'Scripts').mkdir()
+            ordinary = str(root.resolve(strict=True))
+            if ordinary.startswith('\\\\?\\'): ordinary = ordinary[4:]
+            verbatim = '\\\\?\\' + ordinary
+            self.assertTrue(Path(ordinary).samefile(verbatim))
+            mixed = r'\Lib\site-packages\../../Scripts/numba'
+            self.assertLess(len((ordinary + mixed).encode('utf-16-le')) // 2, 260)
+            # Pass the actual raw joined string to open(). pathlib construction
+            # would normalize separators and would no longer reproduce pip.
+            with self.assertRaises(OSError):
+                with open(verbatim + mixed, 'wb') as stream: stream.write(b'not reached')
+            self.assertFalse((root / 'Scripts' / 'numba').exists())
+            with open(ordinary + mixed, 'wb') as stream: stream.write(b'private launcher fixture')
+            self.assertEqual((root / 'Scripts' / 'numba').read_bytes(), b'private launcher fixture')
+            self.assertTrue(within_private_root(root / 'Scripts' / 'numba', Path(verbatim)))
+
     def test_bootstrap_vendor_provenance_is_removed_only_with_pinned_installer(self):
         with temporary_root() as tmp:
             site = tmp

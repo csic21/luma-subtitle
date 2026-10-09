@@ -2,6 +2,48 @@
 use super::store;
 use std::{path::{Path, PathBuf}, ffi::OsString};
 
+#[cfg(any(windows, test))]
+const PYTHON_PATH_ERROR: &str = "Private Python requires a shorter absolute local-drive path with ordinary file names. UNC, device, ambiguous, and launch paths of 260 UTF-16 units or longer are unsupported. No files were moved or Windows settings changed.";
+#[cfg(any(windows, test))]
+fn ordinary_python_spelling(value: &str) -> Result<String, String> {
+    let ordinary = value.strip_prefix(r"\\?\").unwrap_or(value);
+    let bytes = ordinary.as_bytes();
+    if bytes.len() < 4 || !bytes[0].is_ascii_alphabetic() || &bytes[1..3] != b":\\" {
+        return Err(PYTHON_PATH_ERROR.into());
+    }
+    for part in ordinary[3..].split('\\') {
+        let stem = part.split('.').next().unwrap_or("").to_uppercase();
+        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
+            || ["COM", "LPT"].iter().any(|prefix| stem.strip_prefix(*prefix).is_some_and(|digit| matches!(digit, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")));
+        if part.is_empty() || part.encode_utf16().count() > 255 || matches!(part, "." | "..") || part.ends_with('.') || part.ends_with(' ') || reserved
+            || part.chars().any(|c| c.is_control() || "<>:\"/|?*".contains(c)) {
+            return Err(PYTHON_PATH_ERROR.into());
+        }
+    }
+    if ordinary.encode_utf16().count() >= 260 { return Err(PYTHON_PATH_ERROR.into()); }
+    Ok(ordinary.to_owned())
+}
+#[cfg(any(windows, test))]
+fn check_python_launch_identity(canonical: &Path, roundtrip: &Path) -> Result<(), String> {
+    if canonical != roundtrip { return Err("The private Python launch path resolves to a different file or directory. Setup stopped without changing the active component.".into()); }
+    Ok(())
+}
+/// Adapt only a verified private Python process boundary. Store/trust/cache and
+/// configuration identities remain canonical. Ordinary Win32 parsing is needed
+/// by pip and native packages that join paths with '/' or parent components.
+pub(crate) fn private_python_launch_path(path: &Path) -> Result<PathBuf, String> {
+    #[cfg(not(windows))] { Ok(path.to_path_buf()) }
+    #[cfg(windows)] {
+        // Reject unsafe namespaces/spellings before even resolving them.
+        ordinary_python_spelling(path.to_str().ok_or(PYTHON_PATH_ERROR)?)?;
+        let canonical = std::fs::canonicalize(path).map_err(|e| format!("Cannot resolve private Python launch input: {e}"))?;
+        let ordinary = PathBuf::from(ordinary_python_spelling(canonical.to_str().ok_or(PYTHON_PATH_ERROR)?)?);
+        let roundtrip = std::fs::canonicalize(&ordinary).map_err(|e| format!("Cannot verify ordinary private Python launch path: {e}"))?;
+        check_python_launch_identity(&canonical, &roundtrip)?;
+        Ok(ordinary)
+    }
+}
+
 pub(super) struct PrivateTemp { path: PathBuf }
 impl PrivateTemp {
     pub(super) fn create(root: &Path) -> Result<Self, String> {
@@ -148,6 +190,48 @@ pub(super) async fn run_owned_status(mut command: tokio::process::Command, label
 mod tests {
     use super::*;
     use std::{fs, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, time::{Duration, Instant}};
+
+    #[test]
+    fn private_python_spelling_preserves_unicode_and_rejects_unsafe_namespaces() {
+        let ordinary = r"C:\private Python é 测试\python.exe";
+        assert_eq!(ordinary_python_spelling(ordinary).unwrap(), ordinary);
+        assert_eq!(ordinary_python_spelling(&format!(r"\\?\{ordinary}")).unwrap(), ordinary);
+        for value in [r"\\server\share\python.exe", r"\\?\UNC\server\share\python.exe", r"\\.\C:\python.exe", r"\\?\Volume{fixture}\python.exe",
+            r"C:python.exe", r"relative\python.exe", r"C:\runtime.\python.exe", r"C:\runtime \python.exe", r"C:\one\..\python.exe",
+            r"C:\one\.\python.exe", r"C:\one/python.exe", r"C:\one\\python.exe", r"C:\python.exe:stream", r"C:\NUL.txt", r"C:\COM¹\python.exe",
+            "C:\\runtime\u{0}\\python.exe"] {
+            assert!(ordinary_python_spelling(value).is_err(), "accepted {value}");
+        }
+        assert!(check_python_launch_identity(Path::new("canonical-one"), Path::new("canonical-two")).is_err());
+        check_python_launch_identity(Path::new("canonical-one"), Path::new("canonical-one")).unwrap();
+    }
+    #[test]
+    fn private_python_spelling_counts_utf16_launch_path_limits() {
+        let prefix = r"C:\runtime\";
+        let count = 259 - prefix.encode_utf16().count();
+        let allowed = format!("{prefix}{}", "a".repeat(count));
+        assert!(ordinary_python_spelling(&allowed).is_ok());
+        assert!(ordinary_python_spelling(&format!("{allowed}a")).unwrap_err().contains("260 UTF-16"));
+        assert!(ordinary_python_spelling(&format!("{prefix}{}😀", "a".repeat(count - 2))).is_ok());
+        assert!(ordinary_python_spelling(&format!("{prefix}{}😀", "a".repeat(count - 1))).is_err());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn native_private_python_launch_spelling_roundtrips_exact_unicode_files() {
+        let base = std::env::temp_dir().join(format!("luma-python-é-测试-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&base).unwrap(); let canonical = fs::canonicalize(&base).unwrap();
+        let interpreter = canonical.join("python.exe"); fs::write(&interpreter, b"not executed").unwrap();
+        let before = std::env::current_dir().unwrap();
+        for path in [&canonical, &interpreter] {
+            let ordinary = private_python_launch_path(path).unwrap();
+            assert!(!ordinary.to_str().unwrap().starts_with(r"\\?\"));
+            assert_eq!(fs::canonicalize(&ordinary).unwrap(), fs::canonicalize(path).unwrap());
+            assert_eq!(private_python_launch_path(&ordinary).unwrap(), ordinary);
+        }
+        assert_eq!(std::env::current_dir().unwrap(), before);
+        assert_eq!(fs::read(&interpreter).unwrap(), b"not executed");
+        fs::remove_dir_all(base).unwrap();
+    }
 
     struct Fixture { base: PathBuf, root: PathBuf }
     impl Fixture {

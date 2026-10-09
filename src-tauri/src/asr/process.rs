@@ -70,6 +70,10 @@ fn managed_worker_directory(python: &str, managed_windows_qwen: bool) -> JobResu
         .ok_or_else(|| JobError::failed("The managed interpreter has no runtime directory."))?;
     Ok(Some(directory.to_path_buf()))
 }
+fn worker_launch_path(path: &Path, receipt_verified: bool) -> JobResult<PathBuf> {
+    if receipt_verified { crate::asr_components::private_python_launch_path(path).map_err(JobError::failed) }
+    else { Ok(path.to_path_buf()) }
+}
 
 #[derive(Default)]
 pub(crate) struct AsrRuntime {
@@ -255,7 +259,7 @@ impl Worker {
                 .map_err(JobError::failed)?;
         let source = prepared_worker_source(source, managed_windows_qwen, managed_windows_ct2_cpu).map_err(JobError::failed)?;
         let working_directory = managed_worker_directory(&config.python_path, managed_windows_qwen)?;
-        Self::spawn_prepared(config, &source, managed_use_leases, working_directory)
+        Self::spawn_prepared(config, &source, managed_use_leases, working_directory, managed_windows_qwen || managed_windows_ct2_cpu)
     }
     #[cfg(test)]
     fn spawn_for_receipt_proof(config: &AsrConfig, source: &str, proof: &crate::asr_components::ManagedCt2RuntimeProof) -> JobResult<Self> {
@@ -264,9 +268,13 @@ impl Worker {
         }
         let leases = proof.acquire(&config.python_path).map_err(JobError::failed)?;
         let source = prepared_worker_source(source, false, true).map_err(JobError::failed)?;
-        Self::spawn_prepared(config, &source, leases, None)
+        Self::spawn_prepared(config, &source, leases, None, true)
     }
-    fn spawn_prepared(config: &AsrConfig, source: &str, managed_use_leases: Vec<std::fs::File>, working_directory: Option<PathBuf>) -> JobResult<Self> {
+    fn spawn_prepared(config: &AsrConfig, source: &str, managed_use_leases: Vec<std::fs::File>, working_directory: Option<PathBuf>, receipt_verified: bool) -> JobResult<Self> {
+        // Receipt/cache/configuration identities stay canonical. Adapt only the
+        // actual launch of a verified private interpreter; manual paths bypass it.
+        let launch_python = worker_launch_path(Path::new(&config.python_path), receipt_verified)?;
+        let working_directory = working_directory.map(|path| worker_launch_path(&path, receipt_verified)).transpose()?;
         // A file avoids Windows' 32K command-line limit. It contains only the
         // embedded application code, never user media, settings or credentials.
         let script_path =
@@ -287,10 +295,13 @@ impl Worker {
                 "Cannot prepare embedded ASR worker: {error}"
             )));
         }
-        let mut command = Command::new(&config.python_path);
+        let launch_script = worker_launch_path(&script_path, receipt_verified).map_err(|error| {
+            let _ = std::fs::remove_file(&script_path); error
+        })?;
+        let mut command = Command::new(&launch_python);
         command
             .args(["-I", "-B", "-u", "-X", "utf8"])
-            .arg(&script_path)
+            .arg(&launch_script)
             .env("HF_HUB_OFFLINE", "1")
             .env("TRANSFORMERS_OFFLINE", "1")
             .env("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -864,6 +875,13 @@ mod tests {
         assert!(managed_worker_directory("relative-managed-python", true).is_err());
         let missing = std::env::temp_dir().join(format!("luma-missing-asr-{}", uuid::Uuid::new_v4()));
         assert!(managed_worker_directory(missing.to_str().unwrap(), true).is_err());
+    }
+    #[test]
+    fn external_worker_launch_paths_are_never_adapted() {
+        for value in [r"unresolved-external-python", r"\\server\share\python.exe", r"\\?\C:\external\python.exe"] {
+            assert_eq!(worker_launch_path(Path::new(value), false).unwrap(), Path::new(value));
+        }
+        #[cfg(windows)] assert!(worker_launch_path(Path::new(r"\\server\share\python.exe"), true).is_err());
     }
     fn python_config() -> AsrConfig {
         AsrConfig {

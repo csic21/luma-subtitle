@@ -14,6 +14,7 @@ mod direct_crt;
 mod recipe;
 mod tar_bootstrap;
 mod setup_process;
+pub(crate) use setup_process::private_python_launch_path;
 mod wheel_preflight;
 mod store;
 #[cfg(test)] mod tests;
@@ -325,11 +326,12 @@ fn self_test_error_detail(stderr: &[u8]) -> String {
 }
 async fn self_test(root: &Path, runtime: &catalog::Runtime, cancel: &AtomicBool, lifetime: &setup_process::SetupLifetime) -> Result<(), String> {
     let executable = store::checked_path(root, &runtime.entrypoint)?; store::regular_file(&executable)?;
+    let executable = private_python_launch_path(&executable)?; let launch_root = private_python_launch_path(root)?;
     let code = self_test_script(&runtime.backend)?;
     let mut command = tokio::process::Command::new(&executable);
-    let temporary = setup_process::PrivateTemp::create(root)?;
-    setup_process::configure(&mut command, root, &temporary)?;
-    command.args(["-I", "-B", "-u", "-X", "utf8", "-c"]).arg(code).current_dir(root)
+    let temporary = setup_process::PrivateTemp::create(&launch_root)?;
+    setup_process::configure(&mut command, &launch_root, &temporary)?;
+    command.args(["-I", "-B", "-u", "-X", "utf8", "-c"]).arg(code).current_dir(&launch_root)
         .env_remove("PYTHONPATH").env_remove("PYTHONHOME")
         .env("HF_HUB_OFFLINE", "1").env("TRANSFORMERS_OFFLINE", "1").env("HF_DATASETS_OFFLINE", "1").env("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
         .env("HF_HUB_DISABLE_TELEMETRY", "1").env("DO_NOT_TRACK", "1")

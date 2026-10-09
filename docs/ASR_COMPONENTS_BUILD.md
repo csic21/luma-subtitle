@@ -16,19 +16,14 @@ bundled tokenizer data, such as Nagisa's, is part of that package's locked input
 
 **Activation status (2026-10-09):** the embedded runtime catalog still marks all
 four candidates unavailable. Review-only recipe generation does not activate
-those entries. Final native evidence, exact catalog pins and release review are
-required. CPU-wheel proof [run 37943815924](https://github.com/csic21/luma-subtitle/actions/runs/37943815924)
-**failed at the native verifier's 900-second timeout**. Its two fresh fixed-root
-builds produced identical 25,058,630-byte candidate wheels, SHA-256
-`58100ba77f97900b6959e220b30da805743977ea9337033b1f0f4b1ef7b88410`.
-Static dependency closure passed for 156 PE files and 1,039 imports. The verifier
-left no stage evidence, an empty inference log and no inference report, so the
-stall cannot yet be localized to imports, model loading, inference or the final
-loaded-module inventory. None of those runtime stages is established as passed.
-The observed wheel identity belongs to this failed candidate: it is not a final
-install-size measurement, approved download pin or catalog activation. Publication
-remains blocked. Passing build/setup checks alone does not authorize release or
-establish model inference on every target.
+those entries, and no CPU wheel has been published. Same-wheel diagnostics now
+establish Windows CPU cold/warm inference and normal cleanup with
+`cpu_threads=1`; default-thread cleanup hangs. The production managed-only policy
+is implemented, but a fresh source-build proof of the integrated code is still
+pending. Diagnostic artifacts are not publication candidates. Final native
+evidence, exact catalog pins and release review remain required; passing app
+builds or setup checks alone does not establish speech-model inference on every
+target. The existing stable application release remains separate and unchanged.
 
 ## Current component targets and size boundaries
 
@@ -214,6 +209,27 @@ and the public proof record the original archive identity, every omitted member'
 name/size/hash, retained inventory, and deterministic source-only export identity.
 Any omission drift fails; the whole model subtree is not removed silently.
 
+### Current Windows CPU evidence
+
+Producer [run 37953677195](https://github.com/csic21/luma-subtitle/actions/runs/37953677195),
+source `3006b955`, built two genuinely fresh wheels at the same canonical native
+path. Their complete bytes matched: **25,058,630 bytes**, SHA-256
+`4644c5eb94492ab61d9749ee122e12c612c03634495d9cb59b6c18e3404cd1c0`.
+This is a diagnostic wheel identity, not a final installed-runtime size or an
+approved download pin.
+
+Same-wheel diagnostic [replay 37970005361](https://github.com/csic21/luma-subtitle/actions/runs/37970005361)
+passed cold/warm timed-SRT inference and normal EOF, explicit unload and model
+switch with the supported `cpu_threads=1` setting; default-thread cleanup cases
+hung. Rust cold/warm transcription, export and all five exercised lifecycle
+transitions passed with a genuine Unicode model path. The overall replay still
+failed because its outer Cargo Windows Job did not drain naturally; that replay
+did not identify the surviving descendant. These results localize the ASR cleanup
+failure and supersede the earlier unknown-stage timeout account; they are not
+a clean end-to-end production proof.
+The integrated managed-only policy above still needs a new fresh source-build
+proof, including clean process ownership and shutdown, before publication review.
+
 ### Native proof and repeatability scope
 
 `.github/workflows/asr-ct2-cpu.yml` runs cheap source guards on PRs. Native work
@@ -302,11 +318,25 @@ runtime binaries, model weights and caches stay out of artifacts. Test isolation
 checks private Python search/import paths and actually loaded native libraries.
 Python network/subprocess audit guards are defense in depth, not an OS sandbox.
 
+The latest recorded app checks at source `87a44c76`,
+[run 37981239133](https://github.com/csic21/luma-subtitle/actions/runs/37981239133),
+passed on Windows and macOS, including no-bundle builds. These app checks are
+separate from the native runtime setup and CPU-wheel proof gates.
+
 Keep these evidence categories separate:
 
-- Apple Silicon MLX/Qwen setup has passed private offline assembly repeatability,
+- At the same source, native setup [run 37981239029](https://github.com/csic21/luma-subtitle/actions/runs/37981239029)
+  passed both Apple Silicon MLX/Qwen jobs: private offline assembly repeatability,
   relocated imports and actual Rust install/repair/cancel/remove lifecycle tests.
   A real Metal tensor ran on the MLX host; this is not Whisper model inference.
+- The Windows Qwen job in that run passed CAB extraction and identity checks,
+  then failed in the actual Rust installer during offline pip script installation
+  with mixed extended/ordinary paths. Build helpers were reaped and the separate
+  runtime Windows Job drained normally; the installer itself still failed.
+  Windows Qwen managed installation is not established as passed.
+- The Windows CPU diagnostic evidence above establishes specific inference and
+  lifecycle results for the recorded wheel, not a final integrated source-build
+  proof or permission to publish it.
 - The Linux faster-whisper Tiny/JFK functional smoke exercised the real worker,
   cold/warm transcription, timestamp/SRT validation, export, inference cancellation
   and recovery. It does not validate the new Windows CPU wheel.

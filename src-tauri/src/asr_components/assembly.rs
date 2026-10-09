@@ -91,11 +91,15 @@ fn copy_local(source: &Path, destination: &Path, cancel: &AtomicBool) -> Result<
 pub(super) async fn run(root: &Path, script: &Path, lock: &Path, wheelhouse: &Path, runtime: &Runtime, cancel: &AtomicBool, lifetime: &super::setup_process::SetupLifetime) -> Result<(), String> {
     archive::cancelled(cancel)?;
     let executable = store::checked_path(root, &runtime.entrypoint)?; store::regular_file(&executable)?;
+    store::regular_file(script)?; store::regular_file(lock)?; store::ensure_directory(wheelhouse)?;
+    let launch = super::setup_process::private_python_launch_path;
+    let executable = launch(&executable)?; let launch_root = launch(root)?;
+    let script = launch(script)?; let lock = launch(lock)?; let wheelhouse = launch(wheelhouse)?;
     let mut command = tokio::process::Command::new(executable);
-    let temporary = super::setup_process::PrivateTemp::create(root)?;
-    super::setup_process::configure(&mut command, root, &temporary)?;
-    command.args(["-I", "-S", "-B", "-u", "-X", "utf8"]).arg(script).arg("--runtime-root").arg(root).arg("--wheel-lock").arg(lock).arg("--wheelhouse").arg(wheelhouse)
-        .current_dir(root).env_remove("PYTHONPATH").env_remove("PYTHONHOME")
+    let temporary = super::setup_process::PrivateTemp::create(&launch_root)?;
+    super::setup_process::configure(&mut command, &launch_root, &temporary)?;
+    command.args(["-I", "-S", "-B", "-u", "-X", "utf8"]).arg(script).arg("--runtime-root").arg(&launch_root).arg("--wheel-lock").arg(lock).arg("--wheelhouse").arg(wheelhouse)
+        .current_dir(&launch_root).env_remove("PYTHONPATH").env_remove("PYTHONHOME")
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::process_utils::hide_tokio_command_window(&mut command);
     let mut child = super::setup_process::OwnedChild::spawn(&mut command, lifetime, temporary).map_err(|e| format!("Cannot start private offline assembly: {e}"))?;

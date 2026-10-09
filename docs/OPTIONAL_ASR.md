@@ -50,6 +50,12 @@ If the operating system blocks a component, Luma reports the original error;
 it does not remove quarantine attributes or bypass a warning. Updater integrity
 signatures are distinct from Apple Developer ID signing/notarization.
 
+Windows managed setup requires absolute local-drive paths and limits private
+runtime launch paths to fewer than 260 UTF-16 units. Network shares, device paths
+and ambiguous names are unsupported. Overlong or unsupported paths produce a
+clear setup error; existing components remain unchanged. Luma does not move user
+files or change Windows settings to bypass this limit.
+
 Windows components obtain the exact Microsoft runtime package directly from
 Microsoft after its English and Chinese terms are displayed for acceptance.
 Only the verified required DLLs and original notices are extracted into the
@@ -281,15 +287,21 @@ weight or detect every form of corruption.
 
 ## Validation boundary (2026-10-09)
 
-- **Windows CPU candidate proof failed:** [run 37943815924](https://github.com/csic21/luma-subtitle/actions/runs/37943815924)
-  produced two identical 25,058,630-byte wheels from fresh builds at the same
-  fixed native path, and static closure passed for 156 PE files/1,039 imports.
-  The native verifier then timed out after 900 seconds without stage evidence;
-  imports, model loading, inference and the final loaded-module inventory cannot
-  yet be localized or claimed successful. The failed candidate's exact hash is
-  recorded in [the build guide](ASR_COMPONENTS_BUILD.md); these bytes are not a
-  final installed-runtime size or approved catalog pin. Publication remains
-  blocked. Fixed-path repeatability is not path-independent or cross-machine
+- **Windows CPU diagnostics passed specific inference/cleanup checks; final proof is pending:**
+  [Producer run 37953677195](https://github.com/csic21/luma-subtitle/actions/runs/37953677195)
+  produced two identical 25,058,630-byte wheels from genuinely fresh builds at
+  the same canonical native path. [Same-wheel replay 37970005361](https://github.com/csic21/luma-subtitle/actions/runs/37970005361)
+  passed cold/warm timed-SRT inference and normal EOF, unload and model switch
+  with `cpu_threads=1`; default-thread cleanup hung. Rust cold/warm transcription,
+  export and five lifecycle transitions also passed under a genuine Unicode
+  model path. The overall replay failed because its outer Cargo Windows Job did
+  not drain naturally; the surviving descendant was not identified. The
+  managed-only one-thread policy is implemented, but a fresh source-build proof
+  of the integrated code remains pending. No CPU wheel is published, and the
+  diagnostic artifact is not a publication candidate.
+  [The build guide](ASR_COMPONENTS_BUILD.md) records its exact identity and proof
+  limits; these bytes are not a final installed-runtime size or approved catalog
+  pin. Fixed-path repeatability is not path-independent or cross-machine
   reproducibility, and the Linux result below does not validate this Windows wheel.
 - **Native Apple Silicon setup proof passed:** MLX and Qwen private offline
   installation reproduced exactly, relocated imports passed, and the actual
