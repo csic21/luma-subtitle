@@ -135,24 +135,118 @@ test('signed redirect must be official HTTPS storage with no credentials, port, 
     'https://productionresultssa10.blob.core.windows.net.evil.test/a', 'https://user:secret@x.blob.core.windows.net/a',
     'https://x.blob.core.windows.net:8443/a', 'https://x.blob.core.windows.net/a#fragment']) assert.throws(() => p.artifactLocation(url));
 });
-test('download permission error is propagated unchanged without fallback or output', async t => {
+const API_URL = `https://api.github.com/repos/${p.REPOSITORY}/actions/artifacts/${p.ARTIFACT.id}/zip`;
+const STORAGE_URL = 'https://productionresultssa10.blob.core.windows.net/a?sig=never-log-signed-value';
+function nativeResponse(body, status, headers, url) {
+  const response = new Response(body, { status, headers });
+  // A constructed WHATWG Response has an empty url; emulate only the network URL.
+  Object.defineProperty(response, 'url', { value: url });
+  return response;
+}
+function compatibleTransport(apiFetch, apiUrl = API_URL, method = 'GET') {
+  const request = async (route, args) => {
+    assert.equal(route, 'GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}');
+    assert.equal(args.artifact_id, p.ARTIFACT.id);
+    assert.equal(args.request.parseSuccessResponseBody, false); assert.equal(args.request.retries, 0);
+    // @octokit/request 8.1.1 forwards these fields, not request.redirect. Use
+    // native Response/Headers/ReadableStream behavior, never a plain response stub.
+    const response = await args.request.fetch(apiUrl, { method, body: undefined,
+      headers: { authorization: 'token synthetic-unit-test' }, signal: args.request.signal });
+    assert(response instanceof Response);
+    return { status: response.status, url: response.url, headers: Object.fromEntries(response.headers), data: response.body };
+  };
+  request.endpoint = { DEFAULTS: { request: { fetch: apiFetch } } };
+  return { request };
+}
+test('native fetch hook forces manual redirect on the exact authenticated API transport and cancels its body', async t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const destination = path.join(root, 'diagnostic.zip'), denied = Object.assign(new Error('Resource not accessible by integration'), { status: 403 });
+  const destination = path.join(root, 'diagnostic.zip'), diagnostics = [];
+  const response = nativeResponse('unused redirect body', 302, { location: STORAGE_URL }, API_URL);
   let count = 0;
-  await assert.rejects(p.downloadExactArchive({ github: { request: async (route, args) => {
-    count++; assert.equal(args.artifact_id, p.ARTIFACT.id); assert.equal(args.request.redirect, 'manual'); throw denied;
-  } }, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination, fetchImpl: () => { throw new Error('must not fetch'); } }), error => error === denied);
-  assert.equal(count, 1); assert.equal(fs.existsSync(destination), false);
-});
-test('storage fetch never receives API authorization and changed bytes leave no output', async t => {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const destination = path.join(root, 'diagnostic.zip');
-  const github = { request: async () => ({ status: 302, headers: { location: 'https://productionresultssa10.blob.core.windows.net/a?sig=temporary' } }) };
-  await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination, fetchImpl: async (url, options) => {
-    assert.equal(options.redirect, 'error'); assert.equal(options.credentials, 'omit'); assert.equal(options.headers, undefined);
-    return { ...response([Buffer.from('wrong')]), ok: true };
-  } }), /bytes\/hash/);
+  const github = compatibleTransport(async (url, options) => {
+    count++; assert.equal(url, API_URL); assert.equal(options.redirect, 'manual');
+    assert.equal(options.credentials, 'omit'); assert.equal(options.headers.authorization, 'token synthetic-unit-test');
+    assert(options.signal instanceof AbortSignal); return response;
+  });
+  await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination,
+    core: { info: message => diagnostics.push(message) }, fetchImpl: async (url, options) => {
+      assert.equal(url.href, STORAGE_URL); assert.equal(options.redirect, 'error'); assert.equal(options.credentials, 'omit');
+      assert.equal(options.headers, undefined); assert.equal(options.body, undefined);
+      return nativeResponse('wrong archive bytes', 200, {}, STORAGE_URL);
+    } }), /storage verification/);
+  assert.equal(count, 1); assert.equal(response.bodyUsed, true);
   assert.equal(fs.existsSync(destination), false);
+  assert(!JSON.stringify(diagnostics).includes('never-log-signed-value'));
+  assert(!JSON.stringify(diagnostics).includes('synthetic-unit-test'));
+  assert.match(diagnostics[0], /"status":302/); assert.match(diagnostics[0], /"location_present":true/);
+});
+for (const status of [401, 403, 404, 429, 500]) test(`API HTTP ${status} stops once with sanitized diagnostics and no storage fetch`, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const destination = path.join(root, 'diagnostic.zip'); let count = 0;
+  const response = nativeResponse('private-error-body-sentinel', status, { location: STORAGE_URL }, API_URL);
+  const github = compatibleTransport(async () => { count++; return response; });
+  await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination,
+    fetchImpl: () => { throw new Error('must not fetch storage'); } }), error => {
+    assert.equal(error.status, status); assert.match(error.message, new RegExp(`"status":${status}`));
+    assert(!JSON.stringify(error).includes('private-error-body-sentinel')); assert(!error.message.includes('never-log-signed-value'));
+    assert.equal(error.request, undefined); assert.equal(error.response, undefined); return true;
+  });
+  assert.equal(count, 1); assert.equal(response.bodyUsed, true); assert.equal(fs.existsSync(destination), false);
+});
+for (const [url, method] of [['https://api.github.com/other', 'GET'], [STORAGE_URL, 'GET'], [API_URL, 'POST']]) {
+  test(`unexpected API URL/method fails before configured transport (${method}, ${url === API_URL ? 'exact' : 'other'})`, async t => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    let count = 0;
+    const github = compatibleTransport(async () => { count++; throw new Error('must not fetch'); }, url, method);
+    await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination: path.join(root, 'archive.zip') }), /API request/);
+    assert.equal(count, 0);
+  });
+}
+test('unexpected followed API response is rejected without reading or relabeling archive bytes', async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const response = nativeResponse('must-not-read', 200, { 'content-type': 'application/zip' }, STORAGE_URL);
+  Object.defineProperty(response, 'redirected', { value: true });
+  const github = compatibleTransport(async () => response);
+  await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination: path.join(root, 'archive.zip'),
+    fetchImpl: () => { throw new Error('must not fetch storage'); } }), /"status":200.*"redirected":true/);
+  assert.equal(response.bodyUsed, true);
+});
+test('transport summary never exposes URL paths, query values, header values or response bodies', () => {
+  const summary = p.transportSummary(nativeResponse('secret-body', 403, { location: STORAGE_URL, authorization: 'secret-token', 'content-type': 'secret-type' }, STORAGE_URL));
+  assert.deepEqual(summary, { status: 403, type: 'default', redirected: false, origin: 'github-blob-storage', headers: 'fetch',
+    location_present: true, content_type_present: true, content_length_present: false });
+  assert.throws(() => p.artifactLocation('secret-invalid-url'), error => !JSON.stringify(error).includes('secret-invalid-url'));
+});
+for (const stage of ['API', 'storage']) test(`${stage} transport exceptions cannot expose signed URLs or credentials`, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sensitive = new Error(`Never echo ${STORAGE_URL} or token synthetic-unit-test`);
+  let apiCalls = 0, storageCalls = 0;
+  const github = compatibleTransport(async () => {
+    apiCalls++; if (stage === 'API') throw sensitive;
+    return nativeResponse(null, 302, { location: STORAGE_URL }, API_URL);
+  });
+  await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination: path.join(root, 'archive.zip'),
+    fetchImpl: async () => { storageCalls++; throw sensitive; } }), error => {
+    assert(!error.message.includes('never-log-signed-value')); assert(!error.message.includes('synthetic-unit-test'));
+    assert.equal(error.cause, undefined); assert.equal(error.request, undefined); assert.equal(error.response, undefined); return true;
+  });
+  assert.equal(apiCalls, 1); assert.equal(storageCalls, stage === 'API' ? 0 : 1);
+});
+for (const status of [302, 403]) test(`storage HTTP ${status} stops without redirect, fallback or body exposure`, async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const github = compatibleTransport(async () => nativeResponse(null, 302, { location: STORAGE_URL }, API_URL));
+  let calls = 0; const response = nativeResponse('private-storage-body', status, { location: 'https://other.example/?private' }, STORAGE_URL);
+  await assert.rejects(p.downloadExactArchive({ github, repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination: path.join(root, 'archive.zip'),
+    fetchImpl: async (_url, options) => { calls++; assert.equal(options.redirect, 'error'); return response; } }), error => {
+    assert.equal(error.status, status); assert(!error.message.includes('private-storage-body')); assert(!error.message.includes('other.example')); return true;
+  });
+  assert.equal(calls, 1); assert.equal(response.bodyUsed, true);
+});
+test('missing configured action transport fails closed rather than using an alternate API fetch', async t => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  await assert.rejects(p.downloadExactArchive({ github: { request() { throw new Error('must not call'); } },
+    repo: { owner: 'csic21', repo: 'luma-subtitle' }, destination: path.join(root, 'archive.zip'),
+    fetchImpl() { throw new Error('must not use alternate transport'); } }), /configured|Pinned action API fetch transport is unavailable/);
 });
 test('existing archive is never overwritten', async t => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ct2-replay-'))); t.after(() => fs.rmSync(root, { recursive: true, force: true }));

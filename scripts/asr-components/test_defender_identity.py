@@ -55,15 +55,63 @@ class DefenderIdentityTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 subject.defender_platform_path(path, PROGRAM_DATA)
 
-    def test_registry_value_never_expands_or_accepts_commands(self):
+    def test_literal_registry_value_never_accepts_variables_or_commands(self):
         for kind in (1, 2):
             self.assertEqual(subject.defender_registry_value(DEFENDER, kind), DEFENDER)
             self.assertEqual(subject.defender_registry_value('"' + DEFENDER + '"', kind), DEFENDER)
-        for value, kind in [(DEFENDER, 4), (1, 1), ('%ProgramData%\\MpOav.dll', 2),
+        for value, kind in [(DEFENDER, 4), (1, 1), ('%ProgramData%\\MpOav.dll', 1),
                             ('"' + DEFENDER, 1), ('"' + DEFENDER + '" /run', 1),
                             (DEFENDER + '\x00extra', 1), ('x' * 32768, 1)]:
             with self.subTest(value=value, kind=kind), self.assertRaises(ValueError):
                 subject.defender_registry_value(value, kind)
+
+    def test_observed_expand_string_uses_only_os_known_folder(self):
+        class Key:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+        value = '"' + DEFENDER.replace(PROGRAM_DATA, '%ProgramData%') + '"'
+        self.assertEqual(len(value), 76)
+        registry = SimpleNamespace(KEY_READ=0x20019, KEY_WOW64_64KEY=0x100,
+            HKEY_LOCAL_MACHINE='HKLM', OpenKey=lambda *args: Key(), QueryValueEx=lambda *args: (value, 2))
+        with patch.dict(sys.modules, winreg=registry), redirect_stderr(io.StringIO()) as err, \
+             patch.dict(os.environ, ProgramData=r'C:\attacker', PROGRAMDATA=r'C:\attacker', ALLUSERSPROFILE=r'C:\attacker'), \
+             patch.object(subject, 'windows_program_data', return_value=PROGRAM_DATA) as known_folder, \
+             patch('os.path.expandvars', side_effect=AssertionError('environment expansion forbidden')):
+            self.assertEqual(subject.defender_registered_path(), DEFENDER)
+            known_folder.assert_called_once_with()
+        diagnostic = json.loads(err.getvalue().split('=', 1)[1])
+        self.assertEqual(diagnostic['raw_value'], value)
+        self.assertEqual(diagnostic['registry_value_type'], 2)
+        self.assertEqual(diagnostic['quote_count'], 2)
+        self.assertNotIn('attacker', err.getvalue())
+
+    def test_program_data_token_rejects_other_expansions_arguments_and_escape(self):
+        value = DEFENDER.replace(PROGRAM_DATA, '%ProgramData%')
+        rejected = [(value, 1), (value.replace('%ProgramData%', '%ALLUSERSPROFILE%'), 2),
+                    (value.replace('%ProgramData%', '%ProgramFiles%'), 2),
+                    (value.replace('%ProgramData%', '%PROGRAMDATA%'), 2),
+                    (value.replace('%ProgramData%', '%ProgramData%%TEMP%'), 2),
+                    (value.replace('Microsoft', '%ProgramData%\\Microsoft'), 2),
+                    (value.replace('MpOav.dll', '%MODULE%'), 2),
+                    ('C:\\prefix\\' + value, 2), (value.replace('%ProgramData%', '%ProgramData%other'), 2),
+                    (value.replace('Microsoft', '..\\Microsoft'), 2),
+                    (value.replace('Microsoft', '.\\Microsoft'), 2),
+                    (value.replace('Microsoft', '\\Microsoft'), 2),
+                    (value.replace('Windows Defender', 'other'), 2),
+                    (value.replace('MpOav.dll', 'msvcp140.dll'), 2),
+                    (value.replace('MpOav.dll', 'MpOav.dll:stream'), 2),
+                    (value + ' /run', 2), ('"' + value + '" /run', 2),
+                    (value + '\x00', 2), ('"' + value, 2)]
+        with patch.object(subject, 'windows_program_data', return_value=PROGRAM_DATA), \
+             patch('os.path.expandvars', side_effect=AssertionError('environment expansion forbidden')):
+            for raw, value_type in rejected:
+                with self.subTest(raw=raw, value_type=value_type), self.assertRaises(ValueError):
+                    subject.defender_registry_value(raw, value_type)
+            self.assertEqual(subject.defender_registry_value(value, 2), DEFENDER)
+            with self.assertRaises(ValueError): subject.defender_registry_value('%ProgramData%\\MpOav.dll', 2)
+        with patch.object(subject, 'windows_program_data', side_effect=ValueError('known folder unavailable')):
+            with self.assertRaisesRegex(ValueError, 'known folder unavailable'):
+                subject.defender_registry_value(value, 2)
 
     def test_registry_uses_exact_native_machine_keys(self):
         calls = []
@@ -87,7 +135,7 @@ class DefenderIdentityTests(unittest.TestCase):
         class Key:
             def __enter__(self): return self
             def __exit__(self, *args): pass
-        value = '%ProgramData%\\Microsoft\\Windows Defender\\Platform\\4.18.26080.4-0\\MpOav.dll'
+        value = '%ALLUSERSPROFILE%\\Microsoft\\Windows Defender\\Platform\\4.18.26080.4-0\\MpOav.dll'
         registry = SimpleNamespace(KEY_READ=0x20019, KEY_WOW64_64KEY=0x100,
             HKEY_LOCAL_MACHINE='HKLM', OpenKey=lambda *args: Key(), QueryValueEx=lambda *args: (value, 2))
         with patch.dict(sys.modules, winreg=registry), redirect_stderr(io.StringIO()) as err, \

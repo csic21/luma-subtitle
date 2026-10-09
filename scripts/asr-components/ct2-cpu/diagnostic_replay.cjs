@@ -137,7 +137,8 @@ function validateArtifact(artifact, cpu, now = Date.now()) {
   return artifact;
 }
 function artifactLocation(location) {
-  const url = new URL(location);
+  let url;
+  try { url = new URL(location); } catch { throw new Error('Invalid GitHub artifact storage redirect'); }
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash
       || !(url.hostname.endsWith('.blob.core.windows.net') || url.hostname.endsWith('.actions.githubusercontent.com'))) {
     throw new Error('Unexpected GitHub artifact storage redirect');
@@ -156,18 +157,76 @@ async function readPinnedArchive(fetched, pin) {
   if (bytes !== pin.bytes || digest.digest('hex') !== pin.sha256) throw new Error('Diagnostic archive bytes/hash differ');
   return Buffer.concat(chunks);
 }
-async function downloadExactArchive({ github, repo, destination, fetchImpl = fetch }) {
+function transportSummary(response) {
+  const headers = response?.headers;
+  const present = name => typeof headers?.get === 'function' ? headers.get(name) !== null : typeof headers?.[name] === 'string';
+  let origin = 'unavailable';
+  try {
+    const url = new URL(response.url);
+    origin = url.origin === 'https://api.github.com' ? 'api.github.com'
+      : url.protocol === 'https:' && url.hostname.endsWith('.blob.core.windows.net') ? 'github-blob-storage'
+      : url.protocol === 'https:' && url.hostname.endsWith('.actions.githubusercontent.com') ? 'github-actions-storage' : 'other';
+  } catch {}
+  return { status: Number.isInteger(response?.status) && response.status >= 100 && response.status <= 599 ? response.status : null,
+    type: ['basic', 'cors', 'default', 'error', 'opaque', 'opaqueredirect'].includes(response?.type) ? response.type : 'unavailable',
+    redirected: typeof response?.redirected === 'boolean' ? response.redirected : null, origin,
+    headers: typeof headers?.get === 'function' ? 'fetch' : headers && typeof headers === 'object' ? 'object' : 'unavailable',
+    location_present: present('location'), content_type_present: present('content-type'), content_length_present: present('content-length') };
+}
+function transportError(stage, summary) {
+  const error = new Error(`Diagnostic artifact ${stage} failed: ${JSON.stringify(summary)}`);
+  if (summary.status !== null) error.status = summary.status;
+  return error;
+}
+async function downloadExactArchive({ github, repo, destination, fetchImpl = fetch, core }) {
   if (`${repo.owner}/${repo.repo}` !== REPOSITORY) throw new Error('Diagnostic downloads are restricted to the exact repository');
   if (fs.existsSync(destination)) throw new Error('Replay download destination must be fresh');
-  const response = await github.request('GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}', {
-    ...repo, artifact_id: ARTIFACT.id, archive_format: 'zip', request: { redirect: 'manual', signal: AbortSignal.timeout(90000) },
-  });
-  if (response.status !== 302 || typeof response.headers?.location !== 'string') throw new Error('Expected one GitHub artifact redirect');
+  const apiUrl = `https://api.github.com/repos/${REPOSITORY}/actions/artifacts/${ARTIFACT.id}/zip`;
+  // github-script v7.0.1 bundles @octokit/request 8.1.1, which does not forward
+  // request.redirect. Its supported fetch hook must enforce it at the boundary:
+  // https://github.com/octokit/request.js/blob/v8.1.1/src/fetch-wrapper.ts
+  // Retain the action's configured (including proxy-aware) API fetch transport.
+  const apiFetch = github.request?.endpoint?.DEFAULTS?.request?.fetch;
+  if (typeof apiFetch !== 'function') throw new Error('Pinned action API fetch transport is unavailable');
+  let apiSummary, response;
+  try {
+    response = await github.request('GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/{archive_format}', {
+      ...repo, artifact_id: ARTIFACT.id, archive_format: 'zip',
+      request: { parseSuccessResponseBody: false, retries: 0, signal: AbortSignal.timeout(90000),
+        fetch: async (url, options) => {
+          if (url !== apiUrl || options?.method !== 'GET' || options.body != null) throw new Error('Unexpected artifact API request');
+          const fetched = await apiFetch(url, { ...options, redirect: 'manual', credentials: 'omit' });
+          apiSummary = transportSummary(fetched);
+          core?.info(`Diagnostic artifact API response: ${JSON.stringify(apiSummary)}`);
+          // No redirect/error body is needed. Cancel it before Octokit can parse
+          // a response or include body content in an error object.
+          if (fetched.body) await fetched.body.cancel();
+          if (fetched.status !== 302 || fetched.redirected !== false || fetched.url !== apiUrl) throw transportError('API response', apiSummary);
+          return fetched;
+        } },
+    });
+  } catch (error) {
+    // Never log Request/Response objects, authorization, signed URLs or bodies.
+    throw transportError('API request', apiSummary || transportSummary(error?.response || error));
+  }
+  if (response.status !== 302 || response.url !== apiUrl || typeof response.headers?.location !== 'string') {
+    throw transportError('API redirect shape', apiSummary || transportSummary(response));
+  }
   const location = artifactLocation(response.headers.location);
   // No GitHub token is forwarded to the signed storage URL, or into logs/receipts.
-  const fetched = await fetchImpl(location, { redirect: 'error', signal: AbortSignal.timeout(90000), credentials: 'omit' });
-  if (!fetched.ok || !fetched.body) throw new Error('Diagnostic archive download failed');
-  const bytes = await readPinnedArchive(fetched, ARTIFACT);
+  let fetched, bytes;
+  try {
+    fetched = await fetchImpl(location, { redirect: 'error', signal: AbortSignal.timeout(90000), credentials: 'omit' });
+    core?.info(`Diagnostic artifact storage response: ${JSON.stringify(transportSummary(fetched))}`);
+    if (fetched.status !== 200 || fetched.redirected !== false || fetched.url !== location.href || !fetched.body) {
+      if (fetched.body) await fetched.body.cancel();
+      throw transportError('storage response', transportSummary(fetched));
+    }
+    bytes = await readPinnedArchive(fetched, ARTIFACT);
+  } catch {
+    if (fetched?.body && !fetched.body.locked) await fetched.body.cancel().catch(() => {});
+    throw transportError('storage verification', transportSummary(fetched));
+  }
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.writeFileSync(destination, bytes, { flag: 'wx', mode: 0o600 });
   return ARTIFACT;
@@ -183,7 +242,7 @@ async function retrieveReplayArtifact({ github, context, core, destination, rece
   const { data: before } = await github.rest.actions.getArtifact({ ...repo, artifact_id: ARTIFACT.id });
   validateArtifact(before, cpu);
   if (fs.existsSync(receiptPath)) throw new Error('Replay retrieval receipt must be fresh');
-  await downloadExactArchive({ github, repo, destination, fetchImpl });
+  await downloadExactArchive({ github, repo, destination, fetchImpl, core });
   const { data: after } = await github.rest.actions.getArtifact({ ...repo, artifact_id: ARTIFACT.id });
   validateArtifact(after, cpu);
   if (!equal(before, after)) throw new Error('Diagnostic artifact changed during retrieval');
@@ -198,4 +257,4 @@ async function retrieveReplayArtifact({ github, context, core, destination, rece
 }
 module.exports = { REPOSITORY, REPOSITORY_ID, BRANCH, REQUEST_PATH, PURPOSE, PRODUCER, ARTIFACT, ARTIFACT_NAME,
   FILES, MANIFEST, parseRequest, assertReplayTree, prepareReplayRequest, validateProducer, validateArtifact,
-  artifactLocation, readPinnedArchive, downloadExactArchive, retrieveReplayArtifact, hash, equal };
+  artifactLocation, readPinnedArchive, transportSummary, downloadExactArchive, retrieveReplayArtifact, hash, equal };

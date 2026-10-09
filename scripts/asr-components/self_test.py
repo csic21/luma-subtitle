@@ -77,18 +77,26 @@ def defender_platform_path(value, program_data):
 
 
 def defender_registry_value(value, value_type):
-    # Real InprocServer32 values may include one pair of quotes. Never expand
-    # environment variables, accept arguments or consult HKCU's merged HKCR.
+    # Real InprocServer32 values may include one pair of quotes. Never use
+    # inherited environment expansion, accept arguments or consult merged HKCR.
     if value_type not in (1, 2) or not isinstance(value, str) or len(value) > 32767:
         raise ValueError('Defender registration is not a bounded registry string')
     if value.startswith('"') and value.endswith('"'):
         value = value[1:-1]
     if '\x00' in value:
         raise ValueError('Defender registration contains a NUL character')
-    if '%' in value:
-        raise ValueError('Defender registration contains an unexpanded reference')
     if '"' in value:
         raise ValueError('Defender registration contains unmatched/interior quotes')
+    if '%' in value:
+        # Native CI observed this one token in REG_EXPAND_SZ (type 2). Resolve
+        # it through the OS known-folder API, never os.environ/ExpandEnvironmentStrings.
+        # No other token, multiple expansion, or REG_SZ variable is supported.
+        token = '%ProgramData%\\'
+        if value_type != 2 or not value.startswith(token) or '%' in value[len(token):]:
+            raise ValueError('Defender registration contains an unsupported unexpanded reference')
+        program_data = windows_program_data()
+        value = program_data + '\\' + value[len(token):]
+        defender_platform_path(value, program_data)
     return value
 
 
