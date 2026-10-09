@@ -65,7 +65,7 @@ private target/build interpreter remains the byte-locked PBS runtime. It:
    Windows SDK. Records compiler/linker/resource-tool versions and SHA-256 values.
    A serviced image with a different version fails closed for review.
 3. Inventories the official toolchain's original x64 CRT redistributable files,
-   names, versions, hashes and Authenticode signers. It does not copy those files.
+   names, versions, hashes and Authenticode signers before any private proof copy.
    A bounded read-only scan of the exact installation/Redist trees records
    existing public license-document metadata and recognizable Microsoft terms.
    It skips activation/key files and links; recovered text is evidence for
@@ -80,6 +80,11 @@ private target/build interpreter remains the byte-locked PBS runtime. It:
 6. Creates a new private PBS runtime and uses the shared guarded offline pip
    installer with the existing faster-whisper 1.2.1 closure, replacing only CT2
    with this locally built wheel. The original CT2 wheel is skipped before fetch.
+   In the reviewed licensed hosted-CI environment only, adds the exact original
+   `msvcp140.dll` and `msvcp140_1.dll` after checking their source paths, signatures,
+   versions and bytes. Existing PBS VCRUNTIME files must be identical to the same
+   official Redist versions. Existing notices and the observed Redist pointer
+   remain intact; no runtime or CRT binaries are uploaded.
 7. Relocates that runtime to a Unicode/spaced path and inventories every EXE, DLL
    and PYD, including PE delay imports. Unknown dependencies, any GPU/MKL/OpenMP
    runtime and any missing private VC CRT block the proof before imports.
@@ -134,11 +139,15 @@ are review inputs. Microsoft conditions redistribution on applicable licensed
 Visual Studio use and terms. A signed file and a REDIST entry are provenance,
 not by themselves a confirmed redistribution grant for this project.
 
-The initial proof deliberately fails if the complete private CRT closure is
-missing. `crt-candidates.json` plus `whole-runtime-native.json` identify exact
-inputs for a separate reviewed app-local CRT decision. There is currently no
-approved CRT sidecar input and no automatic CRT copying, global installation,
-DLL substitution or source/static-CRT workaround.
+`crt_proof.py` permits only a CI-local technical test using the two reviewed
+original files from the licensed hosted Visual Studio installation. The source
+version is 14.44.35211.0, and PBS's existing VCRUNTIME files exactly match those
+same-version original hashes. This does not authorize a public CRT sidecar.
+`private-crt-proof.json` records every identity and retains the unmodified
+187-byte Redist pointer as pointer-only evidence, never as a license grant.
+The independent public-redistribution gate remains false. The proof still fails
+for any missing private dependency or host-global loaded CRT; no global install,
+DLL substitution or source/static-CRT workaround is used.
 
 ## Release hold
 

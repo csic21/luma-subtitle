@@ -3,7 +3,9 @@
 These are opt-in, application-managed components, separate from the native
 whisper.cpp app release. End users do not install Python, run pip, change PATH,
 use an administrator account, or install a compiler. Model downloads are a
-separate explicit choice and are never part of the engine ZIP.
+separate explicit choice and are never part of engine assembly. Whole-runtime ZIP
+publication is retired; the active CI uploads only proof metadata. The local ZIP
+format below is retained as a deterministic comparison and security-test fixture.
 
 ## Pinned component set
 
@@ -167,14 +169,19 @@ continue, but current reports are not redistribution clearance.
 
 The read-only `.github/workflows/asr-components.yml` runs on native Windows x64
 and macOS arm64 runners. PR jobs check out `pull_request.head.sha` explicitly.
-It is also callable with an exact `source_sha` and component `tag`. Each job also runs the genuine-archive Rust installer test for install, repair,
-cancellation and removal before upload. Every job is
-named `Build component <pack-id>` and uploads `asr-component-<pack-id>` containing:
+It is also callable with an exact `source_sha` and component `tag`. Every job is
+named `Build component <pack-id>`. The primary proof assembles the exact inputs
+twice with the shared offline installer, compares output bytes, tests relocation
+and imports, and then runs the genuine Rust direct-recipe lifecycle test for
+install, repair, cancellation rollback and removal. The legacy whole-runtime ZIP
+reference build and its duplicate installer run are no longer active CI steps.
+Archive/security unit tests remain required, alongside final aggregate native
+verification for the exact candidate source.
 
-- the ZIP
-- `<pack-id>.manifest.json`
-- `<pack-id>.smoke.json`
-- `LICENSES-<pack-id>.json`
+Each job uploads only `asr-offline-pip-proof-<pack-id>`, containing
+`<pack-id>.offline-pip-proof.json`. No runtime binaries, model weights or input
+caches are uploaded. A missing recipe or failed native dependency check is not
+reported as a successful end-user installation.
 
 The build host's Python handles build orchestration only. The test extracts the
 ZIP, verifies actual uncompressed bytes/counts, moves it to another directory with
@@ -215,6 +222,10 @@ behavior on every clean user machine.
 
 ## Publication boundary
 
+Whole-runtime binary publication is retired. The historical release/controller
+contract below is not an active delivery route; any future reviewed CPU-only
+dependency publication requires its own explicit approval and source closure.
+
 The build workflow has read-only repository permissions and never uploads release
 assets, creates tags, modifies the app release, or updates the application catalog.
 A separately reviewed publication controller must verify the exact successful PR
@@ -222,7 +233,7 @@ source/run, approved archive and manifest hashes, and rebuilt evidence before an
 release mutation. Published component tags/assets must be immutable; mismatches
 must fail rather than overwrite. A failed or untested pack remains unavailable.
 
-## Direct-upstream assembly proof (not yet a delivery claim)
+## Direct-upstream assembly proof (activation requires final review)
 
 The separate `assemble.py` entrypoint is shared with the planned application
 installer. It is install-time assembly only; transcription never invokes pip.

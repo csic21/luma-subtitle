@@ -31,6 +31,7 @@ sys.path.insert(0, str(COMPONENTS))
 from build import unpack_runtime
 from native_inventory import closure, digest, inventory
 from license_inventory import discover as discover_installed_licenses
+from crt_proof import copy_proof_crt
 
 ALLOWED = {'codeload.github.com', 'github.com', 'files.pythonhosted.org', 'huggingface.co', 'raw.githubusercontent.com'}
 
@@ -158,6 +159,19 @@ def build_environment(runtime):
     return env
 
 
+def verified_tool_payload(runtime, archive, member, installed_relative):
+    installed = runtime / installed_relative
+    if installed.is_symlink() or not installed.is_file() or not installed.resolve().is_relative_to(runtime.resolve()):
+        raise ValueError('Pinned build executable is missing from its private installation path')
+    with zipfile.ZipFile(archive) as wheel:
+        if wheel.namelist().count(member) != 1:
+            raise ValueError('Pinned build executable is not unique in its source wheel')
+        expected = hashlib.sha256(wheel.read(member)).hexdigest()
+    if digest(installed) != expected:
+        raise ValueError('Installed build executable differs from the pinned wheel payload')
+    return installed
+
+
 def install_build_tools(runtime, lock, cache, work, env, reports):
     wheelhouse = work / 'build-wheelhouse'; wheelhouse.mkdir()
     requirements = []
@@ -170,7 +184,23 @@ def install_build_tools(runtime, lock, cache, work, env, reports):
     command([executable, '-I', '-B', '-m', 'pip', '--isolated', '--disable-pip-version-check', '--no-cache-dir',
              'install', '--no-index', '--no-deps', '--require-hashes', '--only-binary=:all:', '--no-compile',
              '--force-reinstall', '-r', req], cwd=work, env=env, logfile=reports / 'tools.log', timeout=300)
-    return (runtime / 'Lib/site-packages/cmake/data/bin/cmake.exe', runtime / 'Lib/site-packages/ninja/data/bin/ninja.exe')
+    # Ninja 1.11.1.4 uses the wheel .data/scripts scheme, unlike CMake's
+    # package-owned data/bin path. Never fall back to a runner-global executable.
+    layouts = [('cmake', 'cmake/data/bin/cmake.exe', 'Lib/site-packages/cmake/data/bin/cmake.exe', 'cmake version 3.31.6'),
+               ('ninja', 'ninja-1.11.1.4.data/scripts/ninja.exe', 'Scripts/ninja.exe', '1.11.1.git.kitware.jobserver-1')]
+    paths, details = [], []
+    for name, member, installed_relative, expected_version in layouts:
+        item = next(w for w in lock['build_wheels'] if w['name'] == name)
+        path = verified_tool_payload(runtime, wheelhouse / item['filename'], member, installed_relative)
+        result = subprocess.run([str(path), '--version'], cwd=work, env=env, check=True,
+                                capture_output=True, text=True, timeout=30)
+        if not result.stdout.splitlines() or result.stdout.splitlines()[0] != expected_version:
+            raise ValueError('Pinned build executable reports an unexpected version: ' + name)
+        paths.append(path)
+        details.append({'name': name, 'installed_path': installed_relative, 'wheel_member': member,
+                        'sha256': digest(path), 'version': expected_version, 'source_wheel_sha256': item['sha256']})
+    dump(reports / 'build-tool-payloads.json', details)
+    return tuple(paths)
 
 
 def notice_files():
@@ -325,6 +355,7 @@ def private_proof(args, lock, wheel, runtime_archive, env):
     command([root / 'python.exe', '-I', '-S', '-B', '-X', 'utf8', COMPONENTS / 'assemble.py', '--runtime-root', root,
              '--wheel-lock', runtime_lock_path, '--wheelhouse', wheelhouse], cwd=args.work, env=env,
             logfile=args.reports / 'assembly.log', timeout=600)
+    copy_proof_crt(root, args.reports)
     relocated = args.work / 'Relocated private Python é 测试'; root.rename(relocated); root = relocated
     native = closure(inventory(root)); dump(args.reports / 'whole-runtime-native.json', native)
     if not native['passed']:

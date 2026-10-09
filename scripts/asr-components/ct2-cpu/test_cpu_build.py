@@ -98,6 +98,21 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(any(x['component'] == 'thread-pool' for x in lock['files']))
         self.assertTrue(any(x['component'] == 'pybind11' for x in lock['files']))
 
+    def test_build_tool_scripts_scheme_requires_exact_private_payload(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work); archive = root / 'ninja.whl'
+            member = 'ninja-1.11.1.4.data/scripts/ninja.exe'
+            target = root / 'Scripts/ninja.exe'
+            with zipfile.ZipFile(archive, 'w') as wheel:
+                wheel.writestr(member, b'PINNED EXE BYTES')
+            with self.assertRaises(ValueError):
+                build.verified_tool_payload(root, archive, member, 'Scripts/ninja.exe')
+            target.parent.mkdir(); target.write_bytes(b'PINNED EXE BYTES')
+            self.assertEqual(build.verified_tool_payload(root, archive, member, 'Scripts/ninja.exe'), target)
+            target.write_bytes(b'WRONG EXE')
+            with self.assertRaises(ValueError):
+                build.verified_tool_payload(root, archive, member, 'Scripts/ninja.exe')
+
     def test_source_version_accepts_upstream_docstring_without_execution(self):
         build.validate_source_version('"""Version information."""\n\n__version__ = "4.8.2"\n')
         build.validate_source_version("# metadata\r\n__version__ = '4.8.2'\r\n")
