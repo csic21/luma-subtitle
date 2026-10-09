@@ -1,0 +1,53 @@
+name: Release recovery
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release-recovery.yml'
+      - 'scripts/*release*.cjs'
+  push:
+    branches: [main]
+    paths: ['.github/release-recovery.json']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: luma-release-pipeline
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Recovery controller regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs scripts/recover-release.node-test.cjs
+
+  recover:
+    name: Verify existing packages and recover publication
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout reviewed recovery controller
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install official minisign verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes minisign
+      - name: Validate original builds and publish the unchanged signed packages
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { recoverRelease } = require('./scripts/recover-release.cjs');
+            await recoverRelease({ github, context, core });
