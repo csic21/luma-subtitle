@@ -27,7 +27,8 @@ class ComponentBuildTests(unittest.TestCase):
             with zipfile.ZipFile(a) as z:
                 i = z.infolist()[0]
                 self.assertEqual(i.date_time, (2026, 1, 1, 0, 0, 0)); self.assertTrue(stat.S_ISREG(i.external_attr >> 16))
-                self.assertEqual((i.external_attr >> 16) & 0o777, 0o755)
+                expected_mode = 0o755 if p.stat().st_mode & 0o111 else 0o644
+                self.assertEqual((i.external_attr >> 16) & 0o777, expected_mode)
 
     def test_runtime_link_dereferenced(self):
         with tempfile.TemporaryDirectory() as tmp:
