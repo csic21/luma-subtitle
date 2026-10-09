@@ -37,7 +37,7 @@ function sameEntries(before, after, except) {
   return JSON.stringify(normalize(before)) === JSON.stringify(normalize(after));
 }
 
-async function assertRequestOnlyTree(github, repo, sourceSha, requestSha) {
+async function assertRequestOnlyTree(github, repo, sourceSha, requestSha, requestName = 'release-request.json') {
   const [before, after] = await Promise.all([tree(github, repo, sourceSha), tree(github, repo, requestSha)]);
   const beforeGithub = before.find((entry) => entry.path === '.github');
   const afterGithub = after.find((entry) => entry.path === '.github');
@@ -48,9 +48,9 @@ async function assertRequestOnlyTree(github, repo, sourceSha, requestSha) {
   const [beforeFiles, afterFiles] = await Promise.all([
     tree(github, repo, beforeGithub.sha), tree(github, repo, afterGithub.sha),
   ]);
-  const beforeRequest = beforeFiles.find((entry) => entry.path === 'release-request.json');
-  const afterRequest = afterFiles.find((entry) => entry.path === 'release-request.json');
-  if (!sameEntries(beforeFiles, afterFiles, 'release-request.json')
+  const beforeRequest = beforeFiles.find((entry) => entry.path === requestName);
+  const afterRequest = afterFiles.find((entry) => entry.path === requestName);
+  if (!sameEntries(beforeFiles, afterFiles, requestName)
       || afterRequest?.type !== 'blob' || afterRequest.mode !== '100644'
       || beforeRequest?.sha === afterRequest.sha) {
     throw new Error('Release request commit must change only its regular request file');
@@ -155,6 +155,12 @@ async function prepareRelease({ github, context, core }) {
     release = (await github.rest.repos.getReleaseByTag({ ...repo, tag })).data;
   } catch (error) {
     if (error.status !== 404) throw error;
+    // The tag endpoint returns only published releases. Authenticated release
+    // listings also contain drafts, including drafts left by failed builds.
+    const matches = (await github.paginate(github.rest.repos.listReleases,
+      { ...repo, per_page: 100 })).filter((candidate) => candidate.tag_name === tag);
+    if (matches.length > 1) throw new Error('Multiple releases match this tag; refusing ambiguous draft recovery');
+    release = matches[0];
   }
   const prerelease = tag.includes('-') || context.payload.inputs?.prerelease === 'true';
   if (release) {

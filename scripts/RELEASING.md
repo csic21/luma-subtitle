@@ -64,3 +64,46 @@ node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs
 
 The focused tests mock GitHub and signature results; actual installer builds and
 production-key signature verification run on the release runners.
+
+## Recover a built release without moving its tag
+
+GitHub draft assets may use `untagged-<id>` browser URLs until publication. The
+publisher validates their same-repository API identities and SHA-256 digests,
+downloads by asset ID, and verifies all updater signatures. The updater manifest
+always contains canonical version-tag URLs. After publication, asset metadata
+must expose those canonical URLs without changing any verified byte identity.
+
+When the application packages already built successfully but a controller check
+failed, review and merge the controller fix first. Keep the app source, version
+tag and all original binary assets unchanged. Then add a separate main commit
+changing only `.github/release-recovery.json`, with exactly these fields:
+
+- `schema_version`: 1
+- `controller_sha`: the request commit's only parent, containing the reviewed fix
+- `source_sha`: the immutable original application source commit
+- `tag`: the existing application version tag
+- `release_id`: the intended existing draft/release ID
+- `build_run_id` and `build_run_attempt`: the original completed Release run/attempt
+- `assets`: the seven original asset snapshots, each containing `name`, `id`,
+  `size`, and `digest` (the full `sha256:...` value)
+
+The new Release recovery workflow verifies the request-only tree, current main
+head, original request/source tree, source versions, tag, release source marker,
+repository/workflow/run identity and both successful platform jobs. It reads public
+Actions provenance through fixed `api.github.com` URLs without sending credentials
+or adding Actions/Workflows token permissions. Its only publication mutations are
+creating/replacing a draft `latest.json` after verification and publishing that
+same release. Binary assets and tags are never replaced. An interrupted empty
+GitHub draft manifest upload may be cleaned up only after signatures pass.
+
+An already-published exact match is fully reverified read-only; its existing date,
+manifest and assets are never overwritten. Any mismatch fails closed. If GitHub
+requires a permission unavailable to the existing token, stop and report the
+specific permission rather than changing credentials or target metadata. Public
+package URLs should also be independently downloaded and checked after publishing.
+
+Run all controller tests with:
+
+```sh
+node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs scripts/recover-release.node-test.cjs
+```

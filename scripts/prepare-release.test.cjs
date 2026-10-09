@@ -25,10 +25,17 @@ function fixture() {
       before: [entry('workflows', 'workflows', 'tree')],
       after: [entry('workflows', 'workflows', 'tree'), entry('release-request.json', 'request')],
     },
-    versions: [...versions], release: null,
+    versions: [...versions], release: null, paginations: 0,
   };
   const missing = () => { throw Object.assign(new Error('Not Found'), { status: 404 }); };
-  const github = { rest: {
+  const github = {
+    paginate: async (method, args) => {
+      assert.equal(method, github.rest.repos.listReleases);
+      assert.equal(args.per_page, 100);
+      state.paginations++;
+      return (await method(args)).data;
+    },
+    rest: {
     git: {
       getTree: async ({ tree_sha }) => ({ data: { tree: state.trees[tree_sha], truncated: state.truncated || false } }),
       getRef: async ({ ref }) => ref === 'heads/main'
@@ -48,7 +55,8 @@ function fixture() {
         if (index !== -1) assert.equal(ref, source, 'versions must be read from the pinned source');
         return { data: { type: 'file', encoding: 'base64', content: Buffer.from(index === -1 ? JSON.stringify(state.request) : state.versions[index]).toString('base64') } };
       },
-      getReleaseByTag: async () => state.release ? { data: state.release } : missing(),
+      getReleaseByTag: async () => state.release && !state.release.draft ? { data: state.release } : missing(),
+      listReleases: async () => ({ data: state.listedReleases || (state.release ? [state.release] : []) }),
       createRelease: async (args) => { mutations.push(['draft', args]); return { data: { ...args, id: 42 } }; },
     },
   } };
@@ -154,6 +162,37 @@ test('a matching failed draft is reused, while mismatched draft source is reject
   assert.deepEqual(f.mutations, []);
   f.state.release.body = sourceMarker(head);
   await assert.rejects(prepareRelease(f), /source does not match/);
+});
+
+test('draft recovery uses paginated listings when the tag endpoint returns 404', async () => {
+  const f = fixture();
+  f.state.existingTag = { type: 'commit', sha: source };
+  const draft = { id: 84, tag_name: tag, draft: true, prerelease: false, body: sourceMarker(source) };
+  f.state.listedReleases = [
+    ...Array.from({ length: 100 }, (_, index) => ({ id: index, tag_name: `v0.0.${index}`, draft: false })),
+    draft,
+  ];
+  await prepareRelease(f);
+  assert.equal(f.state.paginations, 1);
+  assert.equal(f.outputs.release_id, '84');
+  assert.deepEqual(f.mutations, []);
+});
+
+test('ambiguous draft matches never create or select a release', async () => {
+  const f = fixture();
+  f.state.existingTag = { type: 'commit', sha: source };
+  f.state.listedReleases = [1, 2].map((id) => ({ id, tag_name: tag, draft: true, body: sourceMarker(source) }));
+  await assert.rejects(prepareRelease(f), /Multiple releases/);
+  assert.deepEqual(f.mutations, []);
+});
+
+test('non-404 tag lookup errors propagate without trying draft recovery', async () => {
+  const f = fixture();
+  f.state.existingTag = { type: 'commit', sha: source };
+  f.github.rest.repos.getReleaseByTag = async () => { throw Object.assign(new Error('Forbidden'), { status: 403 }); };
+  await assert.rejects(prepareRelease(f), /Forbidden/);
+  assert.equal(f.state.paginations, 0);
+  assert.deepEqual(f.mutations, []);
 });
 
 test('ordinary tag push builds that tag and rejects a moved or deleted tag', async () => {
