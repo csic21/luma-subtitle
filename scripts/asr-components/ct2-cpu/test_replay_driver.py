@@ -20,6 +20,16 @@ def archive(entries):
     return stream.getvalue()
 
 
+def raw_name_archive(name):
+    """Retain an exact local/central ZIP name without writer normalization."""
+    raw = name.encode('ascii')
+    placeholder = b'q' * len(raw)
+    data = archive([(placeholder.decode('ascii'), b'payload')])
+    if data.count(placeholder) != 2:
+        raise AssertionError('Expected exactly the local and central filename')
+    return data.replace(placeholder, raw)
+
+
 def fixture():
     provenance={'luma_source_sha':replay.PRODUCER};exports=[]
     sources=archive([('BUILD-PROVENANCE.json',json.dumps(provenance)),('SOURCE-EXPORTS.json',json.dumps(exports)),
@@ -77,6 +87,26 @@ class ReplayDriverTests(unittest.TestCase):
         for attr,flag in ((0o120777<<16,0),(0,1)):
             info=zipfile.ZipInfo('safe');info.external_attr=attr;info.flag_bits=flag
             with self.assertRaises(ValueError):replay.safe_member(info)
+
+    def test_raw_backslash_archive_name_survives_fixture_and_is_rejected_on_windows(self):
+        data = raw_name_archive('a\\b')
+        self.assertEqual(data.count(b'a\\b'), 2)
+        # Exercise the real ZipInfo separator normalization on every host;
+        # Path/filesystem operations remain outside this short-lived patch.
+        with patch.object(zipfile.os, 'sep', '\\'), zipfile.ZipFile(io.BytesIO(data)) as source:
+            info, = source.infolist()
+            self.assertEqual(info.orig_filename, 'a\\b')
+            self.assertEqual(info.filename, 'a/b')
+            with self.assertRaises(ValueError): replay.safe_member(info)
+
+    def test_raw_nul_archive_name_survives_fixture_and_is_rejected(self):
+        data = raw_name_archive('safe\x00hidden')
+        self.assertEqual(data.count(b'safe\x00hidden'), 2)
+        with zipfile.ZipFile(io.BytesIO(data)) as source:
+            info, = source.infolist()
+            self.assertEqual(info.orig_filename, 'safe\x00hidden')
+            self.assertEqual(info.filename, 'safe')
+            with self.assertRaises(ValueError): replay.safe_member(info)
 
     def test_origin_and_original_failure_cannot_be_relabelled(self):
         _,pins,manifest=fixture()

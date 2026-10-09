@@ -51,7 +51,9 @@ def check_bytes(data, pin):
 def safe_member(info):
     name = info.filename
     mode = info.external_attr >> 16
-    if (not name or '\\' in name or ':' in name or PurePosixPath(name).is_absolute()
+    # ZipInfo normalizes Windows separators and truncates NULs. Inspecting only
+    # filename would hide those original archive names from the checks below.
+    if (info.orig_filename != name or not name or '\\' in name or ':' in name or PurePosixPath(name).is_absolute()
             or any(part in ('', '.', '..') for part in name.split('/'))
             or info.is_dir() or info.flag_bits & 1
             or (stat.S_IFMT(mode) not in (0, stat.S_IFREG)) or info.file_size > 50_000_000):
