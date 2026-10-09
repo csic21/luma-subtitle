@@ -1,8 +1,12 @@
 """Native CI assembly using the same exact direct-Microsoft CRT contract."""
 import hashlib
+import base64
+from contextlib import contextmanager
+import ctypes
+import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import struct
@@ -58,6 +62,7 @@ def prepare(output, cache, source_sha):
     target = cache / pin['sha256']
     if target.exists(): verified(target, pin['bytes'], pin['sha256'])
     else: shutil.copyfile(installer, target)
+    prove_cab_paths(work, output, source_sha)
     return work
 
 
@@ -109,7 +114,7 @@ def gui_subsystem(path):
     return subsystem
 
 
-def helper_process(command, env, cwd):
+def helper_process_bytes(command, env, cwd):
     # Redirect inherited handles as the shipping app does. File-backed bounded
     # output avoids detached reader threads and unbounded capture buffers.
     with tempfile.TemporaryFile(dir=cwd) as stdout, tempfile.TemporaryFile(dir=cwd) as stderr:
@@ -124,11 +129,102 @@ def helper_process(command, env, cwd):
             child.wait(); stdout.seek(0); stderr.seek(0)
             out, err = stdout.read(16_385), stderr.read(16_385)
             if len(out) + len(err) > 16_384: raise ValueError('Real CRT app helper exceeded its output bound')
-            return child.returncode, out.decode('utf-8'), err.decode('utf-8')
+            return child.returncode, out, err
         except BaseException:
             if child.poll() is None: child.kill()
             child.wait()
             raise
+
+
+def helper_process(command, env, cwd):
+    code, out, err = helper_process_bytes(command, env, cwd)
+    return code, out.decode('utf-8'), err.decode('utf-8')
+
+
+def verbatim_disk_path(path):
+    path = PureWindowsPath(path)
+    drive = path.drive.removeprefix('\\\\?\\')
+    if not path.is_absolute() or len(drive) != 2 or drive[1] != ':' or not drive[0].isascii() or not drive[0].isalpha():
+        raise ValueError('CAB path proof requires a local absolute disk path')
+    if '..' in path.parts: raise ValueError('CAB path proof rejects parent traversal')
+    return Path(str(path) if str(path).startswith('\\\\?\\') else '\\\\?\\' + str(path))
+
+
+@contextmanager
+def held_cabinet(path):
+    # Match production FILE_SHARE_READ: keep the exact verified CAB immutable
+    # while the existing system expand.exe reads it. No policy/ACL changes.
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle; close.argtypes = (wintypes.HANDLE,); close.restype = wintypes.BOOL
+    handle = create(str(path), 0x80000000, 1, None, 3, 0x80, None)
+    if handle == ctypes.c_void_p(-1).value: raise ctypes.WinError(ctypes.get_last_error())
+    try: yield
+    finally: close(handle)
+
+
+def cab_environment(work, temporary, system_directory):
+    kept = {'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'NUMBER_OF_PROCESSORS'}
+    env = {key: value for key, value in os.environ.items() if key.upper() in kept}
+    env['PATH'] = ';'.join(map(str, (work, work / 'bin', system_directory)))
+    for key in ('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TMP', 'TEMP', 'TMPDIR'): env[key] = str(temporary)
+    env.update(HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', HF_DATASETS_OFFLINE='1',
+               HF_HUB_DISABLE_IMPLICIT_TOKEN='1', HF_HUB_DISABLE_TELEMETRY='1', DO_NOT_TRACK='1', LANG='C.UTF-8')
+    return env
+
+
+def prove_cab_paths(source, output, source_sha):
+    """Diagnostic only: compare the old argv with fixed names under a Unicode cwd.
+
+    The Rust managed installer remains the required production extraction gate.
+    A legacy invocation may fail; every fixed-name output must match its pin.
+    """
+    if sys.platform != 'win32': raise ValueError('CAB path proof requires native Windows')
+    spec = importlib.util.spec_from_file_location('luma_crt_audit', ROOT / 'ct2-cpu/direct-crt/audit_direct_crt.py')
+    audit = importlib.util.module_from_spec(spec); spec.loader.exec_module(audit)
+    expand = audit.system_expand(); lock = json.loads(CONTRACT.read_text(encoding='utf-8'))
+    results = []; parent_cwd = Path.cwd()
+    with tempfile.TemporaryDirectory(prefix='CRT CAB paths é 测试 ', dir=output) as tmp:
+        work = verbatim_disk_path(Path(tmp).resolve(strict=True))
+        temporary = work / 'private-temp'; temporary.mkdir()
+        env = cab_environment(work, temporary, expand.parent)
+        for name, pin in lock['containers'].items():
+            verified(source / name, pin['bytes'], pin['sha256']); shutil.copyfile(source / name, work / name)
+        cases = [('legacy-absolute-verbatim', 'attached.cab', lock['containers']['attached.cab'], lock['minimum_cab']),
+                 ('fixed-relative', 'attached.cab', lock['containers']['attached.cab'], lock['minimum_cab'])]
+        cases += [('fixed-relative', 'minimum-x64.cab', lock['minimum_cab'], pin) for pin in lock['dlls'].values()]
+        cases += [('fixed-relative', 'ux.cab', lock['containers']['ux.cab'], pin) for pin in lock['notices'].values()]
+        for form, cabinet_name, cabinet_pin, pin in cases:
+            cabinet = work / cabinet_name; member = pin['member']
+            directory_name = ('legacy-' if form.startswith('legacy-') else 'extract-') + member
+            destination = work / directory_name; destination.mkdir()
+            args = [str(cabinet), '-F:' + member, str(destination)] if form.startswith('legacy-') else [cabinet_name, '-F:' + member, directory_name]
+            with held_cabinet(cabinet):
+                verified(cabinet, cabinet_pin['bytes'], cabinet_pin['sha256'])
+                code, out, err = helper_process_bytes([str(expand), *args], env, work)
+            result = {'argument_form': form, 'cabinet': cabinet_name, 'member': member, 'exit_code': code,
+                      'stdout': out.decode('utf-8', errors='replace'), 'stderr': err.decode('utf-8', errors='replace'),
+                      'stdout_base64': base64.b64encode(out).decode('ascii'), 'stderr_base64': base64.b64encode(err).decode('ascii')}
+            # Emit exact bounded status/bytes even if the required path later
+            # fails; successful legacy behavior is evidence too, never assumed.
+            print('LUMA_CRT_CAB_PATH ' + json.dumps(result, ensure_ascii=True), flush=True)
+            results.append(result)
+            if code:
+                if form.startswith('legacy-'): continue
+                raise RuntimeError(f'Fixed relative CAB extraction failed for {member}: exit {code}; see LUMA_CRT_CAB_PATH')
+            if sorted(item.name for item in destination.iterdir()) != [member]: raise ValueError('CAB path proof produced unexpected outputs')
+            verified(destination / member, pin['bytes'], pin['sha256']); result['verified_sha256'] = pin['sha256']
+            if form == 'fixed-relative' and member == lock['minimum_cab']['member']:
+                (destination / member).rename(work / 'minimum-x64.cab')
+        if Path.cwd() != parent_cwd: raise AssertionError('CAB path proof changed the parent working directory')
+    report = {'schema': 1, 'source_sha': source_sha, 'passed': True, 'results': results,
+              'unicode_verbatim_cwd': True, 'input_held_read_only': True, 'installer_executed': False,
+              'scope': 'Diagnostic only; the independent Rust managed install/repair/remove gate is still required'}
+    (output / 'direct-crt-cab-paths.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8', newline='\n')
+    return report
 
 
 def prove_app_helper(cache, output):

@@ -29,8 +29,19 @@ const MAX_STDERR_BYTES: usize = 4096;
 const WORKER_SOURCE: &str = include_str!("worker.py");
 const NAGISA_COMPAT_SOURCE: &str = include_str!("nagisa_compat.py");
 const NAGISA_COMPAT_MARKER: &str = "# LUMA_NAGISA_COMPAT_SOURCE";
+const CT2_CPU_POLICY_MARKER: &str = "# LUMA_MANAGED_CT2_CPU_POLICY";
+const CT2_CPU_POLICY_SOURCE: &str = "LUMA_MANAGED_CT2_CPU_POLICY = \"luma-cpu-seq-1\"";
 
-fn prepared_worker_source(source: &str, managed_windows_qwen: bool) -> Result<String, String> {
+fn prepared_worker_source(source: &str, managed_windows_qwen: bool, managed_windows_ct2_cpu: bool) -> Result<String, String> {
+    if managed_windows_qwen && managed_windows_ct2_cpu {
+        return Err("A managed worker cannot select two runtime policies.".into());
+    }
+    if managed_windows_ct2_cpu {
+        if source.matches(CT2_CPU_POLICY_MARKER).count() != 1 {
+            return Err("Managed CPU runtime policy marker is missing or ambiguous.".into());
+        }
+        return Ok(source.replacen(CT2_CPU_POLICY_MARKER, CT2_CPU_POLICY_SOURCE, 1));
+    }
     if !managed_windows_qwen { return Ok(source.to_owned()); }
     if source.matches(NAGISA_COMPAT_MARKER).count() != 1 {
         return Err("Managed Qwen compatibility source marker is missing or ambiguous.".into());
@@ -64,6 +75,8 @@ fn managed_worker_directory(python: &str, managed_windows_qwen: bool) -> JobResu
 pub(crate) struct AsrRuntime {
     worker: AsyncMutex<Option<Worker>>,
     stopping: AtomicBool,
+    #[cfg(test)]
+    ct2_receipt_proof: Option<crate::asr_components::ManagedCt2RuntimeProof>,
 }
 
 /// Excludes transcription/probes while a managed component is validated or
@@ -73,6 +86,13 @@ pub(crate) struct ComponentMaintenanceGuard<'a> {
 }
 
 impl AsrRuntime {
+    fn spawn_worker(&self, config: &AsrConfig) -> JobResult<Worker> {
+        #[cfg(test)]
+        if let Some(proof) = &self.ct2_receipt_proof {
+            return Worker::spawn_for_receipt_proof(config, WORKER_SOURCE, proof);
+        }
+        Worker::spawn(config, WORKER_SOURCE)
+    }
     pub(crate) async fn begin_component_maintenance(
         &self,
     ) -> Result<ComponentMaintenanceGuard<'_>, String> {
@@ -158,10 +178,10 @@ impl AsrRuntime {
                 worker
             } else {
                 worker.stop().await;
-                Worker::spawn(config, WORKER_SOURCE)?
+                self.spawn_worker(config)?
             }
         } else {
-            Worker::spawn(config, WORKER_SOURCE)?
+            self.spawn_worker(config)?
         };
         let id = uuid::Uuid::new_v4().to_string();
         let payload = json!({"id":id,"op":operation,"engine":config.engine,"model_path":config.model_path,"aligner_path":config.aligner_path,"device":config.device,"language":language.unwrap_or("auto"),"audio_path":audio.map(|p| p.to_string_lossy().to_string())});
@@ -229,8 +249,24 @@ impl Worker {
         let managed_windows_qwen = cfg!(windows) && config.engine == "qwen3-asr"
             && crate::asr_components::verified_managed_windows_qwen_runtime(&config.python_path)
                 .map_err(JobError::failed)?;
-        let source = prepared_worker_source(source, managed_windows_qwen).map_err(JobError::failed)?;
+        let managed_windows_ct2_cpu = cfg!(windows) && config.engine == "whisper-accelerated"
+            && matches!(config.device.as_str(), "cpu" | "auto")
+            && crate::asr_components::verified_managed_windows_ct2_cpu_runtime(&config.python_path)
+                .map_err(JobError::failed)?;
+        let source = prepared_worker_source(source, managed_windows_qwen, managed_windows_ct2_cpu).map_err(JobError::failed)?;
         let working_directory = managed_worker_directory(&config.python_path, managed_windows_qwen)?;
+        Self::spawn_prepared(config, &source, managed_use_leases, working_directory)
+    }
+    #[cfg(test)]
+    fn spawn_for_receipt_proof(config: &AsrConfig, source: &str, proof: &crate::asr_components::ManagedCt2RuntimeProof) -> JobResult<Self> {
+        if !cfg!(windows) || config.engine != "whisper-accelerated" || !matches!(config.device.as_str(), "cpu" | "auto") {
+            return Err(JobError::failed("The test-owned receipt proof requires the managed Windows CPU recipe."));
+        }
+        let leases = proof.acquire(&config.python_path).map_err(JobError::failed)?;
+        let source = prepared_worker_source(source, false, true).map_err(JobError::failed)?;
+        Self::spawn_prepared(config, &source, leases, None)
+    }
+    fn spawn_prepared(config: &AsrConfig, source: &str, managed_use_leases: Vec<std::fs::File>, working_directory: Option<PathBuf>) -> JobResult<Self> {
         // A file avoids Windows' 32K command-line limit. It contains only the
         // embedded application code, never user media, settings or credentials.
         let script_path =
@@ -589,6 +625,7 @@ pub(crate) async fn run_real_optional_worker_fixture(
     audio: &Path,
     long_audio: &Path,
     output: &Path,
+    ct2_receipt_proof: Option<crate::asr_components::ManagedCt2RuntimeProof>,
 ) {
     // Shared by the opt-in environment wrapper and the real managed installer
     // fixture. The assertions exercise the same production worker lifecycle.
@@ -615,9 +652,11 @@ pub(crate) async fn run_real_optional_worker_fixture(
         "model_revision":pins["faster_whisper_tiny"]["version"],"audio_sha256":pins["audio"]["sha256"],
         "cold_warm_srt_export_tested":false,"active_cancellation_recovery_tested":false,
         "injected_lease_retention_tested":false,"global_managed_path_selection_tested":false,
+        "managed_receipt_policy_selection_tested":ct2_receipt_proof.is_some(),
+        "cpu_thread_policy":if ct2_receipt_proof.is_some() { Some("luma-cpu-seq-1:cpu_threads=1") } else { None },
         "stop_policy":"production kill-and-reap","graceful_eof_tested":false,"transitions":[]});
     real_worker_lifecycle::checkpoint(&output,&report);
-    let runtime = AsrRuntime::default();
+    let runtime = AsrRuntime { ct2_receipt_proof, ..Default::default() };
     let cancel = Arc::new(AtomicBool::new(false));
     let probe = runtime
         .request(
@@ -633,6 +672,9 @@ pub(crate) async fn run_real_optional_worker_fixture(
         .unwrap();
     assert_eq!(probe["ready"], true, "{probe}");
     assert_eq!(probe["device"], "cpu");
+    if runtime.ct2_receipt_proof.is_some() {
+        assert!(probe["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().is_some_and(|text| text.contains("cpu_threads=1"))));
+    }
     let initial_pid = real_worker_lifecycle::pid(&runtime).await;
     let duration = super::wav_duration_ms(audio).unwrap();
     for (id, reused) in [("cold", false), ("warm", true)] {
@@ -778,14 +820,27 @@ mod tests {
     use super::*;
     #[test]
     fn compatibility_source_requires_explicit_managed_gate_and_unique_marker() {
-        assert_eq!(prepared_worker_source(WORKER_SOURCE, false).unwrap(), WORKER_SOURCE);
-        let prepared = prepared_worker_source(WORKER_SOURCE, true).unwrap();
+        assert_eq!(prepared_worker_source(WORKER_SOURCE, false, false).unwrap(), WORKER_SOURCE);
+        let prepared = prepared_worker_source(WORKER_SOURCE, true, false).unwrap();
         assert!(prepared.contains("LUMA_MANAGED_QWEN_RUNTIME = True"));
         assert!(prepared.contains("def luma_prepare_nagisa()"));
         assert!(!prepared.contains(NAGISA_COMPAT_MARKER));
         assert!(prepared.find("from __future__ import annotations").unwrap() < prepared.find("def luma_prepare_nagisa()").unwrap());
-        assert!(prepared_worker_source("print('manual')", true).is_err());
-        assert!(prepared_worker_source(&format!("{NAGISA_COMPAT_MARKER}\n{NAGISA_COMPAT_MARKER}"), true).is_err());
+        assert!(prepared_worker_source("print('manual')", true, false).is_err());
+        assert!(prepared_worker_source(&format!("{NAGISA_COMPAT_MARKER}\n{NAGISA_COMPAT_MARKER}"), true, false).is_err());
+    }
+    #[test]
+    fn ct2_policy_source_is_explicit_unique_and_separate_from_qwen() {
+        let source = prepared_worker_source(WORKER_SOURCE, false, true).unwrap();
+        assert_eq!(source.matches(CT2_CPU_POLICY_SOURCE).count(), 1);
+        assert!(!source.contains(CT2_CPU_POLICY_MARKER));
+        assert!(source.contains(NAGISA_COMPAT_MARKER));
+        assert!(!source.contains("LUMA_MANAGED_QWEN_RUNTIME = True"));
+        assert!(source.find("from __future__ import annotations").unwrap() < source.find(CT2_CPU_POLICY_SOURCE).unwrap());
+        assert!(prepared_worker_source(WORKER_SOURCE, true, true).is_err());
+        assert!(prepared_worker_source("print('manual')", false, true).is_err());
+        assert!(prepared_worker_source(&format!("{CT2_CPU_POLICY_MARKER}\n{CT2_CPU_POLICY_MARKER}"), false, true).is_err());
+        assert!(!prepared_worker_source(WORKER_SOURCE, true, false).unwrap().contains(CT2_CPU_POLICY_SOURCE));
     }
     #[test]
     fn managed_worker_directory_is_canonical_and_does_not_change_app_cwd() {
@@ -1094,7 +1149,7 @@ mod tests {
             let output = std::path::PathBuf::from(
                 std::env::var("LUMA_ASR_TEST_OUTPUT").expect("set an isolated output directory"),
             );
-            run_real_optional_worker_fixture(&config, &replacement_model, &audio, &long_audio, &output).await;
+            run_real_optional_worker_fixture(&config, &replacement_model, &audio, &long_audio, &output, None).await;
         });
     }
 

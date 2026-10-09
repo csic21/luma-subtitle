@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,25 @@ def owned(command, timeout=900, env=None):
         raise RuntimeError(f'Proof child failed: {result}')
 
 
-def prove_native_installer(pack_id, output, cache, recipe_candidates):
+def validate_native_worker_lifecycle(lifecycle,fixture,source_sha):
+    expected=['model-replacement','release-idle','legacy-release','active-cancellation','shutdown']
+    if (not re.fullmatch('[a-f0-9]{40}',source_sha or '') or lifecycle.get('schema')!=1
+            or lifecycle.get('passed') is not True or lifecycle.get('verifier_source_sha')!=source_sha
+            or lifecycle.get('embedded_worker_sha256')!=sha256(ROOT.parent.parent/'src-tauri/src/asr/worker.py')
+            or lifecycle.get('model_revision')!=fixture['model_revision']
+            or lifecycle.get('audio_sha256')!=fixture['audio_sha256']
+            or lifecycle.get('managed_receipt_policy_selection_tested') is not True
+            or lifecycle.get('cpu_thread_policy')!='luma-cpu-seq-1:cpu_threads=1'
+            or lifecycle.get('global_managed_path_selection_tested') is not False
+            or any(lifecycle.get(key) is not True for key in ('injected_lease_retention_tested',
+                    'cold_warm_srt_export_tested','active_cancellation_recovery_tested'))
+            or [t.get('operation') for t in lifecycle.get('transitions',[])]!=expected
+            or any(t.get('process_exited_when_lease_available') is not True or t.get('script_removed') is not True
+                   for t in lifecycle['transitions'])):
+        raise ValueError('Receipt-selected native worker lifecycle evidence is incomplete or mismatched')
+
+
+def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progress=None,source_sha=None):
     candidate = next(runtime for runtime in json.loads(recipe_candidates.read_text(encoding='utf-8'))['runtimes'] if runtime['id'] == pack_id)
     recipe = candidate.get('recipe')
     if recipe is None:
@@ -30,6 +49,7 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates):
     inputs = output / 'recipe inputs é 测试'; inputs.mkdir()
     fixtures = output/'real worker fixtures é 测试'; owns_fixtures = False
     runtime_path = output/'recipe-runtime.json'
+    tree_drained=True
     try:
         dump(runtime_path, candidate)
         artifacts = [(recipe['python'], recipe['python']['sha256'])] + [(wheel, wheel['filename']) for wheel in recipe['wheels']]
@@ -45,6 +65,7 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates):
             shutil.copyfile(source, inputs / name)
         env = {key:value for key,value in os.environ.items() if not key.upper().startswith('LUMA_ASR_TEST_')}
         env.update(LUMA_ASR_RECIPE_RUNTIME=str(runtime_path),LUMA_ASR_RECIPE_INPUTS=str(inputs))
+        if source_sha is not None:env['LUMA_ASR_TEST_VERIFIER_SOURCE_SHA']=source_sha
         from real_worker_fixture import final_cpu_recipe, prepare
         worker_fixture = None
         if final_cpu_recipe(candidate):
@@ -52,16 +73,50 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates):
             owns_fixtures = True
             fixture_env, worker_fixture = prepare(cache,fixtures); env.update(fixture_env)
         test = 'native_direct_recipe_installs_repairs_and_removes'
-        owned(['cargo', 'test', '--manifest-path', str(ROOT.parent.parent / 'src-tauri/Cargo.toml'), '--locked',
-               test, '--', '--ignored', '--nocapture'], timeout=1800, env=env)
-        return {'tested': True, 'passed': True, 'test': test,
+        result={'tested': True, 'passed': False, 'test': test,
                 'real_worker_lifecycle': {'tested': bool(worker_fixture), 'fixtures': worker_fixture,
-                'managed_use_lease_tested': False,
-                'scope': 'Existing real worker against test-activated bytes; global managed-use lease integration remains a separate test.'}}
+                'managed_use_lease_tested': False,'global_managed_path_selection_tested':False,
+                'scope': 'Receipt-selected production CPU policy under a test-owned managed root/catalog; global embedded-catalog selection is not tested.'}}
+        command=['cargo', 'test', '--manifest-path', str(ROOT.parent.parent / 'src-tauri/Cargo.toml'), '--locked',
+                 test, '--', '--ignored', '--nocapture']
+        if sys.platform=='win32':
+            from windows_test_job import JobRunError, run_owned_tree
+            cargo=shutil.which('cargo')
+            if not cargo:raise ValueError('Native Cargo build tool is missing')
+            command[0]=str(Path(cargo).resolve(strict=True));job_result=None
+            result['windows_owned_job']={'tree_drained':False,'job_start_pending':True}
+            if progress:progress(result)
+            tree_drained=False
+            try:
+                job_result=run_owned_tree(command,cwd=ROOT.parent.parent,env=env,timeout=1800,output_limit=8*1024*1024)
+            except JobRunError as error:
+                job_result=error.result;raise
+            finally:
+                if job_result is not None:
+                    tree_drained=job_result.get('tree_drained') is True
+                    result['windows_owned_job']={key:value for key,value in job_result.items() if key not in ('stdout','stderr')}
+                    # These are the same Cargo/test streams formerly inherited
+                    # by this process. The supervisor has already bounded them.
+                    print(job_result.get('stdout',''),end='',flush=True)
+                    print(job_result.get('stderr',''),end='',file=sys.stderr,flush=True)
+                if progress:progress(result)
+            if not tree_drained:raise RuntimeError('Native installer Windows Job drain was not confirmed')
+            if job_result['exit_code']!=0:raise RuntimeError(f"Native installer Cargo failed: {job_result['exit_code']}")
+        else:owned(command,timeout=1800,env=env)
+        if worker_fixture:
+            from real_worker_fixture import bounded_json
+            lifecycle=bounded_json(Path(env['LUMA_ASR_TEST_OUTPUT'])/'lifecycle.json',fixtures,64*1024)
+            result['real_worker_lifecycle']['lifecycle']=lifecycle
+            if progress:progress(result)
+            validate_native_worker_lifecycle(lifecycle,worker_fixture,source_sha)
+            result['real_worker_lifecycle']['managed_use_lease_tested']=True
+        result['passed']=True
+        return result
     finally:
-        shutil.rmtree(inputs)
-        runtime_path.unlink(missing_ok=True)
-        if owns_fixtures and fixtures.exists(): shutil.rmtree(fixtures)
+        if tree_drained:
+            shutil.rmtree(inputs)
+            runtime_path.unlink(missing_ok=True)
+            if owns_fixtures and fixtures.exists(): shutil.rmtree(fixtures)
 
 
 def main():
@@ -79,9 +134,10 @@ def main():
     first, second = output / 'first', output / 'second'
     one = build(args.pack, first, cache, args.source_sha, installer='pip', windows_crt=windows_crt)
     two = build(args.pack, second, cache, args.source_sha, installer='pip', windows_crt=windows_crt)
-    crt_signatures = None
+    crt_signatures = None;crt_cab_paths=None
     if windows_crt:
         crt_signatures = json.loads((output / 'direct-crt-signatures.json').read_text(encoding='utf-8-sig'))
+        crt_cab_paths = json.loads((output / 'direct-crt-cab-paths.json').read_text(encoding='utf-8'))
         shutil.rmtree(windows_crt)
     assert one['archive'] == two['archive'], 'Offline pip output must reproduce exactly'
     assert (first / (args.pack + '.manifest.json')).read_bytes() == (second / (args.pack + '.manifest.json')).read_bytes()
@@ -94,19 +150,31 @@ def main():
     # disposable reference output before Rust exercises its independent staging,
     # installed copy and atomic repair. User-space requirements stay enforced.
     shutil.rmtree(first)
-    native_installer = prove_native_installer(args.pack, output, cache, args.recipe_candidates.resolve())
-    app_helper = None
-    if windows_crt:
-        from windows_crt_proof import prove_app_helper
-        app_helper = prove_app_helper(cache, output)
     report = {'schema': 1, 'pack_id': args.pack, 'source_sha': args.source_sha,
               'method': 'private-offline-pip', 'reproducible': True,
               'recipe_candidates_sha256': sha256(args.recipe_candidates),
               'assembly': assembly, 'runtime_smoke': smoke,
               'windows_crt_signatures': crt_signatures,
-              'app_helper_test': app_helper,
-              'native_installer_test': native_installer, 'publication_authorized': False}
+              'windows_crt_cab_paths': crt_cab_paths,
+              'app_helper_test': None,
+              'native_installer_test': {'tested':False,'passed':False}, 'publication_authorized': False}
     destination = output / (args.pack + '.offline-pip-proof.json')
+    def native_progress(value):
+        report['native_installer_test']=value
+        # Proof-housekeeping checkpoint, not production runtime state. A killed
+        # caller must not mistake missing final drain evidence for safe cleanup.
+        dump(destination,{**report,'passed':False,'stage':'native-installer-running'})
+    stage='native-installer'
+    try:
+        report['native_installer_test']=prove_native_installer(args.pack,output,cache,args.recipe_candidates.resolve(),progress=native_progress,source_sha=args.source_sha)
+        stage='app-helper'
+        if windows_crt:
+            from windows_crt_proof import prove_app_helper
+            report['app_helper_test']=prove_app_helper(cache,output)
+    except BaseException as error:
+        report.update(passed=False,stage=stage,error=type(error).__name__+': '+str(error)[:2000])
+        dump(destination,report);print(diagnostic_json(report,indent=2),flush=True)
+        raise
     dump(destination, report); print(diagnostic_json(report, indent=2))
     print('OFFLINE_PIP_PROOF_SHA256=' + sha256(destination))
     # The proof's binaries were reclaimed above and are never uploaded.

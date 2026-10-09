@@ -387,6 +387,52 @@ fn recipe_runtime() -> catalog::Runtime {
     runtime.recipe.as_ref().unwrap().validate(&runtime).unwrap(); runtime
 }
 #[test]
+fn managed_ct2_cpu_policy_requires_exact_recipe_and_active_receipt() {
+    let fixture = Fixture::new();
+    let mut runtime = recipe_runtime(); runtime.id = "faster-whisper-cpu-windows-x64".into();
+    let wheel = &mut runtime.recipe.as_mut().unwrap().wheels[0];
+    wheel.name = "ctranslate2".into(); wheel.version = "4.8.2".into();
+    wheel.filename = catalog::CPU_WHEEL_FILENAME.into(); wheel.url = catalog::CPU_WHEEL_URL.into();
+    assert!(reviewed_windows_ct2_cpu_recipe(&runtime));
+    for field in ["id", "platform", "engine", "backend", "device", "recipe", "name", "version", "filename", "url", "sha256", "bytes"] {
+        let mut other = runtime.clone();
+        match field {
+            "id" => other.id = "other".into(), "platform" => other.platform = "macos-arm64".into(),
+            "engine" => other.engine = "qwen3-asr".into(), "backend" => other.backend = "qwen3-asr".into(),
+            "device" => other.device = "cuda".into(), "recipe" => other.recipe = None,
+            key => { let wheel = &mut other.recipe.as_mut().unwrap().wheels[0]; match key {
+                "name" => wheel.name = "CTranslate2".into(), "version" => wheel.version = "4.8.3".into(),
+                "filename" => wheel.filename = "ctranslate2-4.8.2-cp312-cp312-win_amd64.whl".into(),
+                "url" => wheel.url = "https://files.pythonhosted.org/upstream.whl".into(),
+                "sha256" => wheel.sha256 = "invalid".into(), "bytes" => wheel.bytes = 0, _ => unreachable!(),
+            }}
+        }
+        assert!(!reviewed_windows_ct2_cpu_recipe(&other), "accepted {field}");
+    }
+    let catalog = catalog::Catalog { schema:1, platform:"windows-x64".into(), runtimes:vec![runtime.clone()], models:vec![] };
+    let component = Component::Runtime(runtime);
+    let stage = store::Staging::create(&fixture.root).unwrap();
+    fs::write(stage.payload().join("python.exe"), b"good").unwrap();
+    store::write_receipt(&stage.payload(), &component, vec![store::FileReceipt { path:"python.exe".into(), bytes:4, sha256:digest(b"good") }]).unwrap();
+    let python = store::commit(&fixture.root, &component, &stage).unwrap().python_path.unwrap();
+    let proof = ManagedCt2RuntimeProof::new(&fixture.root, &catalog, &python).unwrap();
+    assert!(!proof.acquire(&python).unwrap().is_empty());
+    let external = fixture.base.join("manual-python.exe"); fs::write(&external, b"good").unwrap();
+    assert!(!verified_managed_windows_ct2_cpu_runtime_at(&fixture.root, external.to_str().unwrap(), &catalog).unwrap());
+    assert!(proof.acquire(external.to_str().unwrap()).is_err());
+    let mut changed = catalog.clone(); changed.runtimes[0].recipe.as_mut().unwrap().wheels[0].sha256 = digest(b"different wheel");
+    assert!(verified_managed_windows_ct2_cpu_runtime_at(&fixture.root, &python, &changed).is_err());
+    fs::write(&python, b"evil").unwrap(); assert!(proof.acquire(&python).is_err());
+    fs::write(&python, b"good").unwrap();
+    let receipt = Path::new(&python).parent().unwrap().join(".luma-receipt.json");
+    let original = fs::read(&receipt).unwrap(); fs::write(&receipt, b"{}").unwrap();
+    assert!(proof.acquire(&python).is_err()); fs::write(&receipt, original).unwrap();
+    let next = store::Staging::create(&fixture.root).unwrap();
+    fs::write(next.payload().join("python.exe"), b"good").unwrap();
+    store::write_receipt(&next.payload(), &component, vec![store::FileReceipt { path:"python.exe".into(), bytes:4, sha256:digest(b"good") }]).unwrap();
+    store::commit(&fixture.root, &component, &next).unwrap(); assert!(proof.acquire(&python).is_err());
+}
+#[test]
 fn managed_qwen_compatibility_requires_active_interpreter_identity_not_model_lease() {
     let fixture = Fixture::new();
     let mut runtime = recipe_runtime();
@@ -731,7 +777,8 @@ fn native_direct_recipe_installs_repairs_and_removes() {
         let config = crate::asr::AsrConfig { engine:"whisper-accelerated".into(),device:"cpu".into(),
             python_path:installed_paths[1].join(&runtime.entrypoint).to_string_lossy().into_owned(),
             model_path:model.to_string_lossy().into_owned(),..Default::default() };
-        tauri::async_runtime::block_on(crate::asr::run_real_optional_worker_fixture(&config,&replacement_model,&audio,&long_audio,&output));
+        let receipt_proof = ManagedCt2RuntimeProof::new(&fixture.root,&catalog,&config.python_path).unwrap();
+        tauri::async_runtime::block_on(crate::asr::run_real_optional_worker_fixture(&config,&replacement_model,&audio,&long_audio,&output,Some(receipt_proof)));
         store::validate_files(&installed_paths[1],&component,&cancel).unwrap();
         println!("NATIVE_DIRECT_WORKER_LIFECYCLE_OK cold_warm_srt_export_cancel_recovery=true");
     }

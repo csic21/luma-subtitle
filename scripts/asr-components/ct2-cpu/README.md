@@ -46,12 +46,29 @@ its `/MD` Python extension with the `/MT` CMake static-library configuration.
 
 ## Performance limitations
 
-CTranslate2 uses its built-in custom threading when OpenMP is disabled, but
-oneDNN's SEQ GEMMs are sequential. This may be substantially slower than an
+CTranslate2 supports built-in custom threading when OpenMP is disabled, but
+this exact managed Windows `luma-cpu-seq-1` recipe passes `cpu_threads=1` through
+faster-whisper for reliable model cleanup. `num_workers=1` remains unchanged;
+this does not claim that the entire Python process has only one OS thread.
+oneDNN's SEQ GEMMs are also sequential. This may be substantially slower than an
 upstream MKL/OpenMP build on a multicore CPU. The proof makes no claim of speedup,
 parity with an upstream wheel, GPU support, or suitability for all model sizes.
 A passing Tiny test is a correctness check on the CI host, not a benchmark or
 validation of old/non-AVX machines.
+
+The production launcher selects the policy only after the exact owned CPU wheel
+recipe and active interpreter receipt match under a held managed-use lease.
+A model in managed storage or an inherited environment variable is insufficient.
+Manual Python runtimes, native Whisper, macOS/MLX, Qwen and CUDA are unchanged.
+The backend probe displays the reliability/CPU-performance limitation.
+
+Diagnostic run `37970005361`, verifier source
+`afce0a052750d3b92b32b97f5d17bf0a7522048a`, compared the original 25,058,630-byte
+wheel SHA-256 `4644c5eb94492ab61d9749ee122e12c612c03634495d9cb59b6c18e3404cd1c0`.
+All default-thread EOF/unload/model-switch cases timed out after 120 seconds;
+all explicit-one-thread cases exited normally. These are diagnostic cleanup
+observations, not speed benchmarks or final shipping proof. The original producer
+source and wheel identity remain distinct from the integrated verifier source.
 
 ## Build and verification
 
@@ -101,6 +118,17 @@ private target/build interpreter remains the byte-locked PBS runtime. It:
    audit to import actual backends and run the pinned Tiny/JFK fixture cold and
    warm. Requires valid transcription/timestamps and warm-model reuse; inventories
    the modules actually loaded and rejects host-global VC CRT fallback.
+   The installed `LUMA_CPU_BUILD.json` must match the exact source-build provenance
+   before the verifier prepares the same production worker CPU policy. It uses
+   no A/B constructor wrapper. Normal EOF, explicit unload and a separate Unicode
+   model-directory switch must pass; the outer process must exit normally.
+   Source-build policy selection is reported separately from the native installer's
+   receipt-selected Rust fixture and is not global managed-path-selection proof.
+   The shared strict Defender auditor is loaded from its recorded exact source
+   bytes. Only the registered, canonical, non-reparse `MpOav.dll` with valid
+   Microsoft product-root/signature/resource identity can be classified as a
+   host-security module. Newly loaded trust dependencies are re-audited within
+   three snapshots. Original CRT/GPU/OpenMP/MKL/TBB restrictions remain in force.
    These functional tests run on the exact first wheel even if the second build
    differs; that mismatch still fails the final proof and publication gate.
 

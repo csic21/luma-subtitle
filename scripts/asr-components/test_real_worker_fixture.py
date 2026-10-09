@@ -71,7 +71,9 @@ class RealWorkerFixtureTests(unittest.TestCase):
                 self.assertEqual(source.readframes(1),b'')
             self.assertEqual(f.sha256(repeated),report['cancellation_audio']['sha256'])
 
-    def test_native_failure_cleans_copied_inputs_and_partial_fixtures(self):
+    def test_non_windows_native_failure_cleans_copied_inputs_and_partial_fixtures(self):
+        # This covers the legacy non-Windows owned() path. Windows Job failure
+        # and confirmed/unknown drain cleanup are mocked in test_prove_offline_pip.
         for where in ('prepare','cargo'):
             with self.subTest(where=where), temporary_root() as root:
                 cache=root/'cache';cache.mkdir();output=root/'output';output.mkdir()
@@ -82,7 +84,7 @@ class RealWorkerFixtureTests(unittest.TestCase):
                     directory.mkdir();(directory/'partial-model').write_bytes(b'fixture')
                     if where=='prepare':raise RuntimeError('expected preparation failure')
                     return {},{'fixture':True}
-                with patch.object(f,'final_cpu_recipe',return_value=True), patch.object(f,'prepare',side_effect=prepare), patch.object(proof,'owned',side_effect=RuntimeError('expected cargo failure')):
+                with patch.object(proof.sys,'platform','darwin'),patch.object(f,'final_cpu_recipe',return_value=True), patch.object(f,'prepare',side_effect=prepare), patch.object(proof,'owned',side_effect=RuntimeError('expected cargo failure')):
                     with self.assertRaisesRegex(RuntimeError,'expected'):
                         proof.prove_native_installer('fixture',output,cache,candidates)
                 self.assertEqual(list(output.iterdir()),[])

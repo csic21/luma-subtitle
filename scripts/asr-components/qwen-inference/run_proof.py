@@ -37,6 +37,24 @@ def validate_ready(report, pack, source):
 def cleanup_private_outputs(output, pack):
     """Only the newly created proof directory is owned; preserve JSON evidence."""
     errors=[]
+    if pack.endswith('windows-x64'):
+        checkpoint=output/'native-readiness'/(pack+'.offline-pip-proof.json')
+        # This receipt is written before native Cargo can launch. No receipt
+        # means an earlier setup stage; a started/unknown Job must be retained.
+        try:
+            if checkpoint.is_symlink():raise ValueError('Native Job checkpoint is a link')
+            if checkpoint.exists():
+                if not checkpoint.is_file() or checkpoint.stat().st_size>2*1024*1024:
+                    raise ValueError('Native Job checkpoint exceeds its metadata bound')
+                receipt=json.loads(checkpoint.read_text(encoding='utf-8'))
+                native=receipt.get('native_installer_test',{})
+                if not isinstance(native,dict):raise ValueError('Invalid native Job checkpoint')
+                if 'windows_owned_job' in native:
+                    job=native['windows_owned_job']
+                    if not isinstance(job,dict) or job.get('tree_drained') is not True:
+                        return ['Owned Windows native installer Job drain is unconfirmed; private outputs preserved']
+        except (OSError,ValueError,TypeError,AttributeError):
+            return ['Native Windows Job checkpoint is unreadable; private outputs preserved']
     def remove(path):
         try:
             if path.is_symlink() or path.is_file(): path.unlink()

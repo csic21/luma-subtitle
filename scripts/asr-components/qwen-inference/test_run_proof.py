@@ -62,5 +62,39 @@ class Readiness(unittest.TestCase):
         report['app_helper_test']['passed']=False
         with self.assertRaises(ValueError): m.validate_ready(report, pack, 'a'*40)
 
+    def test_windows_cleanup_retains_inputs_until_owned_job_drain_confirmed(self):
+        pack,_=fixture(True)
+        for job in ({'tree_drained':False},{'job_start_pending':True},{},None,{'tree_drained':'true'}):
+            with self.subTest(job=job),temporary_root() as output:
+                native=output/'native-readiness';native.mkdir()
+                private=native/'recipe inputs é 测试';private.mkdir();(private/'binary').write_bytes(b'private')
+                cache=output/'private-runtime-cache';cache.mkdir()
+                receipt=native/(pack+'.offline-pip-proof.json')
+                receipt.write_text(json.dumps({'native_installer_test':{'windows_owned_job':job}}),encoding='utf-8')
+                self.assertTrue(m.cleanup_private_outputs(output,pack))
+                self.assertTrue(private.exists());self.assertTrue(cache.exists());self.assertTrue(receipt.exists())
+
+    def test_windows_cleanup_allows_prelaunch_failure_or_confirmed_drain(self):
+        pack,_=fixture(True)
+        for native_state in (None,{'tested':False,'passed':False},{'windows_owned_job':{'tree_drained':True}}):
+            with self.subTest(native_state=native_state),temporary_root() as output:
+                native=output/'native-readiness';native.mkdir()
+                private=native/'recipe inputs é 测试';private.mkdir()
+                cache=output/'private-runtime-cache';cache.mkdir()
+                receipt=native/(pack+'.offline-pip-proof.json')
+                if native_state is not None:receipt.write_text(json.dumps({'native_installer_test':native_state}),encoding='utf-8')
+                self.assertEqual(m.cleanup_private_outputs(output,pack),[])
+                self.assertFalse(private.exists());self.assertFalse(cache.exists())
+                self.assertEqual(receipt.exists(),native_state is not None)
+
+    def test_windows_cleanup_unreadable_checkpoint_is_fail_closed(self):
+        pack,_=fixture(True)
+        for value in ('malformed','[]','x'*(2*1024*1024+1)):
+            with temporary_root() as output:
+                native=output/'native-readiness';native.mkdir()
+                receipt=native/(pack+'.offline-pip-proof.json');receipt.write_text(value,encoding='utf-8')
+                cache=output/'private-runtime-cache';cache.mkdir()
+                self.assertTrue(m.cleanup_private_outputs(output,pack));self.assertTrue(cache.exists())
+
 
 if __name__ == '__main__': unittest.main()

@@ -5,14 +5,153 @@ kill-on-close Job before any instruction runs, and inherits only three explicit
 stdio handles. Every exit path drains the Job before callers may remove files.
 """
 import ctypes as c
+import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import sys
 import tempfile
 import time
 
 U32=c.c_uint32; U16=c.c_uint16; I64=c.c_int64; SIZE=c.c_size_t; HANDLE=c.c_void_p
+MAX_JOB_PIDS=4096
+MAX_DIAGNOSTIC_RECORDS=4096
+MAX_DIAGNOSTIC_BYTES=64*1024
+MAX_IMAGE_CHARS=1024
+
+
+class JobPids(c.Structure):
+    _fields_=[('assigned',U32),('count',U32),('pids',SIZE*MAX_JOB_PIDS)]
+
+
+class ProcessEntry(c.Structure):
+    # WCHAR is always 16-bit, including when layout tests run on Linux.
+    _fields_=[('size',U32),('usage',U32),('pid',U32),('heap',SIZE),('module',U32),
+              ('threads',U32),('parent_pid',U32),('priority',c.c_int32),('flags',U32),
+              ('name',U16*260)]
+
+
+def command_category(executable):
+    """A label only, never an allowlist or an assertion of trusted origin."""
+    return {'cargo.exe':'cargo','rustc.exe':'rust-compiler','rustup.exe':'rustup',
+            'cl.exe':'msvc-compiler-name','link.exe':'msvc-linker-name',
+            'vctip.exe':'msvc-telemetry-name','mspdbsrv.exe':'msvc-pdb-server-name',
+            'python.exe':'python-interpreter','pythonw.exe':'python-interpreter',
+            'git.exe':'git','cmd.exe':'command-shell','powershell.exe':'powershell',
+            'pwsh.exe':'powershell'}.get(PureWindowsPath(executable).name.lower(),'other-executable')
+
+
+def owned_process_snapshot(kernel,job):
+    """Read only owned PIDs and fixed metadata; never read argv or environment.
+
+    The OS PID list includes nested Jobs. Toolhelp is used only for the parent
+    IDs of that list; names/details of unrelated host processes are discarded.
+    Snapshots are diagnostic and cannot authorize a process to outlive its Job.
+    """
+    errors=[];pids=JobPids()
+    ok=kernel.QueryInformationJobObject(job,3,c.byref(pids),c.sizeof(pids),None)
+    code=0 if ok else c.get_last_error()
+    if not ok and code!=234: # ERROR_MORE_DATA permits a bounded partial list.
+        return {'processes':[],'truncated':False,'errors':[{'api':'job-pids','code':code}]}
+    wanted=set(int(pid) for pid in pids.pids[:min(pids.count,MAX_JOB_PIDS)] if pid)
+    truncated=not ok or pids.assigned>MAX_JOB_PIDS or pids.count>MAX_JOB_PIDS
+    if not wanted:return {'processes':[],'truncated':truncated,'errors':errors}
+    parents={};snapshot_time=time.time_ns()//100+116444736000000000
+    snapshot=kernel.CreateToolhelp32Snapshot(2,0)
+    if snapshot in (None,0,HANDLE(-1).value):
+        errors.append({'api':'process-snapshot','code':c.get_last_error()})
+    else:
+        try:
+            entry=ProcessEntry();entry.size=c.sizeof(entry)
+            available=kernel.Process32FirstW(snapshot,c.byref(entry));count=0
+            while available and count<16384:
+                if entry.pid in wanted:parents[int(entry.pid)]=int(entry.parent_pid)
+                count+=1;available=kernel.Process32NextW(snapshot,c.byref(entry))
+            if available:truncated=True
+            elif c.get_last_error()!=18: # ERROR_NO_MORE_FILES
+                errors.append({'api':'process-enumeration','code':c.get_last_error()})
+        finally:kernel.CloseHandle(snapshot)
+    records=[]
+    for pid in sorted(wanted):
+        record={'pid':pid,'parent_pid':parents.get(pid)};records.append(record)
+        process=kernel.OpenProcess(0x1000,False,pid) # QUERY_LIMITED_INFORMATION
+        if not process:
+            record['query_error']={'api':'open-process','code':c.get_last_error()};continue
+        try:
+            owned=c.c_int()
+            if not kernel.IsProcessInJob(process,job,c.byref(owned)):
+                record['query_error']={'api':'is-process-in-job','code':c.get_last_error()};continue
+            if not owned.value:
+                record['parent_pid']=None;record['identity_status']='pid-no-longer-owned';continue
+            record['job_membership_verified']=True
+            created=c.c_uint64();exited=c.c_uint64();system=c.c_uint64();user=c.c_uint64()
+            if kernel.GetProcessTimes(process,c.byref(created),c.byref(exited),c.byref(system),c.byref(user)):
+                record['created_filetime']=created.value
+                record['observed_filetime']=time.time_ns()//100+116444736000000000
+                record['exited_filetime']=exited.value or None
+                if created.value>snapshot_time:
+                    record['parent_pid']=None;record['parent_status']='created-after-parent-snapshot'
+            else:record['times_error']={'api':'process-times','code':c.get_last_error()}
+            buffer=c.create_unicode_buffer(MAX_IMAGE_CHARS);size=U32(MAX_IMAGE_CHARS)
+            if not kernel.QueryFullProcessImageNameW(process,0,buffer,c.byref(size)):
+                record['image_error']={'api':'process-image','code':c.get_last_error()};continue
+            try:
+                executable=str(Path(buffer.value).resolve(strict=True))
+                if len(executable)>MAX_IMAGE_CHARS:raise ValueError('image bound')
+                record['canonical_executable']=executable
+                record['command_category']=command_category(executable)
+            except (OSError,ValueError,RuntimeError):
+                record['image_error']={'api':'canonical-image','code':None}
+        finally:kernel.CloseHandle(process)
+    return {'processes':records,'truncated':truncated,'errors':errors}
+
+
+class JobDiagnostics:
+    """Bounded sampled ancestry, with creation-time guards against PID reuse."""
+    def __init__(self,kernel,job,root_pid):
+        self.kernel=kernel;self.job=job;self.root_pid=root_pid
+        self.history={};self.latest=None;self.errors=[];self.truncated=False
+
+    def sample(self):
+        try:current=owned_process_snapshot(self.kernel,self.job)
+        except Exception as error:
+            # Do not copy arbitrary exception text, which could contain data.
+            if len(self.errors)<8:self.errors.append({'api':'diagnostic-snapshot','error_type':type(error).__name__})
+            return
+        self.latest=current;self.truncated|=current['truncated']
+        for record in current['processes']:
+            key=(record['pid'],record.get('created_filetime'))
+            if key not in self.history and len(self.history)>=MAX_DIAGNOSTIC_RECORDS:
+                self.truncated=True;continue
+            self.history[key]=record.copy()
+        self.errors=(self.errors+current['errors'])[:8]
+
+    def report(self,phase):
+        report={'schema':1,'phase':phase,'root_pid':self.root_pid,
+                'scope':'owned Job processes only; sampled ancestry may have gaps',
+                'raw_command_lines_collected':False,'environment_collected':False,
+                'category_is_trust_decision':False,'truncated':self.truncated,
+                'errors':list(self.errors),'processes':[]}
+        for process in (self.latest or {}).get('processes',[]):
+            item=process.copy();item['parent_chain']=[];node=process;seen={node['pid']}
+            while node['pid']!=self.root_pid and len(item['parent_chain'])<16:
+                parent_pid=node.get('parent_pid');created=node.get('created_filetime')
+                if not parent_pid or not created or parent_pid in seen:break
+                # A parent must have been observed alive after this child was
+                # created. Earlier generations of a reused PID are not evidence.
+                candidates=[p for p in self.history.values() if p['pid']==parent_pid
+                            and p.get('job_membership_verified') and p.get('created_filetime',created)>=1
+                            and p.get('created_filetime',created)<created
+                            and p.get('observed_filetime',0)>=created
+                            and (p.get('exited_filetime') is None or p['exited_filetime']>=created)]
+                if len(candidates)!=1:break
+                node=candidates[0];seen.add(node['pid']);item['parent_chain'].append(node.copy())
+            item['parent_chain_reaches_root']=node['pid']==self.root_pid
+            if not item['parent_chain_reaches_root']:item['unresolved_parent_pid']=node.get('parent_pid')
+            report['processes'].append(item)
+            if len(json.dumps(report,ensure_ascii=True).encode('utf-8'))>MAX_DIAGNOSTIC_BYTES-1024:
+                report['processes'].pop();report['truncated']=True;break
+        return report
 
 
 class BasicLimits(c.Structure):
@@ -90,6 +229,13 @@ def kernel_api():
         'TerminateProcess':([HANDLE,U32],c.c_int),
         'WaitForSingleObject':([HANDLE,U32],U32),
         'GetExitCodeProcess':([HANDLE,c.POINTER(U32)],c.c_int),
+        'CreateToolhelp32Snapshot':([U32,U32],HANDLE),
+        'Process32FirstW':([HANDLE,c.POINTER(ProcessEntry)],c.c_int),
+        'Process32NextW':([HANDLE,c.POINTER(ProcessEntry)],c.c_int),
+        'OpenProcess':([U32,c.c_int,U32],HANDLE),
+        'IsProcessInJob':([HANDLE,HANDLE,c.POINTER(c.c_int)],c.c_int),
+        'GetProcessTimes':([HANDLE,HANDLE,HANDLE,HANDLE,HANDLE],c.c_int),
+        'QueryFullProcessImageNameW':([HANDLE,U32,c.c_wchar_p,c.POINTER(U32)],c.c_int),
         'CloseHandle':([HANDLE],c.c_int),
     }
     for name,(args,result) in definitions.items():
@@ -104,20 +250,34 @@ def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024)
     cwd=Path(cwd).resolve(strict=True)
     if not cwd.is_dir(): raise ValueError('Proof cwd must be an existing private directory')
     block=environment_block(env);kernel=kernel_api()
-    job=None;info=ProcessInfo();assigned=False;attributes=None;attribute_buffer=None;attributes_ready=False
+    job=None;info=ProcessInfo();assigned=False;attributes=None;attribute_buffer=None;attributes_ready=False;diagnostics=None
     result={'schema':1,'exit_code':None,'job_assigned_before_resume':False,'tree_drained':False,
+            'natural_drain_completed':False,'termination_requested':False,
             'total_processes':0,'timeout_seconds':timeout,'output_limit_bytes':output_limit}
     reason=None;failure=None
     def require(ok):
         if not ok: raise c.WinError(c.get_last_error())
     def accounting():
         value=Accounting();require(kernel.QueryInformationJobObject(job,1,c.byref(value),c.sizeof(value),None));return value
+    def observe(phase=None):
+        # Neither collecting nor serializing optional evidence may interrupt
+        # termination/reaping. API failures never change the ownership policy.
+        try:
+            diagnostics.sample()
+            if phase:return diagnostics.report(phase)
+        except Exception as error:
+            if phase:return {'schema':1,'phase':phase,'root_pid':info.pid,'processes':[],
+                             'truncated':True,'errors':[{'api':'diagnostic-report','error_type':type(error).__name__}]}
     def drain(terminate):
         # A failed assignment leaves a suspended child outside our Job. It must
         # be explicitly terminated/reaped; it was never allowed to run.
         if info.process and not assigned:
             require(kernel.TerminateProcess(info.process,1))
-        if assigned and terminate: require(kernel.TerminateJobObject(job,1))
+        if assigned and terminate:
+            if diagnostics:
+                result['before_forced_termination']=observe('before-forced-termination')
+            result['termination_requested']=True
+            require(kernel.TerminateJobObject(job,1))
         if info.process:
             state=kernel.WaitForSingleObject(info.process,10_000)
             if state!=0: raise RuntimeError('Owned root process did not terminate')
@@ -125,7 +285,9 @@ def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024)
         while job:
             state=accounting();result['total_processes']=state.total_processes
             if state.active_processes==0:
-                result['tree_drained']=True;return
+                result['tree_drained']=True
+                if assigned and not terminate:result['natural_drain_completed']=True
+                return
             if time.monotonic()>=deadline: raise RuntimeError('Owned Windows process tree did not drain')
             time.sleep(.01)
         result['tree_drained']=True
@@ -154,19 +316,25 @@ def run_owned_tree(command,*,cwd,env=None,timeout=1800,output_limit=8*1024*1024)
                 for handle in handles: os.set_handle_inheritable(handle,False)
             require(kernel.AssignProcessToJobObject(job,info.process));assigned=True
             result['job_assigned_before_resume']=True
+            result['root_pid']=info.pid
+            diagnostics=JobDiagnostics(kernel,job,info.pid);observe()
             if kernel.ResumeThread(info.thread)==0xffffffff: raise c.WinError(c.get_last_error())
             kernel.CloseHandle(info.thread);info.thread=None
-            started=time.monotonic()
+            started=time.monotonic();next_sample=started
             while True:
                 state=kernel.WaitForSingleObject(info.process,50)
                 if state not in (0,258): raise RuntimeError('Owned process wait failed')
                 if os.fstat(stdout.fileno()).st_size+os.fstat(stderr.fileno()).st_size>output_limit:
                     reason='output_limit';raise RuntimeError('Owned proof exceeded its output bound')
                 if state==0: break
-                if time.monotonic()-started>=timeout:
+                now=time.monotonic()
+                if now>=next_sample:
+                    observe();next_sample=now+.25
+                if now-started>=timeout:
                     reason='timeout';raise TimeoutError('Owned proof exceeded its time bound')
             code=U32();require(kernel.GetExitCodeProcess(info.process,c.byref(code)));result['exit_code']=code.value
             # A root process exiting is not proof its descendants have exited.
+            result['after_root_exit']=observe('after-root-exit')
             drain(False)
         except BaseException as error:
             failure=error;result['reason']=reason or type(error).__name__

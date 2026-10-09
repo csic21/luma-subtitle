@@ -191,6 +191,14 @@ The output is `ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl`.
 Library sources are unmodified; the wheel adds reviewed notices/provenance and
 normalized packaging. It contains no Microsoft DLLs or assembled Python runtime.
 
+The managed Windows CPU recipe explicitly passes `cpu_threads=1` to
+faster-whisper for reliable model cleanup, while keeping `num_workers=1`.
+The launcher requires the exact owned-wheel recipe, Windows/CPU backend and an
+active receipt matching the selected interpreter. A managed model or inherited
+environment marker cannot select this policy. Native Whisper, external/manual
+runtimes, macOS/MLX and Qwen are unchanged. This reliability tradeoff may reduce
+CPU throughput; it makes no acceleration promise.
+
 `sources.lock.json` and `notices.lock.json` bind every source/header, tool input,
 flag and notice. The native closure uses MIT, Apache-2.0, BSD and Zlib licenses;
 complete retained notices include embedded third-party code. The source ZIP
@@ -229,9 +237,22 @@ The Windows proof requires all of the following:
   CT2 wheel is skipped before fetch. All normal/delay PE dependencies and actually
   loaded native modules must close within the private runtime or allowed OS files.
   No host-global optional CRT, GPU, MKL or OpenMP fallback is accepted.
+  The sole host-security exception is the exact registered Microsoft Defender
+  AMSI `MpOav.dll`, checked by the byte-identified shared auditor for canonical
+  non-reparse path, registration, locked-file hash, Authenticode, Microsoft product
+  root and signed resource identity. DLLs loaded by trust APIs are re-audited to
+  a bounded fixed point; no generic antivirus or signed-DLL exception exists.
 - Relocation to a Unicode/spaced path, isolated imports, empty PATH, poisoned
   inherited Python configuration and fresh home/cache, then actual pinned Tiny/JFK
-  cold/warm speech inference with valid text/timestamps and model reuse.
+  cold/warm speech inference with valid text/timestamps and model reuse, plus
+  normal EOF, explicit unload and a distinct Unicode-path model switch.
+  Source-build selection requires the installed wheel's exact build provenance
+  and uses the same production worker policy without a constructor override.
+  Its report explicitly does not claim managed receipt or global-path selection.
+  The native Rust installer proof separately holds a real managed use lease and
+  rechecks the same production receipt/interpreter selector on every worker spawn
+  using a test-owned catalog/root. That context is absent from release builds;
+  the production embedded catalog stays disabled until publication review.
 
 This proves, if successful, fixed-path fresh-build repeatability on the recorded
 CI toolchain/host. It does **not** prove path independence, cross-machine or

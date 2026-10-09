@@ -22,10 +22,14 @@ import unicodedata
 import wave
 
 # LUMA_NAGISA_COMPAT_SOURCE
+# LUMA_MANAGED_CT2_CPU_POLICY
 
 
 SAMPLE_RATE = 16000
 MAX_REQUEST_BYTES = 1024 * 1024
+MANAGED_CT2_CPU_WARNING = (
+    "This managed Windows CPU runtime uses cpu_threads=1 for reliable model cleanup. "
+    "CPU transcription may be slower; no acceleration or throughput improvement is promised.")
 ALIGNER_LANGUAGES = {
     "zh": "Chinese", "en": "English", "yue": "Cantonese", "fr": "French",
     "de": "German", "it": "Italian", "ja": "Japanese", "ko": "Korean",
@@ -37,6 +41,16 @@ class WorkerError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
         self.code = code
+
+
+def managed_ct2_cpu_options(device):
+    # This value is embedded by the Rust launcher only after matching the active
+    # managed interpreter receipt and the exact reviewed 4.8.2/1lumacpu recipe.
+    # Never infer it from an inherited environment variable or a managed model.
+    if (sys.platform == "win32" and device == "cpu"
+            and globals().get("LUMA_MANAGED_CT2_CPU_POLICY") == "luma-cpu-seq-1"):
+        return {"cpu_threads": 1}
+    return {}
 
 
 def configure_offline():
@@ -315,6 +329,8 @@ def runtime(backend, requested):
         compute = next((item for item in preferences if item in types), None)
         if compute is None:
             raise WorkerError("device_unavailable", f"No supported CTranslate2 compute type on {device}.")
+        if managed_ct2_cpu_options(device):
+            warnings.append(MANAGED_CT2_CPU_WARNING)
         return {"device": device, "module": module, "compute_type": compute, "warnings": warnings}
     if requested == "metal":
         raise WorkerError("device_unavailable", "Qwen3-ASR Metal is not supported in this version. Choose CPU or CUDA.")
@@ -584,7 +600,8 @@ class Worker:
                     model = info["module"].ModelHolder.get_model(config["model"], info["core"].float16)
                 elif config["backend"] == "faster-whisper":
                     model = info["module"].WhisperModel(faster_whisper_model_argument(config["model"]), device=info["device"],
-                                                         compute_type=info["compute_type"], local_files_only=True, num_workers=1)
+                                                         compute_type=info["compute_type"], local_files_only=True, num_workers=1,
+                                                         **managed_ct2_cpu_options(info["device"]))
                     actual = getattr(getattr(model, "model", None), "device", None)
                     if actual != info["device"]:
                         raise WorkerError("device_mismatch", "CTranslate2 loaded on an unexpected device. Select an explicit device and retry.")

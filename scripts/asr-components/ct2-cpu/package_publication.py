@@ -8,7 +8,7 @@ import gzip
 import hashlib
 import io
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import stat
@@ -52,6 +52,7 @@ RECIPE_FILES = (
     'scripts/asr-components/ct2-cpu/proof_request.cjs',
     'scripts/asr-components/ct2-cpu/proof_request.node-test.cjs',
     'scripts/asr-components/build.py', 'scripts/asr-components/assemble.py',
+    'scripts/asr-components/self_test.py',
     'scripts/asr-components/packs.json', 'scripts/asr-components/fixtures.json',
     'scripts/asr-components/locks/faster-whisper-cpu-windows-x64.json',
     'src-tauri/src/asr/worker.py', 'src-tauri/src/asr/nagisa_compat.py',
@@ -320,14 +321,72 @@ def validate_evidence(source_sha, wheel, second_wheel, reports, lock, work):
             or not {'float32', 'int8'}.issubset(inference.get('compute_types', []))
             or not inference.get('loaded_modules') or compiler.get('passed') is not True):
         raise ValueError('Real isolated Tiny CPU cold/warm inference is incomplete')
+    validate_integrated_verifier(inference, source_sha, reports)
     for item in inference['loaded_modules']:
         name = item.get('path', '').replace('\\', '/').rsplit('/', 1)[-1].lower()
-        if (item.get('scope') not in {'private', 'windows_os'}
+        if item.get('scope') == 'verified_host_security':
+            validate_defender_record(item)
+        if (item.get('scope') not in {'private', 'windows_os', 'verified_host_security'}
                 or re.search(r'cudnn|cublas|cudart|nvrtc|nvcuda|iomp|libomp|vcomp|mkl|tbb', name)
                 or (name != 'msvcp_win.dll' and name.startswith(('msvcp', 'vcruntime', 'concrt'))
                     and item['scope'] != 'private')):
             raise ValueError('Actual loaded-module evidence includes an unsafe dependency')
     return provenance
+
+
+def validate_integrated_verifier(inference, source_sha, reports):
+    for key, path in (('host_auditor', 'scripts/asr-components/self_test.py'),
+                      ('verifier', 'scripts/asr-components/ct2-cpu/verify_runtime.py')):
+        identity = inference.get(key, {})
+        data = (REPO / path).read_bytes()
+        if (identity.get('source_sha') != source_sha or identity.get('repository_path') != path
+                or identity.get('sha256') != sha(data)
+                or (key == 'host_auditor' and identity.get('bytes') != len(data))):
+            raise ValueError('Integrated verifier/auditor identity is missing or changed')
+    policy = inference.get('cpu_thread_policy', {})
+    source = (REPO / 'src-tauri/src/asr/worker.py').read_text(encoding='utf-8')
+    marker = '# LUMA_MANAGED_CT2_CPU_POLICY'
+    if source.count(marker) != 1:
+        raise ValueError('Managed CPU source marker changed')
+    prepared = source.replace(marker, 'LUMA_MANAGED_CT2_CPU_POLICY = "luma-cpu-seq-1"', 1)
+    if (policy.get('source_sha') != source_sha or policy.get('variant') != 'luma-cpu-seq-1'
+            or type(policy.get('cpu_threads')) is not int or policy['cpu_threads'] != 1
+            or policy.get('selection') != 'source-build-provenance'
+            or policy.get('managed_receipt_selection_tested') is not False
+            or policy.get('constructor_overridden') is not False or policy.get('performance_claim') is not False
+            or policy.get('worker_sha256') != sha(source.encode())
+            or policy.get('prepared_worker_sha256') != sha(prepared.encode())
+            or policy.get('build_provenance_sha256') != sha((reports / 'provenance.json').read_bytes())):
+        raise ValueError('Integrated production CPU policy evidence is missing or changed')
+    lifecycle = inference.get('source_worker_lifecycle', {})
+    if any(lifecycle.get(key) is not True for key in (
+            'eof_after_inference', 'model_switch_after_inference', 'explicit_unload_after_inference')):
+        raise ValueError('Integrated CPU cleanup lifecycle proof is incomplete')
+
+
+def validate_defender_record(record):
+    # Revalidate signed-identity metadata, never accept a generic successful
+    # signature or a "security" scope as proof of this single host exception.
+    from self_test import DEFENDER_AMSI_CLSID, defender_platform_path, require_defender_identity
+    evidence = record.get('evidence', {})
+    path = PureWindowsPath(record.get('path', ''))
+    if (path.name.lower() != 'mpoav.dll' or evidence.get('verified') is not True
+            or evidence.get('kind') != 'windows-defender-amsi' or evidence.get('stage') != 'verified'
+            or evidence.get('provider_clsid') != DEFENDER_AMSI_CLSID
+            or evidence.get('registry_path_matched') is not True
+            or type(evidence.get('bytes')) is not int or not 0 < evidence['bytes'] <= 32 * 1024 * 1024
+            or not isinstance(evidence.get('sha256'), str) or not re.fullmatch('[a-f0-9]{64}', evidence['sha256'])
+            or any(PureWindowsPath(evidence.get(key, '')) != path for key in ('path', 'loaded_path', 'registered_path'))):
+        raise ValueError('Host-security evidence is not the exact verified Defender module')
+    # The native auditor establishes the OS known-folder root. Here the path's
+    # exact suffix/ordinary-drive shape and recorded registration are rechecked.
+    if len(path.parents) < 5:
+        raise ValueError('Host-security Defender platform path is incomplete')
+    base = str(path.parents[4])
+    for value in (record['path'], *(evidence[key] for key in ('path', 'loaded_path', 'registered_path'))):
+        if defender_platform_path(value, base) != path:
+            raise ValueError('Host-security Defender paths disagree')
+    require_defender_identity(evidence)
 
 
 def public_inputs(source_sha):

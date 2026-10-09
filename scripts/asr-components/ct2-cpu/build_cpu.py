@@ -550,6 +550,7 @@ def private_proof(args, lock, wheel, runtime_archive, env, status):
     for item in fixture['faster_whisper_tiny']['files']:
         target = model.joinpath(*safe_path(item['path']).parts); target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(fetch(item, args.cache), target)
+    switch_model = args.work / 'Switch model é 测试'; shutil.copytree(model, switch_model)
     audio = args.work / 'jfk.wav'; shutil.copyfile(fetch(fixture['audio'], args.cache), audio)
     home = args.work / 'empty-home'; home.mkdir()
     clean = {k: v for k, v in os.environ.items() if k.upper() in {'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE'}}
@@ -561,7 +562,10 @@ def private_proof(args, lock, wheel, runtime_archive, env, status):
     poison = home / 'poison'; poison.mkdir()
     (poison / 'sitecustomize.py').write_text("raise RuntimeError('Inherited Python path was used')\n", encoding='utf-8')
     run_native_verifier(status, lambda: command([root / 'python.exe', '-I', '-B', '-X', 'utf8', HERE / 'verify_runtime.py',
-             '--root', root, '--model', model, '--audio', audio, '--worker', args.worker,
+             '--root', root, '--model', model, '--switch-model', switch_model, '--audio', audio, '--worker', args.worker,
+             '--source-sha', args.source_sha,
+             '--host-auditor', COMPONENTS / 'self_test.py', '--host-auditor-sha256', digest(COMPONENTS / 'self_test.py'),
+             '--build-provenance', args.reports / 'provenance.json', '--build-provenance-sha256', digest(args.reports / 'provenance.json'),
              '--report', args.reports / 'inference.json'], cwd=home, env=clean,
             logfile=args.reports / 'inference.log', timeout=900))
 
@@ -584,7 +588,7 @@ def main():
     args.reports.mkdir(parents=True, exist_ok=True)
     status = {'schema': 1, 'source_sha': args.source_sha, 'publication_authorized': False,
               'wheel_reproduced': False, 'native_inference_passed': False,
-              'limitations': ['Sequential oneDNN GEMMs may be slower than upstream MKL/OpenMP builds.',
+              'limitations': ['The managed CPU recipe uses cpu_threads=1 for reliable cleanup; sequential oneDNN GEMMs may be slower than upstream MKL/OpenMP builds.',
                              'No CPU/GPU performance claim; no clean GUI-machine or non-AVX hardware claim.',
                              'Repeatability is limited to fresh builds at one fixed native root and pinned toolchain; no path-independence or cross-machine claim.',
                              'Hosted runner OS is not hermetically pinned; tool versions and hashes are reported.']}

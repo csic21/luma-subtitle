@@ -98,6 +98,29 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(engine.key[1],str(self.model.resolve()))
         self.assertEqual(factory.call_count,1);self.assertEqual(adapt.call_count,1)
 
+    def test_managed_ct2_cpu_constructor_and_warning_use_explicit_source_policy(self):
+        for platform, policy, cuda, expected in (
+                ('win32', 'luma-cpu-seq-1', False, {'cpu_threads': 1}),
+                ('win32', None, False, {}), ('win32', 'other', False, {}),
+                ('darwin', 'luma-cpu-seq-1', False, {}),
+                ('linux', 'luma-cpu-seq-1', False, {}),
+                ('win32', 'luma-cpu-seq-1', True, {})):
+            with self.subTest(platform=platform, policy=policy, cuda=cuda):
+                modules, factory, _ = self.faster_modules(cuda=cuda)
+                with patch.object(w.sys, 'platform', platform), \
+                     patch.object(w, 'LUMA_MANAGED_CT2_CPU_POLICY', policy, create=True), \
+                     patch.object(w, 'optional_import', side_effect=lambda name, _: modules[name]), \
+                     patch.dict(os.environ, LUMA_MANAGED_CT2_CPU_POLICY='luma-cpu-seq-1', CPU_THREADS='8'):
+                    request = self.request(device='cuda' if cuda else 'cpu')
+                    worker = w.Worker(); probe = worker.probe(request)
+                    worker.transcribe(request, lambda event: None)
+                    worker.transcribe(request, lambda event: None)
+                kwargs = factory.call_args.kwargs
+                self.assertEqual({key: value for key, value in kwargs.items() if key == 'cpu_threads'}, expected)
+                self.assertEqual(kwargs['num_workers'], 1); self.assertTrue(kwargs['local_files_only'])
+                self.assertEqual(factory.call_count, 1)
+                self.assertEqual(w.MANAGED_CT2_CPU_WARNING in probe['warnings'], bool(expected))
+
     def ct2_windows_argument(self,value,*,same=True,other=False):
         class FakePath:
             def __init__(self,path):self.path=path

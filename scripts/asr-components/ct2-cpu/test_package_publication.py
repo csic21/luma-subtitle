@@ -95,6 +95,19 @@ class PackagingTests(unittest.TestCase):
                    'compute_types': ['float32', 'int8'], 'loaded_modules': [{'scope': 'private', 'path': 'msvcp140.dll'}],
                    'inference': {'cold_and_warm': True, 'cpu_only': True, 'model': 'SYSTRAN/faster-whisper-tiny',
                                  'segments': [{'start_ms': 1, 'end_ms': 10, 'text': 'country'}]}})
+        worker = (self.repo / 'src-tauri/src/asr/worker.py').read_text()
+        prepared = worker.replace('# LUMA_MANAGED_CT2_CPU_POLICY', 'LUMA_MANAGED_CT2_CPU_POLICY = "luma-cpu-seq-1"', 1)
+        identities = {}
+        for key, path in (('host_auditor', 'scripts/asr-components/self_test.py'), ('verifier', 'scripts/asr-components/ct2-cpu/verify_runtime.py')):
+            data = (self.repo / path).read_bytes()
+            identities[key] = {'source_sha': SOURCE, 'repository_path': path, 'sha256': package.sha(data), 'bytes': len(data)}
+        self.change('inference.json', lambda x: x.update(**identities,
+            cpu_thread_policy={'source_sha': SOURCE, 'variant': 'luma-cpu-seq-1', 'cpu_threads': 1,
+                'selection': 'source-build-provenance', 'managed_receipt_selection_tested': False,
+                'constructor_overridden': False, 'performance_claim': False,
+                'worker_sha256': package.sha(worker.encode()), 'prepared_worker_sha256': package.sha(prepared.encode()),
+                'build_provenance_sha256': package.sha((self.reports / 'provenance.json').read_bytes())},
+            source_worker_lifecycle=dict.fromkeys(('eof_after_inference', 'model_switch_after_inference', 'explicit_unload_after_inference'), True)))
         self.write(self.reports / 'compiler-probe.json', {'passed': True, 'compiler_flags': self.provenance['native_compile_flags']})
         self.write(self.reports / 'private-crt-proof.json', {'public_redistribution_authorized': False,
                    'redistribution_grant_verified': False, 'original_files_unmodified': True,
@@ -226,6 +239,46 @@ class PackagingTests(unittest.TestCase):
         self.change('inference.json', lambda x: x['loaded_modules'].append(
             {'scope': 'windows_os', 'path': 'C:/Windows/System32/msvcp_win.dll'}))
         self.package()
+
+    def test_integrated_policy_and_auditor_cannot_be_replaced_by_diagnostic_claims(self):
+        for section, key, value in (
+                ('host_auditor', 'source_sha', 'b' * 40), ('host_auditor', 'sha256', '0' * 64),
+                ('host_auditor', 'bytes', 1), ('verifier', 'sha256', '0' * 64),
+                ('cpu_thread_policy', 'cpu_threads', 0), ('cpu_thread_policy', 'cpu_threads', True),
+                ('cpu_thread_policy', 'constructor_overridden', True),
+                ('cpu_thread_policy', 'selection', 'diagnostic-one-thread'),
+                ('cpu_thread_policy', 'managed_receipt_selection_tested', True),
+                ('cpu_thread_policy', 'build_provenance_sha256', '0' * 64),
+                ('source_worker_lifecycle', 'explicit_unload_after_inference', False)):
+            original = (self.reports / 'inference.json').read_bytes()
+            self.change('inference.json', lambda x: x[section].update({key: value}))
+            with self.subTest(section=section, key=key, value=value), self.assertRaises(ValueError): self.package()
+            (self.reports / 'inference.json').write_bytes(original)
+
+    def test_only_complete_exact_defender_host_evidence_is_accepted(self):
+        from test_defender_identity import valid_identity, DEFENDER
+        from self_test import DEFENDER_AMSI_CLSID
+        evidence = dict(valid_identity(), kind='windows-defender-amsi', verified=True, stage='verified',
+            provider_clsid=DEFENDER_AMSI_CLSID, registry_path_matched=True, bytes=1234, sha256='a' * 64,
+            path=DEFENDER, loaded_path=DEFENDER, registered_path=DEFENDER)
+        record = {'scope': 'verified_host_security', 'path': DEFENDER, 'evidence': evidence}
+        package.validate_defender_record(record)
+        self.change('inference.json', lambda x: x['loaded_modules'].append(record))
+        self.package()
+        for key, value in [('verified', False), ('kind', 'other'), ('registry_path_matched', False),
+                ('registered_path', DEFENDER.replace('4.18.26080.4-0', '4.18.26090.1-1')),
+                ('sha256', 'bad'), ('bytes', 0), ('authenticode_status', 1), ('microsoft_root_policy_error', 1),
+                ('provider_clsid', 'other'), ('stage', 'identity-policy')]:
+            bad = copy.deepcopy(record); bad['evidence'][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError): package.validate_defender_record(bad)
+        for name in ('msvcp140.dll', 'libiomp5md.dll', 'other.dll', 'MpOav.dll.extra'):
+            bad = copy.deepcopy(record); bad['path'] = bad['path'].replace('MpOav.dll', name)
+            with self.subTest(name=name), self.assertRaises(ValueError): package.validate_defender_record(bad)
+        for value in (DEFENDER.replace('\\MpOav', '\\.\\MpOav'), DEFENDER.replace('\\', '/'),
+                      DEFENDER.replace('4.18.26080.4-0', 'current')):
+            bad = copy.deepcopy(record); bad['path'] = value
+            bad['evidence'].update(dict.fromkeys(('path', 'loaded_path', 'registered_path'), value))
+            with self.subTest(path=value), self.assertRaises(ValueError): package.validate_defender_record(bad)
 
     def test_numbered_crt_and_lookalike_names_still_cannot_be_windows_os(self):
         for name in ('msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'concrt140.dll', 'msvcp_win.dll.extra'):

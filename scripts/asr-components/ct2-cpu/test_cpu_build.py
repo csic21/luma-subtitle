@@ -44,6 +44,15 @@ def pe(normal='kernel32.dll', delayed='msvcp140_1.dll', pe32=False):
 
 
 class NativeTests(unittest.TestCase):
+    def test_full_source_proof_uses_integrated_auditor_policy_and_distinct_model(self):
+        import inspect
+        source = inspect.getsource(build.private_proof)
+        for argument in ('--source-sha', '--host-auditor', '--host-auditor-sha256', '--build-provenance', '--build-provenance-sha256', '--switch-model'):
+            self.assertIn(argument, source)
+        self.assertIn('shutil.copytree(model, switch_model)', source)
+        self.assertNotIn('lifecycle_probe.py', source)
+        self.assertNotIn('thread_override', source)
+
     def test_fixed_native_root_is_fresh_and_first_output_survives_cleanup(self):
         with temporary_root() as directory:
             work = Path(directory)

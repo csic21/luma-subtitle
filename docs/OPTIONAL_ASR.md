@@ -139,6 +139,11 @@ python3.12 -m venv "$HOME/.venvs/luma-faster-whisper"
 
 For Windows CPU, prefer Luma's managed component once its verified recipe becomes
 available. Its CPU-only CTranslate2 build excludes CUDA/cuDNN and Intel OpenMP/MKL.
+The reviewed Windows `4.8.2/1lumacpu` recipe uses `cpu_threads=1` for reliable
+model cleanup. CPU transcription may be slower; this is not an acceleration or
+throughput promise. The policy is selected only for its active verified managed
+interpreter and exact recipe. External/manual Python runtimes, native Whisper,
+MLX and Qwen keep their existing behavior.
 Final native proof, publication and catalog activation are still required; this
 guide does not supply a ready CPU-wheel download. The general upstream Windows
 CTranslate2 wheel can include GPU libraries and additional terms even when CPU

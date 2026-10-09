@@ -104,7 +104,12 @@ impl Drop for OwnedChild {
 
 /// All short-lived setup helpers stay owned until both termination and pipe
 /// draining finish. Cancellation/timeout never leaves a background writer.
-pub(super) async fn run_owned(mut command: tokio::process::Command, label: &str, seconds: u64, cancel: &std::sync::atomic::AtomicBool, lifetime: &SetupLifetime, temporary: PrivateTemp) -> Result<(bool, Vec<u8>), String> {
+pub(super) async fn run_owned(command: tokio::process::Command, label: &str, seconds: u64, cancel: &std::sync::atomic::AtomicBool, lifetime: &SetupLifetime, temporary: PrivateTemp) -> Result<(bool, Vec<u8>), String> {
+    let (status, output) = run_owned_status(command, label, seconds, cancel, lifetime, temporary).await?;
+    Ok((status.success(), output))
+}
+/// Preserve native exit diagnostics without changing setup ownership or cleanup.
+pub(super) async fn run_owned_status(mut command: tokio::process::Command, label: &str, seconds: u64, cancel: &std::sync::atomic::AtomicBool, lifetime: &SetupLifetime, temporary: PrivateTemp) -> Result<(std::process::ExitStatus, Vec<u8>), String> {
     use std::{process::Stdio, sync::atomic::Ordering, time::{Duration, Instant}};
     use tokio::io::AsyncReadExt;
     super::archive::cancelled(cancel)?;
@@ -132,7 +137,7 @@ pub(super) async fn run_owned(mut command: tokio::process::Command, label: &str,
             }
         }
         if let Some(error) = failure { break Err(error); }
-        if ended.iter().all(|v| *v) { if let Some(exit) = status { break Ok((exit.success(), output)); } }
+        if ended.iter().all(|v| *v) { if let Some(exit) = status { break Ok((exit, output)); } }
         tokio::time::sleep(super::POLL).await;
     };
     child.finish(result.is_err()).await;

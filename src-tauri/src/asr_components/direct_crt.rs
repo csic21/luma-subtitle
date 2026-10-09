@@ -16,7 +16,7 @@ const DLL_SIGNER: &str = "2ebcd329b745ae0efb6a72bb8a471b29c3994b074dbf94bdc2bb65
 const PREFIX: &str = "LUMA_CRT_SIGNATURE ";
 const HELPER: &str = "--luma-verify-crt";
 const TERMS_URL: &str = "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/";
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Pinned { name: &'static str, member: &'static str, bytes: u64, sha: &'static str }
 const INSTALLER: Pinned = Pinned { name: "installer", member: "", bytes: DOWNLOAD_BYTES, sha: INSTALLER_SHA };
 const MINIMUM: Pinned = Pinned { name: "minimum-x64.cab", member: "a12", bytes: 987_836, sha: "640aa6c516c72444523b8fbe034db46ff4e118ed02705340e3ccb62d426ff040" };
@@ -112,16 +112,40 @@ fn signature_result(success: bool, bytes: &[u8], pin: Pinned, mode: TrustMode) -
     Ok(verified)
 }
 fn selected_member(pin: Pinned) -> Result<(), String> { if ![MINIMUM.member, DLLS[0].member, DLLS[1].member, NOTICES[0].member, NOTICES[1].member].contains(&pin.member) { return Err("Unknown fixed Microsoft CAB member.".into()); } Ok(()) }
+fn expansion_arguments(cabinet: &Path, cabinet_pin: Pinned, pin: Pinned, work: &Path) -> Result<[String; 3], String> {
+    selected_member(pin)?;
+    let fixed_pair = (cabinet_pin == SLICES[1].1 && pin == MINIMUM)
+        || (cabinet_pin == MINIMUM && DLLS.contains(&pin))
+        || (cabinet_pin == SLICES[0].1 && NOTICES.contains(&pin));
+    if !fixed_pair || !work.is_absolute() || work.components().any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::CurDir)) || cabinet.parent() != Some(work)
+        || cabinet.file_name() != Some(std::ffi::OsStr::new(cabinet_pin.name)) {
+        return Err("Microsoft CAB extraction requires a fixed cabinet/member in its private working directory.".into());
+    }
+    Ok([cabinet_pin.name.into(), format!("-F:{}", pin.member), format!("extract-{}", pin.member)])
+}
+fn expansion_failure(status: std::process::ExitStatus, output: &[u8], cabinet: Pinned, member: Pinned) -> String {
+    // Child capture is capped at 64 KiB by run_owned_status. Keep the UI error
+    // short and strip terminal/control characters; do not guess that OS policy
+    // caused an ordinary extraction/path failure.
+    let diagnostic: String = String::from_utf8_lossy(output).chars().map(|c| if c.is_control() { ' ' } else { c }).take(2048).collect();
+    format!("Windows CAB extraction failed for {} member {} ({status}). expand.exe: {}", cabinet.name, member.member,
+        if diagnostic.trim().is_empty() { "No diagnostic output." } else { diagnostic.trim() })
+}
 async fn expand(cabinet: &Path, cabinet_pin: Pinned, pin: Pinned, work: &Path, cancel: &AtomicBool, lifetime: &setup_process::SetupLifetime) -> Result<PathBuf, String> {
-    selected_member(pin)?; let _held_cabinet = open_verified(cabinet, cabinet_pin, cancel)?;
-    let directory = work.join(format!("extract-{}", pin.member));
+    let arguments = expansion_arguments(cabinet, cabinet_pin, pin, work)?;
+    let _held_cabinet = open_verified(cabinet, cabinet_pin, cancel)?;
+    let directory = work.join(&arguments[2]);
     fs::create_dir(&directory).map_err(|e| e.to_string())?; store::ensure_directory(&directory)?;
     let mut command = tokio::process::Command::new(system_expand()?);
     let temporary = setup_process::PrivateTemp::create(work)?;
     setup_process::configure(&mut command, work, &temporary)?;
-    command.arg(cabinet).arg(format!("-F:{}", pin.member)).arg(&directory).current_dir(work);
-    let (success, _) = setup_process::run_owned(command, "Windows CAB extraction", 120, cancel, lifetime, temporary).await?;
-    if !success { return Err("Windows could not extract the fixed Microsoft runtime CAB. Check local Windows application-control policy and retry.".into()); }
+    // Windows canonicalization produces verbatim paths that legacy CAB tools
+    // need not accept as command-line filenames. The child alone uses the
+    // already owned Unicode working directory; all arguments are fixed ASCII
+    // basenames, with no stripping/reinterpretation of trusted absolute paths.
+    command.args(&arguments).current_dir(work);
+    let (status, output) = setup_process::run_owned_status(command, "Windows CAB extraction", 120, cancel, lifetime, temporary).await?;
+    if !status.success() { return Err(expansion_failure(status, &output, cabinet_pin, pin)); }
     let entries = fs::read_dir(&directory).map_err(|e| e.to_string())?.take(2).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
     if entries.len() != 1 || entries[0].file_name() != std::ffi::OsStr::new(pin.member) { return Err("Windows CAB extraction produced unexpected outputs.".into()); }
     let path = directory.join(pin.member); let _verified = open_verified(&path, pin, cancel)?; Ok(path)
@@ -302,6 +326,40 @@ mod tests {
         for member in ["*", "../a12", "a?", "a13"] { assert!(selected_member(Pinned { member, ..MINIMUM }).is_err()); }
         assert!(super::super::catalog::validate_download(URL,DOWNLOAD_BYTES,INSTALLER_SHA,super::super::catalog::Source::MicrosoftCrt).is_ok());
         assert!(super::super::catalog::validate_download(&URL.replace("73aabf2e", "73aabf2f"),DOWNLOAD_BYTES,INSTALLER_SHA,super::super::catalog::Source::MicrosoftCrt).is_err());
+    }
+    #[test]
+    fn cab_arguments_are_fixed_relative_names_inside_the_owned_unicode_directory() {
+        let root = temporary(); let work = root.join("Managed runtime é 测试"); fs::create_dir(&work).unwrap();
+        let work = fs::canonicalize(work).unwrap();
+        #[cfg(windows)] assert!(matches!(work.components().next(), Some(std::path::Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::VerbatimDisk(_))));
+        for (cabinet, members) in [(SLICES[1].1, vec![MINIMUM]), (MINIMUM, DLLS.to_vec()), (SLICES[0].1, NOTICES.to_vec())] {
+            for member in members {
+                let args = expansion_arguments(&work.join(cabinet.name), cabinet, member, &work).unwrap();
+                assert_eq!(args, [cabinet.name.to_owned(), format!("-F:{}", member.member), format!("extract-{}", member.member)]);
+                assert!(args.iter().all(|a| a.is_ascii() && !a.contains('/') && !a.contains('\\')));
+                assert_eq!(work.join(&args[0]), work.join(cabinet.name));
+                assert!(expansion_arguments(&root.join(cabinet.name), cabinet, member, &work).is_err());
+                assert!(expansion_arguments(&work.join("other.cab"), cabinet, member, &work).is_err());
+                assert!(expansion_arguments(&work.join(cabinet.name), Pinned { sha: "changed", ..cabinet }, member, &work).is_err());
+                assert!(expansion_arguments(&work.join(cabinet.name), cabinet, Pinned { bytes: 1, ..member }, &work).is_err());
+            }
+        }
+        assert!(expansion_arguments(&work.join("attached.cab"), SLICES[1].1, DLLS[0], &work).is_err());
+        assert!(expansion_arguments(Path::new("relative/attached.cab"), SLICES[1].1, MINIMUM, Path::new("relative")).is_err());
+        let traversal = work.join("..").join("direct-crt");
+        assert!(expansion_arguments(&traversal.join("attached.cab"), SLICES[1].1, MINIMUM, &traversal).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cab_failure_keeps_native_exit_and_bounded_output_without_policy_assumptions() {
+        #[cfg(windows)] use std::os::windows::process::ExitStatusExt;
+        #[cfg(unix)] use std::os::unix::process::ExitStatusExt;
+        let status = std::process::ExitStatus::from_raw(1);
+        let message = expansion_failure(status, b"Cannot open input file.\r\n\x1b\x00", SLICES[1].1, MINIMUM);
+        assert!(message.contains(&status.to_string())); assert!(message.contains("attached.cab member a12"));
+        assert!(message.contains("Cannot open input file.")); assert!(!message.contains("policy")); assert!(!message.chars().any(char::is_control));
+        assert!(expansion_failure(status, &vec![b'x'; 65536], SLICES[1].1, MINIMUM).len() < 2300);
+        assert!(expansion_failure(status, &[], SLICES[1].1, MINIMUM).contains("No diagnostic output"));
     }
     #[test]
     fn fixed_copy_rejects_bounds_digest_and_cancellation() {

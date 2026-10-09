@@ -375,6 +375,52 @@ fn verified_managed_windows_qwen_runtime_at(root: &Path, python: &str, catalog: 
     }
     Err("The selected managed Qwen interpreter is not an active verified runtime. Select the installed component or use Repair.".into())
 }
+/// Apply the cleanup reliability policy only to the owned CPU wheel recipe.
+/// Receipt fingerprinting binds the wheel's final published hash and size, not
+/// just its filename. A model lease or manual interpreter never selects this.
+pub(crate) fn verified_managed_windows_ct2_cpu_runtime(python: &str) -> Result<bool, String> {
+    let Some(root) = MANAGED_ROOT.get() else { return Ok(false); };
+    verified_managed_windows_ct2_cpu_runtime_at(root, python, &catalog::embedded()?)
+}
+fn reviewed_windows_ct2_cpu_recipe(runtime: &catalog::Runtime) -> bool {
+    if runtime.id != "faster-whisper-cpu-windows-x64" || runtime.platform != "windows-x64"
+        || runtime.engine != "whisper-accelerated" || runtime.backend != "faster-whisper"
+        || runtime.device != "cpu" || runtime.archive.is_some() { return false; }
+    let Some(recipe) = &runtime.recipe else { return false; };
+    let wheels: Vec<_> = recipe.wheels.iter().filter(|wheel| wheel.name.eq_ignore_ascii_case("ctranslate2")).collect();
+    wheels.len() == 1 && wheels[0].name == "ctranslate2" && wheels[0].version == "4.8.2"
+        && wheels[0].filename == catalog::CPU_WHEEL_FILENAME && wheels[0].url == catalog::CPU_WHEEL_URL
+        && recipe.validate(runtime).is_ok()
+}
+fn verified_managed_windows_ct2_cpu_runtime_at(root: &Path, python: &str, catalog: &catalog::Catalog) -> Result<bool, String> {
+    if !store::uses_managed_root(root, &[python])? { return Ok(false); }
+    let selected = std::fs::canonicalize(python).map_err(|e| e.to_string())?;
+    for runtime in &catalog.runtimes {
+        if reviewed_windows_ct2_cpu_recipe(runtime)
+            && store::matches_active_interpreter(root, runtime, &selected)? { return Ok(true); }
+    }
+    Err("The selected managed CPU interpreter is not the active verified CTranslate2 recipe. Select the installed component or use Repair.".into())
+}
+/// Native installer proof context. It cannot exist in a release build and does
+/// not replace the production root/catalog. Every spawn holds a real use lease
+/// and runs the same active-receipt/interpreter/recipe matcher as production.
+#[cfg(test)]
+pub(crate) struct ManagedCt2RuntimeProof { root: PathBuf, catalog: catalog::Catalog }
+#[cfg(test)]
+impl ManagedCt2RuntimeProof {
+    fn new(root: &Path, catalog: &catalog::Catalog, python: &str) -> Result<Self, String> {
+        let proof = Self { root: root.to_owned(), catalog: catalog.clone() };
+        let _leases = proof.acquire(python)?;
+        Ok(proof)
+    }
+    pub(crate) fn acquire(&self, python: &str) -> Result<Vec<std::fs::File>, String> {
+        let leases = acquire_managed_use_leases_at(&self.root, &[python])?;
+        if leases.is_empty() || !verified_managed_windows_ct2_cpu_runtime_at(&self.root, python, &self.catalog)? {
+            return Err("The native CPU proof interpreter has no matching active managed receipt.".into());
+        }
+        Ok(leases)
+    }
+}
 fn acquire_managed_use_leases_at(root: &Path, paths: &[&str]) -> Result<Vec<std::fs::File>, String> {
     if store::uses_managed_root(root, paths)? { Ok(vec![store::acquire_use_lease(root, false)?]) } else { Ok(Vec::new()) }
 }

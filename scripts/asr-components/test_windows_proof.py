@@ -1,10 +1,15 @@
 import hashlib
+import base64
+from contextlib import contextmanager
+import io
 import json
+import os
 from pathlib import Path
 import struct
 import sys
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 from fixture_paths import temporary_root
 
 import windows_crt_proof as crt
@@ -112,6 +117,77 @@ class WindowsProofTests(unittest.TestCase):
             self.assertEqual((code,out.strip(),err), (0,'fixture',''))
             with self.assertRaisesRegex(ValueError, 'output bound'):
                 crt.helper_process([sys.executable, '-I', '-B', '-c', 'print("x" * 20000)'], None, tmp)
+
+    def test_cab_diagnostics_retain_exit_and_exact_non_utf8_bytes(self):
+        with temporary_root() as tmp:
+            code, out, err = crt.helper_process_bytes([sys.executable, '-I', '-B', '-c',
+                'import sys; sys.stdout.buffer.write(b"\\xffCAB\\r\\n"); sys.stderr.buffer.write(b"\\xfeerror"); sys.exit(7)'], None, tmp)
+            self.assertEqual((code, out, err), (7, b'\xffCAB\r\n', b'\xfeerror'))
+
+    def test_cab_path_probe_requires_local_disk_paths_and_clean_environment(self):
+        for path in (r'C:\Managed runtime é 测试', r'\\?\C:\Managed runtime é 测试'):
+            self.assertEqual(str(crt.verbatim_disk_path(path)), r'\\?\C:\Managed runtime é 测试')
+        for path in (r'\\server\share\cab', r'\\?\UNC\server\share\cab', r'C:cab', 'relative', r'C:\x\..\cab'):
+            with self.assertRaises(ValueError): crt.verbatim_disk_path(path)
+        with patch.dict(os.environ, {'SystemRoot': r'C:\Windows', 'PATH': 'poisoned', 'PYTHONPATH': 'poisoned', 'TEMP': 'poisoned'}, clear=True):
+            env = crt.cab_environment(Path('/private/work'), Path('/private/temp'), Path('/system'))
+        self.assertEqual(env['SystemRoot'], r'C:\Windows'); self.assertNotIn('PYTHONPATH', env)
+        self.assertNotIn('poisoned', str(env)); self.assertEqual(env['TEMP'], '/private/temp')
+
+    def test_cab_path_probe_records_legacy_failure_and_requires_all_fixed_hashes(self):
+        def pin(data, member=None):
+            value = {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+            if member: value['member'] = member
+            return value
+        payloads = {'a12': b'min', 'msvcp140.dll_amd64': b'dll1', 'msvcp140_1.dll_amd64': b'dll2', 'u4': b'en', 'u28': b'zh'}
+        lock = {'containers': {'attached.cab': pin(b'attached'), 'ux.cab': pin(b'ux')},
+                'minimum_cab': pin(payloads['a12'], 'a12'),
+                'dlls': {name: pin(payloads[name + '_amd64'], name + '_amd64') for name in ('msvcp140.dll', 'msvcp140_1.dll')},
+                'notices': {name: pin(payloads[member], member) for name, member in (('license-en.rtf', 'u4'), ('license-zh-CN.rtf', 'u28'))}}
+        with temporary_root() as tmp:
+            source = tmp / 'source'; source.mkdir(); (source / 'attached.cab').write_bytes(b'attached'); (source / 'ux.cab').write_bytes(b'ux')
+            contract = tmp / 'contract.json'; contract.write_text(json.dumps(lock))
+            held = []; broken = [None]; calls = []
+            @contextmanager
+            def hold(path):
+                held.append(path)
+                try: yield
+                finally: held.pop()
+            def process(command, env, cwd):
+                self.assertEqual(len(held), 1); self.assertEqual(Path.cwd(), parent_cwd)
+                calls.append(command); member = command[2][3:]
+                if Path(command[1]).is_absolute(): return 2, b'Cannot open input file.\xff', b'legacy diagnostic'
+                self.assertTrue(all(argument.isascii() for argument in command[1:]))
+                self.assertEqual(held[0], cwd / command[1])
+                if broken[0] == 'exit': return 5, b'', b'fixed extraction failed'
+                (cwd / command[3] / member).write_bytes(b'changed' if broken[0] == 'hash' else payloads[member])
+                if broken[0] == 'extra': (cwd / command[3] / 'unexpected').write_bytes(b'bad')
+                return 0, b'extracted', b''
+            parent_cwd = Path.cwd()
+            spec = SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module: None))
+            audit = SimpleNamespace(system_expand=lambda: tmp / 'System32' / 'expand.exe')
+            with patch.object(crt.sys, 'platform', 'win32'), patch.object(crt, 'CONTRACT', contract), \
+                 patch.object(crt, 'verbatim_disk_path', side_effect=lambda path: path), patch.object(crt, 'held_cabinet', side_effect=hold), \
+                 patch.object(crt.importlib.util, 'spec_from_file_location', return_value=spec), patch.object(crt.importlib.util, 'module_from_spec', return_value=audit), \
+                 patch.object(crt, 'helper_process_bytes', side_effect=process), patch('sys.stdout', new_callable=io.StringIO):
+                report = crt.prove_cab_paths(source, tmp, 'fixture-sha')
+                self.assertTrue(report['passed']); self.assertEqual(len(report['results']), 6)
+                self.assertEqual(report['results'][0]['exit_code'], 2)
+                self.assertEqual(base64.b64decode(report['results'][0]['stdout_base64']), b'Cannot open input file.\xff')
+                self.assertEqual({result['verified_sha256'] for result in report['results'][1:]}, {pin(data)['sha256'] for data in payloads.values()})
+                self.assertEqual(json.loads((tmp / 'direct-crt-cab-paths.json').read_text())['source_sha'], 'fixture-sha')
+                for failure, message in [('exit', 'Fixed relative CAB extraction failed'), ('hash', 'expected regular file|exact hash'), ('extra', 'unexpected outputs')]:
+                    broken[0] = failure
+                    with self.assertRaisesRegex((ValueError, RuntimeError), message): crt.prove_cab_paths(source, tmp, 'fixture-sha')
+
+    def test_rust_cab_argv_and_status_guards_remain_in_the_owned_process_path(self):
+        source = (REPO / 'src-tauri/src/asr_components/direct_crt.rs').read_text(encoding='utf-8')
+        self.assertIn('cabinet.parent() != Some(work)', source); self.assertIn('cabinet_pin == SLICES[1].1 && pin == MINIMUM', source)
+        self.assertIn('command.args(&arguments).current_dir(work)', source)
+        self.assertIn('setup_process::run_owned_status(command, "Windows CAB extraction"', source)
+        self.assertIn('expansion_failure(status, &output, cabinet_pin, pin)', source)
+        self.assertNotIn('Check local Windows application-control policy', source)
+        self.assertIn('open_verified(&path, pin, cancel)?', source)
 
 
 if __name__ == '__main__': unittest.main()
