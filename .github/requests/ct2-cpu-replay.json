@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "purpose": "diagnostic-cpu-wheel-replay",
-  "source_sha": "573a9fde554ff13f74b5a663a0e11a0fa659c7b8",
+  "source_sha": "00666484253490f3961c6050c438a30afa4a7e0b",
   "producer": {
     "source_sha": "3006b955bb248e83e95f2dcc48c3001194513800",
     "run_id": 37953677195,
