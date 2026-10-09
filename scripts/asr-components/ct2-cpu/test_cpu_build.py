@@ -181,10 +181,12 @@ class SourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='luma quoting test ') as work:
             batch = Path(work) / 'fake developer environment.cmd'
             batch.write_text('@echo off\nset LUMA_CT2_QUOTING_TEST=passed\nexit /b 0\n', encoding='ascii')
-            subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File',
+            result = subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File',
                             str(build.HERE / 'test_cmd_environment.ps1'), '-Helper',
                             str(build.HERE / 'cmd_environment.ps1'), '-DeveloperBatch', str(batch)],
-                           check=True, capture_output=True, text=True, timeout=90)
+                           check=False, capture_output=True, text=True, timeout=90)
+            safe = [line for line in result.stderr.splitlines() if line.startswith('CT2_QUOTING_FAILURE ')]
+            self.assertEqual(result.returncode, 0, '\n'.join(safe) or 'Native quoting regression failed without safe diagnostic')
 
     def test_workflow_publishes_no_binaries(self):
         workflow = (build.HERE.parents[2] / '.github/workflows/asr-ct2-cpu.yml').read_text()

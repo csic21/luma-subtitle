@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from assemble import local_file_uri, normalize_removed_records, offline_guard, wheel_requirements, PIP_VERSION, PYTHON_VERSION
+from assemble import local_file_uri, normalize_removed_records, offline_guard, remove_bootstrap_installer, wheel_requirements, PIP_VERSION, PYTHON_VERSION
 
 
 class OfflineAssemblyTests(unittest.TestCase):
@@ -49,6 +49,22 @@ class OfflineAssemblyTests(unittest.TestCase):
 
     def test_assembly_toolchain_is_explicit(self):
         self.assertEqual(PIP_VERSION, '26.2.1'); self.assertEqual(PYTHON_VERSION, '3.12.15')
+
+    def test_bootstrap_vendor_provenance_is_removed_only_with_pinned_installer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            (site / 'pip').mkdir()
+            bootstrap = site / f'pip-{PIP_VERSION}.dist-info'; bootstrap.mkdir()
+            (bootstrap / 'direct_url.json').write_text('{"url":"file:///vendor-build/pip.whl"}')
+            retained = site / 'engine-1.0.dist-info'; retained.mkdir()
+            record = retained / 'direct_url.json'; record.write_text('{"url":"file:///verified-engine.whl"}')
+            (site / 'pipeline').mkdir()
+            remove_bootstrap_installer(site)
+            self.assertFalse(bootstrap.exists()); self.assertFalse((site / 'pip').exists())
+            self.assertEqual(list(site.glob('*.dist-info/direct_url.json')), [record])
+            self.assertTrue((site / 'pipeline').is_dir())
+            with self.assertRaisesRegex(RuntimeError, 'layout changed'):
+                remove_bootstrap_installer(site)
 
     def test_extended_windows_local_drives_are_not_unc(self):
         self.assertEqual(local_file_uri(r'\\?\C:\private runtime\wheel.whl'), 'file:///C:/private%20runtime/wheel.whl')

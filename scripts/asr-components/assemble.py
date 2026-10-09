@@ -68,6 +68,17 @@ def offline_guard(event, args):
         raise RuntimeError('Private component assembly cannot use network or start child processes: ' + event)
 
 
+def remove_bootstrap_installer(destination):
+    # The byte-pinned PBS bootstrap has its own vendor-build direct_url.json.
+    # Its identity was checked before launch; it is not an installed engine wheel.
+    # Remove exactly that installer after it exits, before validating all engine
+    # provenance. Never exempt an unknown retained package from validation.
+    for path in (destination / 'pip', destination / f'pip-{PIP_VERSION}.dist-info'):
+        if not path.is_dir() or path.is_symlink():
+            raise RuntimeError('Private bootstrap installer layout changed')
+        shutil.rmtree(path)
+
+
 def normalize_removed_records(destination, root, removed):
     """Drop only rows for deliberately removed artifacts, retaining wheel hashes.
 
@@ -165,6 +176,7 @@ def main():
     except SystemExit as exc:
         if exc.code not in (None, 0):
             raise RuntimeError(f'Private offline pip failed: {exc.code}') from exc
+    remove_bootstrap_installer(destination)
     # pip records local wheel URIs. Validate and remove this app-unneeded generated
     # metadata; immutable upstream provenance is retained below without CI paths.
     approved = {local_file_uri((wheelhouse / w['filename']).resolve()): w['sha256'] for w in lock['wheels']}
@@ -176,7 +188,7 @@ def main():
         archive = data.get('archive_info', {})
         actual = archive.get('hashes', {}).get('sha256') or archive.get('hash', '').removeprefix('sha256=')
         if expected is None or actual != expected:
-            raise RuntimeError('Unexpected direct wheel provenance')
+            raise RuntimeError('Unexpected direct wheel provenance for ' + path.parent.name)
         removed.add(path.resolve()); path.unlink(); removed_direct_urls += 1
     # The exact setuptools .pth is accepted during preflight only as install-time
     # data. A finished runtime must not execute this startup hook.
@@ -186,8 +198,6 @@ def main():
     requirements.unlink(); shutil.rmtree(home)
     # Install-time tooling does not survive into the usable runtime. No second
     # package-install path is available to a transcription request.
-    for path in list(destination.glob('pip*')):
-        shutil.rmtree(path) if path.is_dir() else path.unlink()
     if (destination.parent / 'ensurepip').exists():
         shutil.rmtree(destination.parent / 'ensurepip')
     if (root / 'Scripts').exists():

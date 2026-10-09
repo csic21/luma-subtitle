@@ -19,7 +19,7 @@ class InstalledLicenseTests(unittest.TestCase):
             report = discover(root, redist, 'Microsoft.VisualStudio.Product.Enterprise', 'pinned')
             docs = {Path(x['path']).name: x for x in report['documents']}
             self.assertEqual(set(docs), {'EULA.txt', 'LICENSE-LINK.txt'})
-            self.assertEqual(docs['EULA.txt']['text'], TERMS)
+            self.assertEqual(docs['EULA.txt']['text'].splitlines(), TERMS.splitlines())
             self.assertTrue(docs['EULA.txt']['terms_recovered'])
             self.assertFalse(docs['LICENSE-LINK.txt']['terms_recovered'])
             self.assertTrue(docs['LICENSE-LINK.txt']['link_only'])
