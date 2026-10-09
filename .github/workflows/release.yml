@@ -49,7 +49,7 @@ jobs:
         with:
           node-version: 20
       - name: Release guard regression tests
-        run: node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs
+        run: node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs scripts/recover-release.node-test.cjs
       - name: Validate request or existing tag and create draft
         id: prepare
         uses: actions/github-script@v7
@@ -91,12 +91,18 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+      - name: Setup Python for optional adapter/lifecycle tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust-target }}
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+      - name: Optional ASR adapter tests (no ML packages or models)
+        run: python -m unittest discover -s scripts -p test_asr_worker.py
       - name: Frontend regression tests
         run: pnpm test
       - name: Rust regression tests
