@@ -17,6 +17,12 @@ import sys
 ROOT = Path(__file__).resolve().parent
 
 
+def platform_description():
+    # platform.platform() may lazily query processor information via subprocess.
+    # These fields use OS/runtime metadata without weakening the offline guard.
+    return f'{sys.platform} {platform.release()}'
+
+
 def local_module(name):
     module = importlib.import_module(name)
     location = Path(module.__file__).resolve()
@@ -115,7 +121,7 @@ def main():
     assert importlib.util.find_spec('pip') is None, 'pip must not ship'
     libraries = loaded_native_libraries()
     print(json.dumps({'schema': 1, 'pack_id': config['id'], 'source_sha': config['source_sha'],
-                      'python': sys.version.split()[0], 'platform': platform.platform(), 'machine': platform.machine(),
+                      'python': sys.version.split()[0], 'platform': platform_description(), 'machine': platform.machine(),
                       'isolated': True, 'user_site': False, 'relocatable': True,
                       'private_native_libraries_checked': libraries, 'versions': versions,
                       'tested_device': device, 'inference_tested': False,
