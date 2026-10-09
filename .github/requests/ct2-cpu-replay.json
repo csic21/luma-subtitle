@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "purpose": "diagnostic-cpu-wheel-replay",
+  "source_sha": "a0cda98745b7d7c28eb9af075cd83ccac4c125d3",
+  "producer": {
+    "source_sha": "3006b955bb248e83e95f2dcc48c3001194513800",
+    "run_id": 37953677195,
+    "run_attempt": 1,
+    "job_id": 113898825946
+  },
+  "artifact": {
+    "id": 11629892995,
+    "bytes": 15478967,
+    "sha256": "864aa80bbda7cb11f59c6bdc4f418e37ee1ca66c3a7e5583703fcc16b1b9e222"
+  },
+  "manifest": {
+    "name": "diagnostic-manifest.json",
+    "bytes": 19012,
+    "sha256": "fad46ac92720c75897393521942fc163b2ce183adef62ee7cda9938cb91a30b9"
+  }
+}
