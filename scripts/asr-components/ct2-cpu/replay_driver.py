@@ -193,7 +193,7 @@ def run_case(argv, home, reports, environment, timeout):
     result['log_bytes'] = logfile.stat().st_size
     report = reports/'result.json'
     if report.is_file():
-        data = json.loads(report.read_text())
+        data = json.loads(report.read_text(encoding='utf-8'))
         result['passed'] = (result['normal_exit'] and result['outcome'] == 'exited'
                             and data.get('passed') is True)
     return result
@@ -218,7 +218,14 @@ def main():
               'verifier_source_sha': current, 'passed': False, 'cases': [], 'performance_claim': False, 'children_drained': False}
     try:
         source, manifest, recipes = verify_extract(args.artifact, args.work)
+        auditor = HERE.parent/'self_test.py'
+        if auditor.is_symlink() or not auditor.is_file() or not 0 < auditor.stat().st_size < 1_000_000:
+            raise ValueError('Reviewed current host auditor is unavailable')
+        auditor_sha256 = sha(auditor.read_bytes())
+        status['host_auditor'] = {'source_sha': current, 'repository_path': 'scripts/asr-components/self_test.py',
+                                  'bytes': auditor.stat().st_size, 'sha256': auditor_sha256}
         dump(args.reports/'original-inputs.json', {'artifact_sha256': ZIP_PIN[1], 'manifest': manifest, 'recipes': recipes,
+             'host_auditor': status['host_auditor'],
              'diagnostic_sources': {p.name: {'bytes': p.stat().st_size, 'sha256': sha(p.read_bytes())}
                                     for p in (HERE/'replay_driver.py', HERE/'lifecycle_probe.py')}})
         old = original_helpers(source); cpu = source/'scripts/asr-components/ct2-cpu'
@@ -271,11 +278,12 @@ def main():
             timeout = min(120, deadline-time.monotonic())
             if timeout <= 0: raise RuntimeError('Diagnostic aggregate900s deadline reached')
             name = threads + '-' + case; home = args.work/('home-' + name); home.mkdir()
-            (home/'poison').mkdir(); (home/'poison/sitecustomize.py').write_text("raise RuntimeError('Inherited Python path used')\n")
+            (home/'poison').mkdir(); (home/'poison/sitecustomize.py').write_text("raise RuntimeError('Inherited Python path used')\n", encoding='ascii')
             output = args.reports/name
             argv = [str(runtime/'python.exe'), '-I', '-B', '-X', 'utf8', str(HERE/'lifecycle_probe.py'),
                     '--root', str(runtime), '--worker', str(source/'src-tauri/src/asr/worker.py'),
-                    '--original-verifier', str(cpu/'verify_runtime.py'), '--model', str(model), '--switch-model', str(switch),
+                    '--original-verifier', str(cpu/'verify_runtime.py'),
+                    '--host-auditor', str(auditor), '--host-auditor-sha256', auditor_sha256, '--auditor-source-sha', current, '--model', str(model), '--switch-model', str(switch),
                     '--audio', str(audio), '--reports', str(output), '--case', case, '--threads', threads]
             status['children_drained'] = False
             dump(args.reports/'replay-result.json', status)

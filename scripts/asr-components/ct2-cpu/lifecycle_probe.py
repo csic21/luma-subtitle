@@ -2,6 +2,7 @@
 """Diagnostic-only lifecycle comparison; execute with the exact private PBS."""
 import argparse
 import gc
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
@@ -10,6 +11,7 @@ import io
 import json
 import math
 import os
+import re
 from pathlib import Path
 import runpy
 import sys
@@ -64,10 +66,68 @@ def retained_factory(worker_class, holder, journal):
     return create
 
 
+def load_host_auditor(path, expected_sha256, source_sha):
+    path = Path(path)
+    if (not re.fullmatch('[a-f0-9]{64}', expected_sha256)
+            or not re.fullmatch('[a-f0-9]{40}', source_sha) or path.is_symlink()
+            or not path.is_file() or not 0 < path.stat().st_size < 1_000_000):
+        raise ValueError('Invalid diagnostic host-auditor identity')
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise ValueError('Diagnostic host-auditor bytes changed')
+    spec = importlib.util.spec_from_file_location('diagnostic_host_auditor', path)
+    auditor = importlib.util.module_from_spec(spec); spec.loader.exec_module(auditor)
+    if not callable(getattr(auditor, 'verified_defender_module', None)):
+        raise ValueError('Reviewed Defender classifier is unavailable')
+    return auditor, {'source_sha': source_sha, 'repository_path': 'scripts/asr-components/self_test.py',
+                     'bytes': len(data), 'sha256': expected_sha256,
+                     'scope': 'Diagnostic Defender identity only; all other paths use original producer policy'}
+
+
+def diagnostic_loaded_paths(paths, root, system, original, auditor):
+    def host_candidate(name):
+        path = Path(name)
+        return (path.name.lower() == 'mpoav.dll' and not path.is_relative_to(root)
+                and not path.is_relative_to(system))
+    ordinary = [name for name in paths if not host_candidate(name)]
+    # Reject optional global CRT/GPU/OpenMP or any other unexpected dependency
+    # before attempting the single host-security classification.
+    validated = original.validate_loaded_paths(ordinary, root, system)
+    result = {name.lower(): record for name, record in zip(ordinary, validated)}
+    for name in paths:
+        if host_candidate(name):
+            evidence = auditor.verified_defender_module(name)
+            if (evidence.get('verified') is not True or evidence.get('kind') != 'windows-defender-amsi'):
+                raise RuntimeError('Defender classification did not produce verified identity')
+            result[name.lower()] = {'path': name, 'scope': 'verified_host_security', 'evidence': evidence}
+    return [result[name.lower()] for name in paths]
+
+
+def audit_diagnostic_modules(root, system, original, auditor):
+    # Match the reviewed shared self-test's hard three-round fixed point.
+    # Trust APIs may load native libraries; every newly observed path must
+    # satisfy the original policy or the exact verified Defender exception.
+    checked = {}; previous = None
+    for _ in range(3):
+        paths = original.loaded_modules()
+        if not 0 < len(paths) <= 4096:
+            raise RuntimeError('Diagnostic native module snapshot exceeds bounds')
+        current = frozenset(name.lower() for name in paths)
+        new = [name for name in paths if name.lower() not in checked]
+        records = diagnostic_loaded_paths(new, root, system, original, auditor)
+        checked.update((name.lower(), record) for name, record in zip(new, records))
+        if current == previous:
+            return [checked[name] for name in sorted(checked)]
+        previous = current
+    raise RuntimeError('Diagnostic native module snapshot did not stabilize within three rounds')
+
+
 def main():
     parser = argparse.ArgumentParser()
-    for name in ('root', 'worker', 'original-verifier', 'model', 'switch-model', 'audio', 'reports'):
+    for name in ('root', 'worker', 'original-verifier', 'host-auditor', 'model', 'switch-model', 'audio', 'reports'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--host-auditor-sha256', required=True)
+    parser.add_argument('--auditor-source-sha', required=True)
     parser.add_argument('--case', choices=('eof', 'unload', 'switch'), required=True)
     parser.add_argument('--threads', choices=('default', 'one'), required=True)
     args = parser.parse_args()
@@ -92,6 +152,12 @@ def main():
                 or not sys.flags.isolated or not sys.flags.dont_write_bytecode
                 or Path(sys.prefix).resolve() != root):
             raise RuntimeError('Expected exact isolated private Windows PBS')
+        auditor, auditor_identity = load_host_auditor(args.host_auditor, args.host_auditor_sha256, args.auditor_source_sha)
+        report['host_auditor'] = auditor_identity
+        original_bytes = args.original_verifier.read_bytes()
+        report['original_auditor'] = {'source_sha': '3006b955bb248e83e95f2dcc48c3001194513800',
+             'repository_path': 'scripts/asr-components/ct2-cpu/verify_runtime.py',
+             'bytes': len(original_bytes), 'sha256': hashlib.sha256(original_bytes).hexdigest()}
         worker = runpy.run_path(str(args.worker))
         worker['configure_offline'](); sys.addaudithook(worker['offline_audit'])
         for name in ('ctranslate2', 'faster_whisper', 'av', 'numpy', 'onnxruntime', 'tokenizers'):
@@ -136,7 +202,7 @@ def main():
                     # Audit while the actual live Worker still owns its model.
                     system = Path(next(v for k, v in os.environ.items() if k.upper() == 'SYSTEMROOT')).resolve()
                     with journal.stage('loaded_modules.validation'):
-                        report['loaded_modules'] = original.validate_loaded_paths(original.loaded_modules(), root, system)
+                        report['loaded_modules'] = audit_diagnostic_modules(root, system, original, auditor)
                     write_json(args.reports / 'results.json', report)
                 return count
         output = Capture(journal)

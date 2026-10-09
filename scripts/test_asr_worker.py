@@ -7,7 +7,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import struct
 import subprocess
 import sys
@@ -86,6 +86,78 @@ class WorkerTests(unittest.TestCase):
                     get_supported_compute_types=lambda device: {"float16", "float32"} if device == "cuda" else {"int8", "float32"}),
                    "faster_whisper": NS(WhisperModel=factory)}
         return modules, factory, model
+
+    def test_ct2_constructor_spelling_does_not_change_cache_identity(self):
+        modules,factory,_=self.faster_modules()
+        engine=w.Worker()
+        with patch.object(w,'optional_import',side_effect=lambda name,_:modules[name]), \
+             patch.object(w,'faster_whisper_model_argument',return_value='D:\\same verified model') as adapt:
+            engine.transcribe(self.request(),lambda event:None)
+            engine.transcribe(self.request(),lambda event:None)
+        self.assertEqual(factory.call_args.args[0],'D:\\same verified model')
+        self.assertEqual(engine.key[1],str(self.model.resolve()))
+        self.assertEqual(factory.call_count,1);self.assertEqual(adapt.call_count,1)
+
+    def ct2_windows_argument(self,value,*,same=True,other=False):
+        class FakePath:
+            def __init__(self,path):self.path=path
+            def resolve(self,strict=False):
+                self_assert.assertTrue(strict)
+                path='D:\\different model' if other and not self.path.startswith('\\\\?\\') else self.path
+                return PureWindowsPath(path)
+            def samefile(self,canonical):
+                self_assert.assertTrue(str(canonical).startswith('\\\\?\\'))
+                return same
+        self_assert=self
+        with patch.object(w.sys,'platform','win32'),patch.object(w,'Path',side_effect=FakePath):
+            return w.faster_whisper_model_argument(value)
+
+    def test_ct2_extended_drive_adapter_preserves_unicode_and_checks_identity(self):
+        normal='D:\\model 子 日本語 é'
+        self.assertEqual(self.ct2_windows_argument('\\\\?\\'+normal),normal)
+        for kwargs in ({'same':False},{'other':True}):
+            with self.assertRaises(w.WorkerError) as caught:self.ct2_windows_argument('\\\\?\\'+normal,**kwargs)
+            self.assertEqual(caught.exception.code,'model_path_identity_changed')
+
+    def test_ct2_normal_paths_and_non_windows_inputs_are_unchanged(self):
+        values=['D:\\model 子','\\\\server\\share\\model','/local/model']
+        with patch.object(w.sys,'platform','win32'),patch.object(w,'Path') as filesystem:
+            for value in values:self.assertEqual(w.faster_whisper_model_argument(value),value)
+            filesystem.assert_not_called()
+        with patch.object(w.sys,'platform','darwin'):
+            value='\\\\?\\D:\\model';self.assertEqual(w.faster_whisper_model_argument(value),value)
+
+    def test_ct2_namespace_or_ambiguous_path_is_never_reinterpreted(self):
+        bad=['\\\\?\\UNC\\server\\share\\model','\\\\.\\D:\\model','\\\\?\\Volume{fixture}\\model',
+             '\\\\?\\D:model','\\\\?\\D:\\model.','\\\\?\\D:\\model ',
+             '\\\\?\\D:\\model:stream','\\\\?\\D:\\NUL.txt','\\\\?\\D:\\COM¹',
+             '\\\\?\\D:\\one\\..\\two','\\\\?\\D:\\one/two','\\\\?\\D:\\\\model']
+        for value in bad:
+            with self.subTest(value=value),self.assertRaises(w.WorkerError) as caught:self.ct2_windows_argument(value)
+            self.assertEqual(caught.exception.code,'unsupported_model_path')
+
+    def test_ct2_limit_counts_utf16_units_and_longest_loader_filename(self):
+        suffix='\\preprocessor_config.json'
+        count=259-len('D:\\')-len(suffix)
+        normal='D:\\'+'a'*count
+        self.assertEqual(self.ct2_windows_argument('\\\\?\\'+normal),normal)
+        with self.assertRaises(w.WorkerError):self.ct2_windows_argument('\\\\?\\'+normal+'a')
+        # Replacing two ASCII units with one astral character preserves the bound;
+        # replacing just one adds a UTF-16 unit and must fail.
+        allowed='D:\\'+'a'*(count-2)+'😀'
+        self.assertEqual(self.ct2_windows_argument('\\\\?\\'+allowed),allowed)
+        with self.assertRaises(w.WorkerError):self.ct2_windows_argument('\\\\?\\'+'D:\\'+'a'*(count-1)+'😀')
+
+    @unittest.skipUnless(sys.platform=='win32','real native Windows extended and Unicode path identities')
+    def test_ct2_real_windows_extended_unicode_directory_roundtrip(self):
+        directory=self.root/'model 子 日本語 é';directory.mkdir()
+        normal=str(directory.resolve(strict=True))
+        if normal.startswith('\\\\?\\'):normal=normal[4:]
+        extended='\\\\?\\'+normal
+        result=w.faster_whisper_model_argument(extended)
+        self.assertEqual(result,normal)
+        self.assertTrue(Path(result).samefile(extended))
+        self.assertEqual(w.faster_whisper_model_argument(normal),normal)
 
     def qwen_modules(self, cuda=False):
         self.qwen_files()

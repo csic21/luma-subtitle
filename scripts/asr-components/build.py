@@ -215,7 +215,7 @@ def write_licenses(root, site, runtime, wheels):
 
 
 def copy_runtime_licenses(root, platform):
-    lock = json.loads((ROOT / 'licenses.lock.json').read_text())
+    lock = json.loads((ROOT / 'licenses.lock.json').read_text(encoding='utf-8'))
     selected = [f for f in lock['files'] if f['platform'] == platform]
     if not selected:
         raise ValueError('Missing runtime license inventory')
@@ -268,7 +268,7 @@ def pe_imports(path):
 
 
 def prune_reviewed_files(root, pack_id):
-    policy = json.loads((ROOT / 'pruning.json').read_text())['packs'].get(pack_id)
+    policy = json.loads((ROOT / 'pruning.json').read_text(encoding='utf-8'))['packs'].get(pack_id)
     if not policy:
         return
     library = root.joinpath(*safe_name(policy['verify_pe_imports']).parts)
@@ -288,7 +288,7 @@ def prune_reviewed_files(root, pack_id):
 
 
 def copy_supplemental_notices(root, pack):
-    lock = json.loads((ROOT / 'supplemental-notices.lock.json').read_text())
+    lock = json.loads((ROOT / 'supplemental-notices.lock.json').read_text(encoding='utf-8'))
     selected = []
     for entry in lock['files']:
         if pack['id'] not in entry['packs']:
@@ -328,8 +328,8 @@ def run_offline_assembly(root, runtime, lock_path, wheels, cache, output):
     for wheel in wheels:
         shutil.copyfile(fetch(wheel, cache), wheelhouse / wheel['filename'])
     poison = output / 'poison'; poison.mkdir()
-    (poison / 'sitecustomize.py').write_text("raise RuntimeError('Inherited Python path used')\n")
-    (poison / 'pip.conf').write_text('[global]\nindex-url = https://invalid.example/no-network\ntarget = /never-use-inherited-pip-target\n')
+    (poison / 'sitecustomize.py').write_text("raise RuntimeError('Inherited Python path used')\n", encoding='utf-8')
+    (poison / 'pip.conf').write_text('[global]\nindex-url = https://invalid.example/no-network\ntarget = /never-use-inherited-pip-target\n', encoding='utf-8')
     env = dict(os.environ, PATH=str(poison / 'no-executables'), PYTHONHOME=str(poison / 'not-python'),
                PYTHONPATH=str(poison), PIP_CONFIG_FILE=str(poison / 'pip.conf'),
                PIP_INDEX_URL='https://invalid.example/no-network', PIP_TARGET=str(poison / 'must-not-be-written'))
@@ -350,7 +350,7 @@ def run_offline_assembly(root, runtime, lock_path, wheels, cache, output):
 
 
 def build(pack_id, output, cache, source_sha, native=True, installer='wheel', windows_crt=None):
-    config = json.loads((ROOT / 'packs.json').read_text())
+    config = json.loads((ROOT / 'packs.json').read_text(encoding='utf-8'))
     pack = next(p for p in config['packs'] if p['id'] == pack_id)
     native_platform = 'windows-x64' if sys.platform == 'win32' and platform.machine().lower() in {'amd64', 'x86_64'} else 'macos-arm64' if sys.platform == 'darwin' and platform.machine() == 'arm64' else None
     if native and native_platform != pack['platform']:
@@ -359,7 +359,7 @@ def build(pack_id, output, cache, source_sha, native=True, installer='wheel', wi
         raise ValueError('Expected immutable source commit SHA')
     runtime = config['runtime'][pack['platform']]
     lock_path = ROOT / 'locks' / (pack_id + '.json')
-    lock = json.loads(lock_path.read_text())
+    lock = json.loads(lock_path.read_text(encoding='utf-8'))
     if lock['platform'] != pack['platform']:
         raise ValueError('Lock platform mismatch')
     output.mkdir(parents=True, exist_ok=True); cache.mkdir(parents=True, exist_ok=True)

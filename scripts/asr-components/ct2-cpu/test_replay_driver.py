@@ -143,6 +143,18 @@ class ReplayDriverTests(unittest.TestCase):
             with self.assertRaises(OSError):replay.run_case(['owned-child'],root,root/'one-eof',{},1)
             self.assertEqual(json.loads((root/'replay-child-drain.json').read_text())['drained'],False)
 
+    def test_machine_report_read_is_explicit_utf8_on_cp1252_host(self):
+        original_read=Path.read_text
+        def host_read(path,*args,**kwargs):
+            kwargs.setdefault('encoding','cp1252')
+            return original_read(path,*args,**kwargs)
+        with temporary_root() as root:
+            output=root/'one-eof';output.mkdir()
+            (output/'result.json').write_text('{"passed":true,"text":"丁"}',encoding='utf-8')
+            with patch.object(Path,'read_text',host_read):
+                result=replay.run_case([sys.executable,'-B','-c','pass'],root,output,dict(__import__('os').environ),5)
+            self.assertTrue(result['passed'])
+
     def test_source_only_replay_cannot_call_native_build_or_publication(self):
         source=Path(replay.__file__).read_text()
         self.assertNotIn('build_once(',source);self.assertNotIn('package_publication(',source)
@@ -150,6 +162,8 @@ class ReplayDriverTests(unittest.TestCase):
         self.assertIn('deadline = time.monotonic() + 900',source)
         self.assertIn('timeout = min(120, deadline-time.monotonic())',source)
         self.assertEqual(len(replay.CASES),6)
+        self.assertIn("'--host-auditor-sha256', auditor_sha256, '--auditor-source-sha', current",source)
+        self.assertIn("'host_auditor': status['host_auditor']",source)
 
 
 if __name__=='__main__':unittest.main()

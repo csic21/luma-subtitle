@@ -65,7 +65,7 @@ def prepare(cache, directory):
     directory.mkdir(parents=True,exist_ok=False)
     directory=directory.resolve(strict=True);cache=cache.resolve(strict=True)
     pins=json.loads((ROOT/'fixtures.json').read_text(encoding='utf-8'))
-    model=directory/'tiny model';replacement=directory/'tiny replacement model';audio=directory/'jfk.wav';long_audio=directory/'jfk-repeat.wav'
+    model=directory/'tiny model';replacement=directory/'tiny replacement model 子 日本語 é';audio=directory/'jfk.wav';long_audio=directory/'jfk-repeat.wav'
     for item in pins['faster_whisper_tiny']['files']:
         copy_cached(item,cache,model.joinpath(*safe_name(item['path']).parts))
         copy_cached(item,cache,replacement.joinpath(*safe_name(item['path']).parts))

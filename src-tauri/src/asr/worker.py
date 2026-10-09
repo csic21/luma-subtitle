@@ -79,6 +79,50 @@ def local_path(value, label, directory=True):
     return path.resolve()
 
 
+def faster_whisper_model_argument(value):
+    """Preserve model identity while avoiding CT2's verbatim-path slash join.
+
+    CT2 4.8.2 uses UTF-16 file I/O on Windows, but ModelFileReader joins its
+    directory and filename with '/'. Win32 does not normalize that separator
+    inside a verbatim namespace. Only a verified, short local-drive spelling is
+    adapted here; configuration, cache keys and managed leases stay canonical.
+    """
+    if sys.platform != "win32":
+        return value
+    prefix = "\\\\?\\"
+    if not value.startswith((prefix, "\\\\.\\")):
+        return value
+    ordinary = value[len(prefix):] if value.startswith(prefix) else ""
+    message = ("CTranslate2 cannot use this Windows model path safely. Choose the same complete model "
+               "in a shorter local-drive directory with ordinary file names; extended UNC/device paths "
+               "and long paths are unsupported by this adapter. No model files were moved or changed.")
+    if (len(ordinary) < 3 or not ordinary[0].isascii() or not ordinary[0].isalpha()
+            or ordinary[1:3] != ":\\"):
+        raise WorkerError("unsupported_model_path", message)
+    reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    reserved.update(stem + digit for stem in ("COM", "LPT") for digit in "123456789¹²³")
+    parts = ordinary[3:].split("\\")
+    if any(not part or part in (".", "..") or part.endswith((".", " "))
+           or part.split(".", 1)[0].upper() in reserved
+           or any(ord(char) < 32 or char in '<>:"/|?*' for char in part) for part in parts):
+        raise WorkerError("unsupported_model_path", message)
+    # Include the longest filename used by the reviewed Whisper loader. Do not
+    # depend on machine-wide long-path policy or silently truncate a path.
+    if len((ordinary + "\\preprocessor_config.json").encode("utf-16-le")) // 2 >= 260:
+        raise WorkerError("unsupported_model_path", message)
+    try:
+        canonical = Path(value).resolve(strict=True)
+        candidate = Path(ordinary)
+        resolved = str(candidate.resolve(strict=True))
+        if not resolved.startswith(prefix):
+            resolved = prefix + resolved
+        if Path(resolved).resolve(strict=True) != canonical or not candidate.samefile(canonical):
+            raise WorkerError("model_path_identity_changed", "The Windows model path resolves to a different directory. Retry after checking the selected local model.")
+    except OSError as exc:
+        raise WorkerError("unsupported_model_path", message) from exc
+    return ordinary
+
+
 def required_file(root, name):
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts:
@@ -539,7 +583,7 @@ class Worker:
                     info["core"].set_default_device(info["core"].gpu)
                     model = info["module"].ModelHolder.get_model(config["model"], info["core"].float16)
                 elif config["backend"] == "faster-whisper":
-                    model = info["module"].WhisperModel(config["model"], device=info["device"],
+                    model = info["module"].WhisperModel(faster_whisper_model_argument(config["model"]), device=info["device"],
                                                          compute_type=info["compute_type"], local_files_only=True, num_workers=1)
                     actual = getattr(getattr(model, "model", None), "device", None)
                     if actual != info["device"]:

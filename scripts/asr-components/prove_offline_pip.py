@@ -85,11 +85,11 @@ def main():
         shutil.rmtree(windows_crt)
     assert one['archive'] == two['archive'], 'Offline pip output must reproduce exactly'
     assert (first / (args.pack + '.manifest.json')).read_bytes() == (second / (args.pack + '.manifest.json')).read_bytes()
-    assembly = json.loads((first / 'staging' / args.pack / 'ASSEMBLY.json').read_text())
+    assembly = json.loads((first / 'staging' / args.pack / 'ASSEMBLY.json').read_text(encoding='utf-8'))
     shutil.rmtree(second)  # Reclaim only this proof's disposable build output.
     owned([sys.executable, '-B', str(ROOT / 'smoke.py'), '--manifest', str(first / (args.pack + '.manifest.json')),
            '--worker', str(args.worker.resolve()), '--cache', str(cache)])
-    smoke = json.loads((first / (args.pack + '.smoke.json')).read_text())
+    smoke = json.loads((first / (args.pack + '.smoke.json')).read_text(encoding='utf-8'))
     # Exact archive/rebuild/import evidence is in memory. Reclaim only this
     # disposable reference output before Rust exercises its independent staging,
     # installed copy and atomic repair. User-space requirements stay enforced.

@@ -49,7 +49,7 @@ def clean_environment(home):
                 'HF_HUB_DISABLE_IMPLICIT_TOKEN': '1', 'DO_NOT_TRACK': '1', 'LANG': 'C.UTF-8',
                 'NUMBA_CACHE_DIR': str(home / 'numba-cache')})
     poison = home / 'poison'; poison.mkdir()
-    (poison / 'sitecustomize.py').write_text("raise RuntimeError('inherited Python path leaked into component')\n")
+    (poison / 'sitecustomize.py').write_text("raise RuntimeError('inherited Python path leaked into component')\n", encoding='utf-8')
     return env
 
 
@@ -155,7 +155,7 @@ def managed_worker_runtime_probe(executable, worker, env, cwd):
 
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--manifest', type=Path, required=True); p.add_argument('--worker', type=Path, required=True); p.add_argument('--cache', type=Path, required=True)
-    a = p.parse_args(); manifest = json.loads(a.manifest.read_text()); output = a.manifest.parent
+    a = p.parse_args(); manifest = json.loads(a.manifest.read_text(encoding='utf-8')); output = a.manifest.parent
     archive = output / manifest['archive']['url'].rsplit('/', 1)[-1]
     assert sha256(archive) == manifest['archive']['sha256'] and archive.stat().st_size == manifest['archive']['bytes']
     with tempfile.TemporaryDirectory(prefix='luma-asr-clean-') as temp:
@@ -220,7 +220,7 @@ def main():
         assert recovered[-1]['code'] == 'local_path_required'
         inference = {'tested': False, 'reason': 'Qwen imports/API only; model weights and memory fit are untested.' if manifest['backend'] == 'qwen3-asr' else 'MLX tiny fixture access is paused; no model inference performed.'}
         if manifest['backend'] == 'faster-whisper':
-            fixture = json.loads((ROOT / 'fixtures.json').read_text()); a.cache.mkdir(parents=True, exist_ok=True)
+            fixture = json.loads((ROOT / 'fixtures.json').read_text(encoding='utf-8')); a.cache.mkdir(parents=True, exist_ok=True)
             # Build-time, reviewed public fixture downloads. Workers stay offline.
             ALLOWED.update({'huggingface.co', 'raw.githubusercontent.com'})
             model = work / 'fixture-model'; model.mkdir()

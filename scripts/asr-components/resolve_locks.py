@@ -59,7 +59,7 @@ def wheel_for(name, version, platform, hashes):
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument('--requirements', type=Path, required=True); ap.add_argument('--platform', choices=['windows-x64','macos-arm64'], required=True); ap.add_argument('--output', type=Path, required=True)
     args = ap.parse_args()
-    text = args.requirements.read_text()
+    text = args.requirements.read_text(encoding='utf-8')
     lines = re.split(r'\n(?=[A-Za-z0-9][A-Za-z0-9_.-]*==)', text)
     packages = []
     for line in lines:
@@ -70,7 +70,7 @@ def main():
         wheels = sorted(pool.map(lambda p: wheel_for(*p), packages), key=lambda w: w['name'])
     doc = {'schema': 1, 'platform': args.platform, 'python': '3.12', 'resolution_date': '2026-10-09', 'resolver': 'uv 0.12.23',
            'requirements_sha256': hashlib.sha256(args.requirements.read_bytes()).hexdigest(), 'wheels': wheels}
-    args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + '\n')
+    args.output.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print(args.output, len(wheels), 'wheels;', sum(w['bytes'] for w in wheels), 'download bytes')
 
 
