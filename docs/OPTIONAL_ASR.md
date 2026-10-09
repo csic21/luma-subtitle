@@ -1,8 +1,43 @@
 # Optional local transcription engines
 
 The default `whisper.cpp` engine and existing GGML models continue to work without
-Python. These additional engines are opt-in. Luma does not install packages,
-download models, read Hugging Face credentials, or silently switch engines.
+Python. These additional engines are opt-in. Luma downloads verified private
+engine components and models only after an explicit install/download action.
+It does not install system Python, run pip on your computer, change PATH, read
+Hugging Face credentials, or silently switch engines.
+
+## One-click managed setup
+
+1. Select an optional engine in Settings or task configuration. The original
+   whisper.cpp engine and its Turbo preset remain available without this setup.
+2. Select a compatible engine component, review download/install sizes and source,
+   then choose Install. The private runtime is kept in Luma's own data directory;
+   you do not need to install Python or enter terminal commands.
+3. Download a compatible model separately. Qwen needs both its ASR model and the
+   distinct ForcedAligner model. Choose the installed components for this task and
+   run the capability check before processing your media.
+
+The initial managed components are Windows x64 Whisper CPU, Apple Silicon MLX
+Whisper/Metal, and Qwen CPU for either platform. They do not include CUDA. Device
+and minimum macOS-version checks can reject an incompatible component before
+installation. A GPU being present does not make an unsupported backend ready.
+
+Downloads expose progress and cancellation. Complete bytes and SHA-256 values
+are pinned in the application catalog, not accepted from an untrusted remote
+manifest. A component is unpacked into staging, checked and self-tested, then
+activated atomically. Failed installation keeps the previous working component.
+Repair verifies/reinstalls the selected owned component; removal affects only
+Luma-managed copies, not existing external models. Cancel or finish transcription
+before replacing/removing components in use. Old component versions are retained
+rather than silently deleted while saved tasks may still reference their paths.
+
+No installer requires admin access or changes Gatekeeper/SmartScreen policies.
+If the operating system blocks a component, Luma reports the original error;
+it does not remove quarantine attributes or bypass a warning. Updater integrity
+signatures are distinct from Apple Developer ID signing/notarization.
+
+Advanced external-runtime paths remain available for existing configurations.
+The manual commands below are optional advanced examples, not the standard setup.
 
 ## Choose an engine
 
@@ -26,7 +61,7 @@ it. Changing the language does not reload weights. Results report the loaded dev
 seconds, and whether the model was reused. These are measurements, not speedup
 claims. RAM/VRAM remains occupied while that worker stays warm.
 
-## Manual setup examples
+## Advanced external-runtime setup examples
 
 The commands below are **user-run setup**, outside Luma. They install software or
 download weights only when you choose to run them. No setup commands were run as
@@ -35,8 +70,9 @@ dependency conflicts. Python 3.12 is a practical starting point.
 
 The adapter was checked against the upstream APIs of `mlx-whisper==0.4.3`,
 `faster-whisper==1.2.1`, and `qwen-asr==0.0.6`; actual hardware inference with these
-packages still requires validation on your machine. Transitive dependencies are
-not a reproducible lockfile. Keep your working environment stable after testing.
+packages still requires validation on your machine. For these external examples, transitive dependencies are not a reproducible
+lockfile. Managed components instead use fixed, hash-pinned wheel/runtime locks.
+Keep an external working environment stable after testing.
 
 ### Apple Silicon: MLX Whisper
 

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import type { AsrComponentCatalog, AsrComponentStatus, AsrComponentsSnapshot } from "@/lib/asr-components";
 
 import type {
   AsrConfig,
@@ -232,4 +233,28 @@ export function checkTranslationCli(command: string, tool: string) {
 
 export function listTranslationCliModels(command: string) {
   return invoke<string[]>("list_translation_cli_models", { command });
+}
+
+export function asrComponentCatalog() {
+  return invoke<AsrComponentCatalog>("asr_component_catalog");
+}
+
+export function asrComponentStatus() {
+  return invoke<AsrComponentsSnapshot>("asr_component_status");
+}
+
+export function installAsrComponent(componentId: string, requestId: string) {
+  return invoke<AsrComponentStatus>("install_asr_component", { request: { component_id: componentId, request_id: requestId } });
+}
+
+export function repairAsrComponent(componentId: string, requestId: string) {
+  return invoke<AsrComponentStatus>("repair_asr_component", { request: { component_id: componentId, request_id: requestId } });
+}
+
+export function removeAsrComponent(componentId: string, requestId: string) {
+  return invoke<AsrComponentStatus>("remove_asr_component", { request: { component_id: componentId, request_id: requestId } });
+}
+
+export function cancelAsrComponent(requestId: string) {
+  return invoke<boolean>("cancel_asr_component", { requestId });
 }

@@ -33,7 +33,32 @@ pub(crate) struct AsrRuntime {
     worker: AsyncMutex<Option<Worker>>,
     stopping: AtomicBool,
 }
+
+/// Excludes transcription/probes while a managed component is validated or
+/// activated. The installer must never hold this guard during a download.
+pub(crate) struct ComponentMaintenanceGuard<'a> {
+    _slot: tokio::sync::MutexGuard<'a, Option<Worker>>,
+}
+
 impl AsrRuntime {
+    pub(crate) async fn begin_component_maintenance(
+        &self,
+    ) -> Result<ComponentMaintenanceGuard<'_>, String> {
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err("The application is closing; component maintenance was cancelled.".into());
+        }
+        let mut slot = self.worker.try_lock().map_err(|_| {
+            "ASR is running. Cancel or wait for the current task before installing, repairing or removing its components.".to_string()
+        })?;
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err("The application is closing; component maintenance was cancelled.".into());
+        }
+        if let Some(mut worker) = slot.take() {
+            worker.stop().await;
+        }
+        Ok(ComponentMaintenanceGuard { _slot: slot })
+    }
+
     pub(crate) async fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         if let Some(mut worker) = self.worker.lock().await.take() {
@@ -92,6 +117,8 @@ impl AsrRuntime {
             if worker.config == *config
                 && worker
                     .child
+                    .as_mut()
+                    .expect("worker owns its child")
                     .try_wait()
                     .map_err(|e| JobError::failed(e.to_string()))?
                     .is_none()
@@ -125,7 +152,8 @@ impl AsrRuntime {
 struct Worker {
     script_path: PathBuf,
     config: AsrConfig,
-    child: Child,
+    child: Option<Child>,
+    managed_use_leases: Vec<std::fs::File>,
     stdin: ChildStdin,
     stdout: ChildStdout,
     pending: Vec<u8>,
@@ -134,15 +162,38 @@ struct Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Child is also kill_on_drop. start_kill ensures prompt termination even
-        // while the runtime is shutting down and cannot poll another future.
-        let _ = self.child.start_kill();
+        // Keep cross-process storage leases until the OS has reaped the child,
+        // even if an async request is dropped or the Tokio runtime is closing.
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                let leases = Arc::new(std::mem::take(&mut self.managed_use_leases));
+                let retained = leases.clone();
+                let reaper = std::thread::Builder::new().name("luma-asr-reaper".into()).spawn(move || {
+                    let _leases = retained;
+                    loop {
+                        match child.try_wait() {
+                            Ok(Some(_)) => break,
+                            _ => { let _ = child.start_kill(); std::thread::sleep(POLL); }
+                        }
+                    }
+                });
+                if reaper.is_err() {
+                    // Conservatively retain the lock until app exit if an OS
+                    // thread cannot be created. Never unlock a live worker.
+                    std::mem::forget(leases);
+                }
+            }
+        }
         self.stderr_reader.abort();
         let _ = std::fs::remove_file(&self.script_path);
     }
 }
 impl Worker {
     fn spawn(config: &AsrConfig, source: &str) -> JobResult<Self> {
+        let managed_use_leases = crate::asr_components::acquire_managed_use_leases(
+            &managed_config_paths(config),
+        ).map_err(JobError::failed)?;
         // A file avoids Windows' 32K command-line limit. It contains only the
         // embedded application code, never user media, settings or credentials.
         let script_path =
@@ -165,7 +216,7 @@ impl Worker {
         }
         let mut command = Command::new(&config.python_path);
         command
-            .args(["-I", "-u", "-X", "utf8"])
+            .args(["-I", "-B", "-u", "-X", "utf8"])
             .arg(&script_path)
             .env("HF_HUB_OFFLINE", "1")
             .env("TRANSFORMERS_OFFLINE", "1")
@@ -178,7 +229,7 @@ impl Worker {
         hide_tokio_command_window(&mut command);
         let mut child = command.spawn().map_err(|e| {
             let _ = std::fs::remove_file(&script_path);
-            JobError::failed(format!("Cannot start optional ASR Python: {e}. Check the executable/virtual environment in ASR settings, or select whisper.cpp."))
+            JobError::failed(format!("Cannot start the optional ASR engine component: {e}. Install or repair its component in ASR settings, check an advanced external runtime if configured, or select whisper.cpp. Operating-system security restrictions are not bypassed."))
         })?;
         let stdin = child
             .stdin
@@ -209,7 +260,8 @@ impl Worker {
         Ok(Self {
             script_path,
             config: config.clone(),
-            child,
+            child: Some(child),
+            managed_use_leases,
             stdin,
             stdout,
             pending: Vec::new(),
@@ -218,8 +270,10 @@ impl Worker {
         })
     }
     async fn stop(&mut self) {
-        let _ = self.child.kill().await;
-        let _ = self.child.wait().await;
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
         self.stderr_reader.abort();
     }
     fn detail(&self) -> String {
@@ -299,6 +353,15 @@ impl Worker {
         }
     }
 }
+fn managed_config_paths(config: &AsrConfig) -> Vec<&str> {
+    let mut paths = vec![config.python_path.as_str(), config.model_path.as_str()];
+    // Settings retain engine-specific values when switching engines. Whisper
+    // must not resolve an irrelevant, possibly removed Qwen aligner path.
+    if config.engine == "qwen3-asr" {
+        paths.push(config.aligner_path.as_str());
+    }
+    paths
+}
 fn check_cancel(cancel: &AtomicBool, stopping: &AtomicBool) -> JobResult<()> {
     if cancel.load(Ordering::SeqCst) || stopping.load(Ordering::SeqCst) {
         Err(JobError::Cancelled)
@@ -319,6 +382,54 @@ mod tests {
                 .to_string(),
             ..AsrConfig::default()
         }
+    }
+    #[test]
+    fn whisper_lease_paths_ignore_stale_qwen_aligner() {
+        let mut config = python_config();
+        config.engine = "whisper-accelerated".into();
+        config.aligner_path = "/missing/previous-qwen-aligner".into();
+        assert_eq!(managed_config_paths(&config).len(), 2);
+        assert!(!managed_config_paths(&config).contains(&config.aligner_path.as_str()));
+        config.engine = "qwen3-asr".into();
+        assert!(managed_config_paths(&config).contains(&config.aligner_path.as_str()));
+    }
+    #[test]
+    fn component_maintenance_stops_idle_worker_and_excludes_new_requests() {
+        tauri::async_runtime::block_on(async {
+            let runtime = AsrRuntime::default();
+            let config = python_config();
+            let worker = Worker::spawn(&config, "import time\ntime.sleep(30)").unwrap();
+            let script = worker.script_path.clone();
+            *runtime.worker.lock().await = Some(worker);
+            let guard = runtime.begin_component_maintenance().await.unwrap();
+            assert!(!script.exists());
+            assert!(runtime.worker.try_lock().is_err());
+            assert!(runtime
+                .request(
+                    &config,
+                    "probe",
+                    None,
+                    None,
+                    Arc::new(AtomicBool::new(false)),
+                    Some(Duration::from_secs(1)),
+                    |_| {},
+                )
+                .await
+                .is_err());
+            drop(guard);
+            assert!(runtime.worker.lock().await.is_none());
+        });
+    }
+    #[test]
+    fn component_maintenance_refuses_active_or_stopping_runtime() {
+        tauri::async_runtime::block_on(async {
+            let runtime = AsrRuntime::default();
+            let active_request = runtime.worker.lock().await;
+            assert!(runtime.begin_component_maintenance().await.is_err());
+            drop(active_request);
+            runtime.shutdown().await;
+            assert!(runtime.begin_component_maintenance().await.is_err());
+        });
     }
     #[test]
     fn worker_reuses_process_for_multiple_requests_and_returns_real_progress() {
@@ -344,7 +455,7 @@ mod tests {
                 assert_eq!(progress.len(), 1);
             }
             worker.stop().await;
-            assert!(worker.child.try_wait().unwrap().is_some());
+            assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_some());
         });
     }
     #[test]
@@ -394,7 +505,7 @@ mod tests {
             assert!(matches!(result, Err(JobError::Cancelled)));
             worker.stop().await;
             assert!(start.elapsed() < Duration::from_secs(2));
-            assert!(worker.child.try_wait().unwrap().is_some());
+            assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_some());
             let mut replacement = Worker::spawn(&python_config(), "import sys,json\nr=json.loads(input());print(json.dumps({'id':r['id'],'event':'result'}),flush=True)").unwrap();
             let result = replacement
                 .exchange(
@@ -481,7 +592,7 @@ mod tests {
             let config = python_config();
             let worker = Worker::spawn(&config, "import time\ntime.sleep(30)").unwrap();
             let script = worker.script_path.clone();
-            let pid = worker.child.id().unwrap();
+            let pid = worker.child.as_ref().unwrap().id().unwrap();
             *runtime.worker.lock().await = Some(worker);
             let running = runtime.clone();
             let request = tokio::spawn(async move {

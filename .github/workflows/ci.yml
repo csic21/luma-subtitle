@@ -40,6 +40,10 @@ jobs:
         run: node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs scripts/recover-release.node-test.cjs
       - name: Optional ASR adapter tests (no ML packages or models)
         run: python -m unittest discover -s scripts -p test_asr_worker.py
+      - name: Managed ASR packaging and publication guard tests
+        run: |
+          python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+          node --test scripts/asr-components/publish.node-test.cjs
       - name: Frontend regression tests
         run: pnpm test
       - name: Typecheck and build

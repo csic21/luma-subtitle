@@ -98,3 +98,16 @@ describe("optional ASR commands", () => {
     expect(invoke).toHaveBeenCalledWith("release_asr_backend");
   });
 });
+
+describe("managed ASR component commands", () => {
+  it("uses pinned command names and request IDs without sending filesystem paths", async () => {
+    const api = await import("./tauri-api");
+    await api.asrComponentCatalog(); expect(invoke).toHaveBeenCalledWith("asr_component_catalog");
+    await api.asrComponentStatus(); expect(invoke).toHaveBeenCalledWith("asr_component_status");
+    for (const [action, command] of [[api.installAsrComponent, "install_asr_component"], [api.repairAsrComponent, "repair_asr_component"], [api.removeAsrComponent, "remove_asr_component"]] as const) {
+      await action("pinned-component", "request-id");
+      expect(invoke).toHaveBeenCalledWith(command, { request: { component_id: "pinned-component", request_id: "request-id" } });
+    }
+    await api.cancelAsrComponent("request-id"); expect(invoke).toHaveBeenCalledWith("cancel_asr_component", { requestId: "request-id" });
+  });
+});

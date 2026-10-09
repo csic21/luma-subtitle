@@ -9,7 +9,8 @@
 - Add local capability/model checks, actionable setup errors, storage estimates, and forced-alignment/CJK subtitle validation.
 
 ### Setup and compatibility
-- Optional engines require a separately prepared Python environment and complete local model directories. Luma does not install these packages or download model weights automatically.
+- Add user-triggered installation of verified private engine components and separate model downloads, with size/storage information, progress, cancellation, repair, removal and atomic activation. No user-installed Python, terminal commands, system PATH changes or automatic first-launch downloads.
+- Managed components provide Windows Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen CPU on both platforms. They do not include CUDA; advanced external runtimes remain optional. Failed setup retains the previous component and never deletes external models.
 - Existing settings, downloaded GGML models, results, subtitle import/export and updater configuration are preserved. Existing users do not need Python or receive optional-runtime requirements unless they select a new engine.
 - Qwen CPU keeps both ASR and aligner weights resident as float32. The 0.6B pair needs roughly 7.5 GB for weights alone, plus runtime/audio/activation memory; do not assume an 8 GB device can run it.
 

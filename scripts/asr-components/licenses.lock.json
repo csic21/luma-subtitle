@@ -1,0 +1,257 @@
+{
+  "schema": 1,
+  "sources": {
+    "macos-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-aarch64-apple-darwin-pgo%2Blto-full.tar.zst",
+      "sha256": "a23a0baff73a5f10c820841cc1889a5b7fc12048fe8c0622f6a481ab82ea367b",
+      "bytes": 55001420
+    },
+    "windows-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-x86_64-pc-windows-msvc-pgo-full.tar.zst",
+      "sha256": "200c8cd8b3b157d5c415c4cddb84ba4cb9def5499a08fe311f1e661fd195d116",
+      "bytes": 43739611
+    }
+  },
+  "files": [
+    {
+      "path": "licenses/runtime-macos-arm64/PYTHON.json",
+      "sha256": "2544772fd0bf749ecc97e32b14ac29402682b2236ebedac3edd827c878bd51d8",
+      "bytes": 118432,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.bdb.txt",
+      "sha256": "3bdff06e69991c94664f2ef5c5f8096f60b7dbec071756ea6cc26b445e06ec5b",
+      "bytes": 7293,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.bzip2.txt",
+      "sha256": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441",
+      "bytes": 1743,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.cpython.txt",
+      "sha256": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd",
+      "bytes": 36164,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.expat.txt",
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "bytes": 1144,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.libX11.txt",
+      "sha256": "2daec087a88e7c9b8082557cdeebad5bbb8155a4137472f0b22e269cd99d0c1e",
+      "bytes": 47018,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.libXau.txt",
+      "sha256": "56abe29bb1d9806a9e04fa9f80fed2c0f18027594df3f098148d814aef6bddfa",
+      "bytes": 1148,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.libedit.txt",
+      "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1",
+      "bytes": 1614,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.libffi.txt",
+      "sha256": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0",
+      "bytes": 1132,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.liblzma.txt",
+      "sha256": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02",
+      "bytes": 660,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.libuuid.txt",
+      "sha256": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b",
+      "bytes": 1432,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.libxcb.txt",
+      "sha256": "c5ffbfeaa501071ceeb97b7de2c0d703fdaa35de01c0fb6cbac1c28453a3e9fd",
+      "bytes": 1337,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.mpdecimal.txt",
+      "sha256": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+      "bytes": 1284,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.ncurses.txt",
+      "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c",
+      "bytes": 1447,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.openssl-1.1.txt",
+      "sha256": "9c04cce50c4989d5601dd8b07f6ab922c40388b66ac736c9007cb1ed9d9dd560",
+      "bytes": 6120,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.openssl-3.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.sqlite.txt",
+      "sha256": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719",
+      "bytes": 1481,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.tcl.txt",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "bytes": 2255,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.tix.txt",
+      "sha256": "3ac5cdd0bef6c43ce34c6a7ced452081d9e5a0bf94082b9f9147d23ec9e214f5",
+      "bytes": 2826,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-macos-arm64/licenses/LICENSE.zlib.txt",
+      "sha256": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c",
+      "bytes": 995,
+      "platform": "macos-arm64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/PYTHON.json",
+      "sha256": "6de3f7e0b7e419e9fefe074b31b842f7b5fa91922b74d7c5fe402fd711973be3",
+      "bytes": 62431,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.bdb.txt",
+      "sha256": "8f2d533ab34899499d5b07f209854b101b17dba2c69f3251860aecf3e4005faa",
+      "bytes": 7419,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.bzip2.txt",
+      "sha256": "bd5628cc76fb0ebf9c657d1dd4d1a240a1a7b216c31663e7bbf1131c0b70a910",
+      "bytes": 1780,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.cpython.txt",
+      "sha256": "8fe98bf9822926d854f56ffd8d97877d8b942617aa44eb7ea77fd99e22f2537e",
+      "bytes": 36935,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.expat.txt",
+      "sha256": "8a9cfe4b5924f4b25881aa0c9f5e4561c5f31065d0c4a13cdcdbcf917edf39aa",
+      "bytes": 1165,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.libX11.txt",
+      "sha256": "f353accfe2976df31ea297a77d1d454bd51ef6be8c3df39bd6aca95901579357",
+      "bytes": 47960,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.libXau.txt",
+      "sha256": "cec808cd2163fccdc8de4a91d526490777afbaeea060e1168c40a804694b7444",
+      "bytes": 1169,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.libedit.txt",
+      "sha256": "d9932ccdd42eccf6cdded7bcb35b088e64cfc7c24d355af2cc0d02edb6b637d3",
+      "bytes": 1643,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.libffi.txt",
+      "sha256": "9afb8970cd29fc1031fa647278e4bef613399e2e3468a1e3a397f4d158c6101c",
+      "bytes": 1153,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.liblzma.txt",
+      "sha256": "d87d218dd908b3243ec4cbc72af400e5b7437513ea9d9229291d0812b8464fec",
+      "bytes": 673,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.libuuid.txt",
+      "sha256": "cbccaa3efe07a9a602751375085be572d4410a250b996716fbe8c5255c7ec6f2",
+      "bytes": 1459,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.libxcb.txt",
+      "sha256": "29a9539190e6de1af5fd06a9139c7103137cd1f9290b08c7b11bce89c01c14d2",
+      "bytes": 1367,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.mpdecimal.txt",
+      "sha256": "f094277cd46e1f6e4d87916cc4b51e22f613d45eb81f48231c3cb7caf8fc8a6a",
+      "bytes": 1308,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.ncurses.txt",
+      "sha256": "4f571cad3ea6c888bf0a7092e5b215dddb3142e9e3f1857fd5fac6cf13d345d7",
+      "bytes": 1476,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.openssl-1.1.txt",
+      "sha256": "ad89e3fed746413af1d34d5353978ee1520cedd361c853f8022e7bb210ac6b31",
+      "bytes": 6244,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.openssl-3.txt",
+      "sha256": "ed72ce2b51ee58f117e5a021e2e04af158857f40269fbc03491f0b2a99dbcc96",
+      "bytes": 10352,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.sqlite.txt",
+      "sha256": "d8eb9aba7ef6b5ed06cb3ec19a7242316af2e5933c638eb67fb781c13884e01d",
+      "bytes": 1504,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.tcl.txt",
+      "sha256": "41613eabfc08921a7da9c4bfd7f3ce5d5406f55214b253d89f392ed86eebeb8f",
+      "bytes": 2295,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.tix.txt",
+      "sha256": "8cdff3addb9e9eb108c78e2cf5e05f26b216c098304945733bbec382b2eaef66",
+      "bytes": 2880,
+      "platform": "windows-x64"
+    },
+    {
+      "path": "licenses/runtime-windows-x64/licenses/LICENSE.zlib.txt",
+      "sha256": "365e36720db366054863235aea5d6f440142ab968834bfaf81fa9d187c99b9b8",
+      "bytes": 1016,
+      "platform": "windows-x64"
+    }
+  ]
+}

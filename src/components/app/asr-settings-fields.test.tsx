@@ -31,7 +31,7 @@ afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.clear
 describe("shared transcription settings", () => {
   it("keeps no-Python Whisper and Turbo visible by default and retains them after switching back", () => {
     mount(); expect(text()).toContain("Turbo preset"); expect(renderer!.root.findAllByType("button").some((button) => button.children.includes(t("asr.release")))).toBe(true); expect(renderer!.root.findAllByType("input")).toHaveLength(1);
-    selectEngine("qwen3-asr"); expect(text()).not.toContain("Turbo preset"); expect(renderer!.root.findAllByType("input")).toHaveLength(3);
+    selectEngine("qwen3-asr"); expect(renderer!.root.findAllByProps({ "aria-label": "legacy-model" })).toHaveLength(0); expect(renderer!.root.findAllByType("input")).toHaveLength(3);
     expect(text()).toContain("Mac: Qwen uses CPU"); expect(text()).toContain("Offline setup guide"); expect(text()).toContain("3.72 / 6.54 GB");
     selectEngine("whisper-cpp"); expect(renderer!.root.findByProps({ "aria-label": "legacy-model" }).props.value).toContain("turbo");
     expect(mocks.check).not.toHaveBeenCalled(); expect(mocks.release).not.toHaveBeenCalled();
@@ -56,10 +56,20 @@ describe("shared transcription settings", () => {
     expect(renderer!.root.findAllByType("button").every((button) => button.props.disabled)).toBe(true);
   });
 
+  it("preserves existing advanced paths without selecting or rewriting managed components", () => {
+    mount({ ...defaultAsrConfig, engine: "qwen3-asr", python_path: "/old/python", model_path: "/old/qwen", aligner_path: "/old/aligner", device: "cuda" });
+    expect(renderer!.root.findAllByType("input").map((input) => input.props.value)).toEqual(["/old/python", "/old/qwen", "/old/aligner"]);
+    const advanced = renderer!.root.findAllByType("details").find((details) => details.findAllByType("summary").some((summary) => summary.children.includes(t("asr.managed.advanced"))))!;
+    expect(advanced.props.open).toBeUndefined(); expect(text()).toContain(t("asr.qwenCpuMemory"));
+    selectEngine("whisper-cpp"); selectEngine("qwen3-asr");
+    expect(renderer!.root.findAllByType("input").map((input) => input.props.value)).toEqual(["/old/python", "/old/qwen", "/old/aligner"]);
+    expect(mocks.check).not.toHaveBeenCalled();
+  });
+
   it("surfaces unknown engines instead of rendering misleading Whisper controls", () => {
     mount({ ...defaultAsrConfig, engine: "new-future-engine" });
     expect(text()).toContain("new-future-engine"); expect(text()).toContain(t("requirement.unsupportedAsrEngine"));
     expect(renderer!.root.findAllByType("input")).toHaveLength(0);
-    expect(text()).not.toContain("Turbo preset");
+    expect(renderer!.root.findAllByProps({ "aria-label": "legacy-model" })).toHaveLength(0);
   });
 });

@@ -20,6 +20,7 @@ export function useAsrBackendCheck(config: AsrConfig, t: TFunction) {
     scope.current.key = key;
     scope.current.epoch += 1;
   }
+  const pending = useRef<number>();
   const [state, setState] = useState<CheckState>({ epoch: -1 });
   useEffect(() => {
     scope.current.mounted = true;
@@ -30,6 +31,7 @@ export function useAsrBackendCheck(config: AsrConfig, t: TFunction) {
   }, []);
 
   const run = async (action: "check" | "release") => {
+    if (pending.current === scope.current.epoch) return;
     const epoch = ++scope.current.epoch;
     const publish = (next: Omit<CheckState, "epoch">) => {
       if (scope.current.mounted && scope.current.epoch === epoch && scope.current.key === key) {
@@ -40,6 +42,7 @@ export function useAsrBackendCheck(config: AsrConfig, t: TFunction) {
       publish({ error: t("notice.requireTauriConfig") });
       return;
     }
+    pending.current = epoch;
     publish({ busy: action });
     try {
       if (action === "check") {
@@ -50,6 +53,8 @@ export function useAsrBackendCheck(config: AsrConfig, t: TFunction) {
       }
     } catch (error) {
       publish({ error: errorText(error) });
+    } finally {
+      if (pending.current === epoch) pending.current = undefined;
     }
   };
 

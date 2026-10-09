@@ -67,7 +67,7 @@ impl AsrConfig {
         }
         let python = Path::new(&self.python_path);
         if !python.is_absolute() || !python.is_file() {
-            return Err("Optional ASR requires an existing, absolute Python executable path from your own virtual environment. Configure it in ASR settings, or select whisper.cpp to use the original engine.".into());
+            return Err("Optional ASR engine component is not installed or its executable is missing. Install or repair the selected component in ASR settings, or check an advanced external runtime. Select whisper.cpp to use the original engine without this component.".into());
         }
         if !Path::new(&self.model_path).is_absolute() || !Path::new(&self.model_path).is_dir() {
             return Err("Optional ASR model directory is missing. Choose a complete local model directory for this backend. Existing GGML .bin files remain usable with whisper.cpp; no models are downloaded automatically.".into());

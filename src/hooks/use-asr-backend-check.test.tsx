@@ -19,6 +19,14 @@ beforeEach(() => { vi.resetAllMocks(); vi.stubGlobal("window", { __TAURI_INTERNA
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
 describe("local ASR capability checks", () => {
+  it("blocks duplicate check and release clicks within the same configuration", async () => {
+    const pending = deferred<AsrBackendStatus>(); vi.mocked(checkAsrBackend).mockReturnValue(pending.promise); mount();
+    let request!: Promise<void>; act(() => { request = state.check(); void state.check(); void state.release(); });
+    expect(checkAsrBackend).toHaveBeenCalledTimes(1); expect(releaseAsrBackend).not.toHaveBeenCalled();
+    await act(async () => { pending.resolve(status); await request; });
+    vi.mocked(releaseAsrBackend).mockResolvedValue(true); await act(async () => state.release()); expect(releaseAsrBackend).toHaveBeenCalledTimes(1);
+  });
+
   it("reports busy while checking and displays the matching result", async () => {
     const pending = deferred<AsrBackendStatus>(); vi.mocked(checkAsrBackend).mockReturnValue(pending.promise);
     mount(); let request!: Promise<void>;

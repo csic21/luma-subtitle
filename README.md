@@ -126,9 +126,9 @@ The in-app model presets download into the app data directory's `models` folder 
 
 Whisper.cpp remains the default, including the existing Turbo preset above. Existing models, task results, and settings do not require Python or migration steps.
 
-Settings and per-task configuration can explicitly select a persistent local MLX/faster-whisper worker, or Qwen3-ASR 0.6B/1.7B with its forced aligner. These use separate local model directories and a user-installed Python environment. No packages or models are downloaded implicitly. Device availability is checked through the chosen runtime; Qwen currently supports CPU/CUDA, not Metal.
+Settings and per-task configuration can explicitly select a persistent local MLX/faster-whisper worker, or Qwen3-ASR 0.6B/1.7B with its forced aligner. Install the optional private engine component and choose separate model downloads inside Luma; no system Python, terminal commands or PATH changes are required. Downloads start only when requested, show their sizes, and are verified before activation. Managed components provide Windows x64 Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen CPU on both platforms. CUDA is not included in these components; advanced external runtimes remain optional.
 
-See the [offline setup guide](docs/OPTIONAL_ASR.md) for versioned installation examples, model formats, storage planning, and recovery steps. The same guide is bundled in the settings screen. Optional engines are unbenchmarked in Luma and should be validated with your own sample audio before use. They do not replace the existing default.
+See the [offline setup guide](docs/OPTIONAL_ASR.md) for managed setup, model formats, storage planning, recovery and optional advanced external-runtime examples. The same guide is bundled in the settings screen. Optional engines are unbenchmarked in Luma and should be validated with your own sample audio before use. They do not replace the existing default.
 
 ## Run
 

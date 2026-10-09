@@ -13,6 +13,7 @@ tauri-build = { version = "=2.6.2", features = [] }
 
 [dependencies]
 dirs = "5.0"
+fs2 = "=0.4.3"
 home = "=0.5.9"
 idna_adapter = "=1.0.0"
 indexmap = "=2.7.0"
@@ -26,6 +27,7 @@ rfd = "0.15"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 serde_with = "=3.11.0"
 serde_with_macros = "=3.11.0"
 tauri = { version = "=2.11.2", features = [] }

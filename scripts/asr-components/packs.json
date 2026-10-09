@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "version": "1.2.0-r1",
+  "release_tag": "asr-components-1.2.0-r1",
+  "repository": "csic21/luma-subtitle",
+  "runtime": {
+    "version": "3.12.15",
+    "vendor_release": "20261003",
+    "vendor": "Astral python-build-standalone",
+    "source_url": "https://github.com/astral-sh/python-build-standalone/releases/tag/20261003",
+    "windows-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+      "sha256": "6fba7f2ae506facf41d457ea8293c7497910a675c69a4e954875169410a50402",
+      "bytes": 22011023,
+      "entrypoint": "python.exe",
+      "license_archive": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-x86_64-pc-windows-msvc-pgo-full.tar.zst",
+        "sha256": "200c8cd8b3b157d5c415c4cddb84ba4cb9def5499a08fe311f1e661fd195d116",
+        "bytes": 43739611
+      }
+    },
+    "macos-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "ad8d0c637c0a36b967b310e2c07254f4d2ca8cabaa7699e55ed6290aceb481a2",
+      "bytes": 25013243,
+      "entrypoint": "bin/python3",
+      "license_archive": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.12.15%2B20261003-aarch64-apple-darwin-pgo%2Blto-full.tar.zst",
+        "sha256": "a23a0baff73a5f10c820841cc1889a5b7fc12048fe8c0622f6a481ab82ea367b",
+        "bytes": 55001420
+      }
+    }
+  },
+  "packs": [
+    {
+      "id": "faster-whisper-cpu-windows-x64",
+      "platform": "windows-x64",
+      "engine": "whisper-accelerated",
+      "backend": "faster-whisper",
+      "device": "cpu",
+      "label": "Whisper accelerated CPU",
+      "experimental": false,
+      "min_os_version": "10.0"
+    },
+    {
+      "id": "mlx-whisper-metal-macos-arm64",
+      "platform": "macos-arm64",
+      "engine": "whisper-accelerated",
+      "backend": "mlx-whisper",
+      "device": "metal",
+      "label": "MLX Whisper for Apple Silicon (experimental)",
+      "experimental": true,
+      "min_os_version": "14.0"
+    },
+    {
+      "id": "qwen3-asr-cpu-windows-x64",
+      "platform": "windows-x64",
+      "engine": "qwen3-asr",
+      "backend": "qwen3-asr",
+      "device": "cpu",
+      "label": "Qwen3-ASR CPU (experimental, high memory)",
+      "experimental": true,
+      "min_os_version": "10.0"
+    },
+    {
+      "id": "qwen3-asr-cpu-macos-arm64",
+      "platform": "macos-arm64",
+      "engine": "qwen3-asr",
+      "backend": "qwen3-asr",
+      "device": "cpu",
+      "label": "Qwen3-ASR CPU (experimental, high memory)",
+      "experimental": true,
+      "min_os_version": "14.0"
+    }
+  ]
+}

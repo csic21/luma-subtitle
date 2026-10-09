@@ -1,0 +1,125 @@
+name: ASR components
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/asr-components/**'
+      - 'src-tauri/src/asr/worker.py'
+      - '.github/workflows/asr-components.yml'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed source commit (blank uses this ref)
+        type: string
+        required: false
+      tag:
+        description: Exact component tag from packs.json
+        type: string
+        default: asr-components-1.2.0-r1
+        required: true
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build component ${{ matrix.pack }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {pack: faster-whisper-cpu-windows-x64, os: windows-2022}
+          - {pack: mlx-whisper-metal-macos-arm64, os: macos-15}
+          - {pack: qwen3-asr-cpu-windows-x64, os: windows-2022}
+          - {pack: qwen3-asr-cpu-macos-arm64, os: macos-15}
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || inputs.source_sha || github.sha }}
+      COMPONENT_TAG: ${{ inputs.tag || 'asr-components-1.2.0-r1' }}
+      PACK_ID: ${{ matrix.pack }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate source and component request
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          source = os.environ['SOURCE_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', source)
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == source
+          cfg = json.loads(Path('scripts/asr-components/packs.json').read_text())
+          assert os.environ['COMPONENT_TAG'] == cfg['release_tag']
+          assert cfg['release_tag'] == 'asr-components-' + cfg['version']
+          assert any(p['id'] == os.environ['PACK_ID'] for p in cfg['packs'])
+          PY
+      - name: Test deterministic packaging and license locks
+        run: python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+      - name: Build byte-locked private runtime
+        shell: bash
+        run: |
+          python -B scripts/asr-components/build.py --pack "$PACK_ID" --source-sha "$SOURCE_SHA" --output "dist/asr-components/$PACK_ID" --cache "$RUNNER_TEMP/asr-downloads"
+      - name: Independently rebuild and compare exact bytes
+        shell: bash
+        run: |
+          python -B scripts/asr-components/build.py --pack "$PACK_ID" --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/asr-rebuild/$PACK_ID" --cache "$RUNNER_TEMP/asr-downloads"
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          pack = os.environ['PACK_ID']
+          first = Path('dist/asr-components') / pack
+          second = Path(os.environ['RUNNER_TEMP']) / 'asr-rebuild' / pack
+          for path in first.iterdir():
+              if path.is_file():
+                  other = second / path.name
+                  assert other.is_file()
+                  assert hashlib.file_digest(path.open('rb'), 'sha256').digest() == hashlib.file_digest(other.open('rb'), 'sha256').digest(), path
+          print('REPRODUCIBLE_ARCHIVE_AND_MANIFEST=true')
+          PY
+      - name: Smoke relocated private interpreter and offline worker
+        shell: bash
+        run: |
+          python -B scripts/asr-components/smoke.py --manifest "dist/asr-components/$PACK_ID/$PACK_ID.manifest.json" --worker src-tauri/src/asr/worker.py --cache "$RUNNER_TEMP/asr-downloads"
+      - name: Verify genuine archive install repair cancel and removal
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          pack = os.environ['PACK_ID']
+          manifest = (Path('dist/asr-components') / pack / (pack + '.manifest.json')).resolve()
+          info = json.loads(manifest.read_text())
+          archive = manifest.parent / info['archive']['url'].rsplit('/', 1)[-1]
+          env = dict(os.environ, LUMA_ASR_COMPONENT_ARCHIVE=str(archive), LUMA_ASR_COMPONENT_MANIFEST=str(manifest))
+          subprocess.run(['cargo', 'test', '--manifest-path', 'src-tauri/Cargo.toml', '--locked',
+                          'native_component_archive_installs_repairs_and_removes', '--', '--ignored', '--nocapture'],
+                         env=env, check=True)
+          PY
+      # Until corresponding-source/notices review clears redistribution, CI
+      # builds and tests locally but uploads only non-binary evidence.
+      - name: Upload test metadata only (redistribution hold)
+        uses: actions/upload-artifact@v4
+        with:
+          name: asr-component-${{ matrix.pack }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/asr-components/${{ matrix.pack }}/*.json

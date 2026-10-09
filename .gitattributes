@@ -1,0 +1,3 @@
+
+# Preserve exact hashed upstream license bytes, including vendor CRLF.
+scripts/asr-components/licenses/** -text -whitespace

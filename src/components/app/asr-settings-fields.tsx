@@ -7,6 +7,7 @@ import optionalAsrGuide from "../../../docs/OPTIONAL_ASR.md?raw";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ManagedAsrSetup } from "@/components/app/managed-asr-setup";
 import { useAsrBackendCheck } from "@/hooks/use-asr-backend-check";
 import { asrConfigurationIssues, asrEngines, isAbsoluteLocalPath, normalizeAsrConfig } from "@/lib/asr-config";
 import type { AsrConfig, TFunction } from "@/types";
@@ -65,10 +66,15 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
               <p>{t("asr.offlineSetup")}</p>
               <p>{t(isQwen ? "asr.qwenSetup" : "asr.whisperSetup")}</p>
               {isQwen && <p>{t("asr.qwenMac")}</p>}
-              {isQwen && config.device !== "cuda" && <p>{t("asr.qwenCpuMemory")}</p>}
+              {isQwen && <p>{t("asr.qwenCpuMemory")}</p>}
               <p>{t("asr.noBenchmark")}</p>
             </AlertDescription>
           </Alert>
+          <ManagedAsrSetup key={config.engine} config={config} onChange={onChange} disabled={disabled || busy} t={t} />
+          <details>
+            <summary className="cursor-pointer">{t("asr.managed.advanced")}</summary>
+            <FieldDescription>{t("asr.managed.advancedHint")}</FieldDescription>
+            <FieldGroup className="mt-4">
           {pathFields.map(({ name, label, hint }) => {
             const invalid = !isAbsoluteLocalPath(config[name]);
             return (
@@ -129,6 +135,8 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
             <ScrollArea className="h-80">
               <pre className="whitespace-pre-wrap break-words p-3 text-sm">{optionalAsrGuide}</pre>
             </ScrollArea>
+          </details>
+            </FieldGroup>
           </details>
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="secondary" disabled={disabled || busy || issues.length > 0} onClick={check}>
