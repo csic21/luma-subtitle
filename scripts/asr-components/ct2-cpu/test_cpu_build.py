@@ -4,6 +4,8 @@ import csv
 import hashlib
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 import struct
 import tarfile
@@ -158,6 +160,31 @@ class SourceTests(unittest.TestCase):
                     expected = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()
                     self.assertEqual(hashed, 'sha256=' + expected)
                     self.assertEqual(size, str(len(data)))
+
+    def test_developer_shell_uses_batch_and_memory_only_environment(self):
+        script = (build.HERE / 'cmd_environment.ps1').read_text()
+        self.assertIn('call "{0}" {1} >nul', script)
+        self.assertIn("@('/d', '/c', 'call', $batch)", script)
+        self.assertIn('$start.UseShellExecute = $false', script)
+        self.assertIn('$start.RedirectStandardOutput = $true', script)
+        self.assertIn('$process.StandardOutput.ReadToEndAsync()', script)
+        self.assertIn("[Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')", script)
+        self.assertIn('} finally {', script)
+        self.assertIn('Remove-Item -LiteralPath $batch -Force', script)
+        self.assertNotIn('&& set', script)
+        self.assertNotIn('set >', script)
+        self.assertNotIn('$env:GITHUB_ENV', script)
+        self.assertNotIn('Write-Output $lines', script)
+
+    @unittest.skipUnless(os.name == 'nt', 'Actual CMD/PowerShell quoting is a native Windows check')
+    def test_native_developer_shell_quotes_spaces_and_rejects_injection(self):
+        with tempfile.TemporaryDirectory(prefix='luma quoting test ') as work:
+            batch = Path(work) / 'fake developer environment.cmd'
+            batch.write_text('@echo off\nset LUMA_CT2_QUOTING_TEST=passed\nexit /b 0\n', encoding='ascii')
+            subprocess.run(['pwsh', '-NoProfile', '-NonInteractive', '-File',
+                            str(build.HERE / 'test_cmd_environment.ps1'), '-Helper',
+                            str(build.HERE / 'cmd_environment.ps1'), '-DeveloperBatch', str(batch)],
+                           check=True, capture_output=True, text=True, timeout=90)
 
     def test_workflow_publishes_no_binaries(self):
         workflow = (build.HERE.parents[2] / '.github/workflows/asr-ct2-cpu.yml').read_text()

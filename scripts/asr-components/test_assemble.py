@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from assemble import local_file_uri, normalize_removed_records, offline_guard, wheel_requirements, PIP_VERSION, PYTHON_VERSION
 
@@ -16,8 +17,14 @@ class OfflineAssemblyTests(unittest.TestCase):
             wheel = {'name': 'example', 'version': '1.0', 'filename': path.name,
                      'bytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
             result = wheel_requirements({'wheels': [wheel]}, root)
-            self.assertEqual(result, 'example @ ' + path.as_uri() + ' --hash=sha256:' + wheel['sha256'] + '\n')
+            # macOS /var aliases and Windows short profile names canonicalize.
+            self.assertEqual(result, 'example @ ' + path.resolve().as_uri() + ' --hash=sha256:' + wheel['sha256'] + '\n')
             self.assertIn('file:///', result); self.assertNotIn('http', result)
+            # Require canonicalization before formatting, even on hosts whose
+            # temporary path happens not to contain a short-name or symlink alias.
+            with patch('assemble.local_file_uri', return_value='file:///canonical.whl') as uri:
+                wheel_requirements({'wheels': [wheel]}, root)
+                uri.assert_called_once_with(path.resolve())
             path.write_bytes(b'changed bytes')
             with self.assertRaisesRegex(ValueError, 'changed'):
                 wheel_requirements({'wheels': [wheel]}, root)

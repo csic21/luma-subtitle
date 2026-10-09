@@ -29,6 +29,7 @@ COMPONENTS = HERE.parent
 sys.path.insert(0, str(COMPONENTS))
 from build import unpack_runtime
 from native_inventory import closure, digest, inventory
+from license_inventory import discover as discover_installed_licenses
 
 ALLOWED = {'codeload.github.com', 'github.com', 'files.pythonhosted.org', 'huggingface.co', 'raw.githubusercontent.com'}
 
@@ -368,6 +369,8 @@ def main():
         for field in ('visual_studio_version', 'vc_tools_version', 'windows_sdk_version'):
             if toolchain[field] != lock['toolchain'][field]:
                 raise RuntimeError('Build tool version changed; review the inventory before repinning: ' + field)
+        installed_licenses = discover_installed_licenses(toolchain['installation_path'], toolchain['redist_path'], toolchain['product_id'], toolchain['visual_studio_version'])
+        dump(args.reports / 'installed-license-evidence.json', installed_licenses)
         if args.work.exists():
             raise ValueError('Build needs a new, empty work directory')
         args.work.mkdir(parents=True)

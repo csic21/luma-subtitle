@@ -18,7 +18,9 @@ class SmokeHarnessTests(unittest.TestCase):
         }, clear=True):
             env = clean_environment(Path(tmp) / 'home')
         self.assertEqual(env['SYSTEMROOT'], 'C:\\Windows')
-        self.assertEqual(env['Processor_Architecture'], 'AMD64')
+        # Windows os.environ uppercases keys even when the fixture supplies
+        # mixed case. The preserved OS value, not spelling, is the contract.
+        self.assertEqual({key.upper(): value for key, value in env.items()}['PROCESSOR_ARCHITECTURE'], 'AMD64')
         self.assertNotEqual(env['PATH'], 'unsafe-path')
         self.assertNotIn('PIP_INDEX_URL', env); self.assertNotIn('SECRET_TOKEN', env)
 

@@ -66,6 +66,10 @@ private target/build interpreter remains the byte-locked PBS runtime. It:
    A serviced image with a different version fails closed for review.
 3. Inventories the official toolchain's original x64 CRT redistributable files,
    names, versions, hashes and Authenticode signers. It does not copy those files.
+   A bounded read-only scan of the exact installation/Redist trees records
+   existing public license-document metadata and recognizable Microsoft terms.
+   It skips activation/key files and links; recovered text is evidence for
+   review, never an automatically established redistribution grant.
 4. Fetches every input by exact URL, byte length and SHA-256. The build interpreter,
    headers and import library come from the pinned PBS archive; setuptools,
    wheel, pybind11, CMake and Ninja are exact hash-locked inputs.

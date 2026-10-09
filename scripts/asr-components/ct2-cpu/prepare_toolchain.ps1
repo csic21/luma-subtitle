@@ -15,12 +15,12 @@ if ($selected.Count -ne 1) { throw 'The pinned Visual Studio installation is una
 $vs = $selected[0]
 $devcmd = Join-Path $vs.installationPath 'Common7\Tools\VsDevCmd.bat'
 # Process-local developer environment only. No installer, registry edit or global PATH change.
-$line = '""{0}" -no_logo -arch=x64 -host_arch=x64 -vcvars_ver={1} -winsdk={2} >nul && set"' -f $devcmd, $locked.toolchain.vc_tools_version, $locked.toolchain.windows_sdk_version
-$lines = & $env:ComSpec /d /s /c $line
-if ($LASTEXITCODE -ne 0) { throw 'The pinned compiler or SDK is not preinstalled.' }
-foreach ($entry in $lines) {
-    if ($entry -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process') }
-}
+. (Join-Path $PSScriptRoot 'cmd_environment.ps1')
+Set-DeveloperEnvironment -DeveloperBatchPath $devcmd -Arguments @(
+    '-no_logo', '-arch=x64', '-host_arch=x64',
+    ('-vcvars_ver=' + $locked.toolchain.vc_tools_version),
+    ('-winsdk=' + $locked.toolchain.windows_sdk_version)
+)
 $hashes = @{}
 foreach ($name in @('cl.exe', 'link.exe', 'lib.exe', 'rc.exe', 'mt.exe')) {
     $tool = (Get-Command $name -ErrorAction Stop).Source
@@ -29,6 +29,7 @@ foreach ($name in @('cl.exe', 'link.exe', 'lib.exe', 'rc.exe', 'mt.exe')) {
 $compiler = (Get-Command cl.exe).Source
 $toolchain = @{
     schema=1; visual_studio_version=$vs.installationVersion; product_id=$vs.productId
+    installation_path=$vs.installationPath; redist_path=$env:VCToolsRedistDir
     vc_tools_version=$env:VCToolsVersion.TrimEnd([char]92)
     windows_sdk_version=$env:WindowsSDKVersion.TrimEnd([char]92)
     compiler_version=(Get-Item $compiler).VersionInfo.FileVersion
