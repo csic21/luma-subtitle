@@ -39,7 +39,9 @@ class WorkerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # The worker canonicalizes local paths. macOS /var symlinks and Windows
+        # short temp-directory names must have the same form in API assertions.
+        self.root = Path(self.temp.name).resolve()
         self.model = self.root / "model"
         self.aligner = self.root / "aligner"
         self.model.mkdir()
