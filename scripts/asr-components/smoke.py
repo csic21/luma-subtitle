@@ -110,11 +110,13 @@ try:
         assert Path(first[name].__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
     assert namespace['luma_check_numba_workqueue'](require_initialized=True) == 'workqueue'
     checks = runpy.run_path(str(Path(sys.prefix) / 'self_test.py'), run_name='luma_native_library_check')
-    libraries = checks['loaded_native_libraries']()
+    host_security_modules = []
+    libraries = checks['loaded_native_libraries'](host_security_modules)
     assert libraries > 0
     print(json.dumps({'schema':1, 'first_jit_initialization':True, 'successful_proof_reused':True,
                       'numba_threading':proof, 'checked_after_qwen_imports':True,
                       'private_native_libraries_checked':libraries,
+                      'verified_host_security_modules':host_security_modules,
                       'device':'cpu', 'inference':False, 'model_weights_loaded':False}),file=protocol)
 finally:
     protocol.close()
@@ -143,6 +145,10 @@ def managed_worker_runtime_probe(executable, worker, env, cwd):
         raise ValueError('Managed runtime probe returned unexpected evidence')
     if type(result.get('private_native_libraries_checked')) is not int or result['private_native_libraries_checked'] <= 0:
         raise ValueError('Managed runtime probe did not verify loaded native origins')
+    security = result.get('verified_host_security_modules')
+    if (not isinstance(security, list) or any(not isinstance(item, dict) or item.get('verified') is not True
+            or item.get('kind') != 'windows-defender-amsi' for item in security)):
+        raise ValueError('Managed runtime probe returned invalid host-security evidence')
     result['embedded_worker_sha256'] = sha256(worker)
     return result
 

@@ -425,7 +425,12 @@ fn managed_qwen_self_test_embeds_shared_compatibility_only_on_windows() {
     assert_eq!(qwen.contains("def luma_prepare_nagisa()"), cfg!(windows));
     if cfg!(windows) {
         assert!(qwen.find("sys.addaudithook(offline)").unwrap() < qwen.find("def luma_prepare_nagisa()").unwrap());
-        assert!(qwen.find("\nluma_prepare_nagisa()\n").unwrap() < qwen.find("from qwen_asr import").unwrap());
+        let configure = qwen.find("\nluma_configure_numba_workqueue()\n").unwrap();
+        let nagisa = qwen.find("\nluma_prepare_nagisa()\n").unwrap();
+        let probe = qwen.find("\nluma_probe_numba_workqueue()\n").unwrap();
+        let imports = qwen.find("from qwen_asr import").unwrap();
+        let checked = qwen.find("\nluma_check_numba_workqueue(require_initialized=True)\n").unwrap();
+        assert!(configure < nagisa && nagisa < probe && probe < imports && imports < checked);
     }
     assert!(!self_test_script("faster-whisper").unwrap().contains("luma_prepare_nagisa"));
     assert!(!self_test_script("mlx-whisper").unwrap().contains("luma_prepare_nagisa"));
@@ -710,20 +715,23 @@ fn native_direct_recipe_installs_repairs_and_removes() {
         assert_eq!(pin["filename"].as_str(),Some(cpu.filename.as_str())); assert_eq!(pin["url"].as_str(),Some(cpu.url.as_str()));
         assert_eq!(pin["sha256"].as_str(),Some(cpu.sha256.as_str())); assert_eq!(pin["bytes"].as_u64(),Some(cpu.bytes));
         let model = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_MODEL").expect("pinned Tiny fixture required")).unwrap();
+        let replacement_model = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_REPLACEMENT_MODEL").expect("second pinned Tiny fixture required")).unwrap();
         let audio = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_AUDIO").expect("pinned JFK fixture required")).unwrap();
         let long_audio = fs::canonicalize(std::env::var_os("LUMA_ASR_TEST_LONG_AUDIO").expect("bounded cancellation fixture required")).unwrap();
         let output = PathBuf::from(std::env::var_os("LUMA_ASR_TEST_OUTPUT").expect("isolated worker output required"));
         let pins: serde_json::Value = serde_json::from_str(include_str!("../../../scripts/asr-components/fixtures.json")).unwrap();
-        for pin in pins["faster_whisper_tiny"]["files"].as_array().unwrap() {
-            let file = model.join(pin["path"].as_str().unwrap());
-            download::verify_digest(store::regular_file(&file).unwrap().len(),&store::hash_file(&file).unwrap(),pin["bytes"].as_u64().unwrap(),pin["sha256"].as_str().unwrap()).unwrap();
+        for directory in [&model,&replacement_model] {
+            for pin in pins["faster_whisper_tiny"]["files"].as_array().unwrap() {
+                let file = directory.join(pin["path"].as_str().unwrap());
+                download::verify_digest(store::regular_file(&file).unwrap().len(),&store::hash_file(&file).unwrap(),pin["bytes"].as_u64().unwrap(),pin["sha256"].as_str().unwrap()).unwrap();
+            }
         }
         download::verify_digest(store::regular_file(&audio).unwrap().len(),&store::hash_file(&audio).unwrap(),pins["audio"]["bytes"].as_u64().unwrap(),pins["audio"]["sha256"].as_str().unwrap()).unwrap();
         assert!(store::regular_file(&long_audio).unwrap().len() <= 36*1024*1024);
         let config = crate::asr::AsrConfig { engine:"whisper-accelerated".into(),device:"cpu".into(),
             python_path:installed_paths[1].join(&runtime.entrypoint).to_string_lossy().into_owned(),
             model_path:model.to_string_lossy().into_owned(),..Default::default() };
-        tauri::async_runtime::block_on(crate::asr::run_real_optional_worker_fixture(&config,&audio,&long_audio,&output));
+        tauri::async_runtime::block_on(crate::asr::run_real_optional_worker_fixture(&config,&replacement_model,&audio,&long_audio,&output));
         store::validate_files(&installed_paths[1],&component,&cancel).unwrap();
         println!("NATIVE_DIRECT_WORKER_LIFECYCLE_OK cold_warm_srt_export_cancel_recovery=true");
     }

@@ -411,8 +411,181 @@ fn check_cancel(cancel: &AtomicBool, stopping: &AtomicBool) -> JobResult<()> {
 }
 
 #[cfg(test)]
+mod real_worker_lifecycle {
+    use super::*;
+
+    #[cfg(windows)]
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+        fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    #[cfg(unix)]
+    extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
+
+    struct ProcessProbe {
+        pid: u32,
+        #[cfg(windows)] handle: usize,
+    }
+    impl ProcessProbe {
+        fn new(pid: u32) -> Self {
+            #[cfg(windows)] {
+                let handle = unsafe { OpenProcess(0x0010_0000, 0, pid) }; // SYNCHRONIZE only
+                assert!(!handle.is_null(), "open the live ASR worker for exit observation");
+                Self { pid, handle: handle as usize }
+            }
+            #[cfg(unix)] { Self { pid } }
+        }
+        fn exited(&self) -> bool {
+            #[cfg(windows)] {
+                let state = unsafe { WaitForSingleObject(self.handle as *mut std::ffi::c_void, 0) };
+                assert!(state == 0 || state == 258, "native ASR process observation failed");
+                state == 0
+            }
+            #[cfg(unix)] {
+                if unsafe { kill(self.pid.try_into().unwrap(), 0) } == 0 { return false; }
+                assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(3)); // ESRCH, no zombie
+                true
+            }
+        }
+    }
+    #[cfg(windows)]
+    impl Drop for ProcessProbe {
+        fn drop(&mut self) { unsafe { CloseHandle(self.handle as *mut std::ffi::c_void); } }
+    }
+
+    pub(super) struct LeaseObservation {
+        process: Arc<ProcessProbe>,
+        script: PathBuf,
+        lease_path: PathBuf,
+        cancel: Arc<AtomicBool>,
+        observer: Option<std::thread::JoinHandle<Result<Value, String>>>,
+    }
+    impl LeaseObservation {
+        fn start(pid: u32, script: PathBuf, lease_path: PathBuf, label: &'static str) -> Self {
+            let process = Arc::new(ProcessProbe::new(pid));
+            assert!(!process.exited(), "observe a live loaded-model worker");
+            let file = std::fs::OpenOptions::new().read(true).write(true).open(&lease_path).unwrap();
+            assert!(fs2::FileExt::try_lock_exclusive(&file).is_err(), "worker must retain the test lease");
+            let cancel = Arc::new(AtomicBool::new(false));
+            let stop = cancel.clone(); let child = process.clone();
+            let observer = std::thread::Builder::new().name("luma-asr-test-lease-observer".into()).spawn(move || {
+                let started = Instant::now();
+                loop {
+                    if stop.load(Ordering::SeqCst) { return Err("lease observer cancelled during fixture cleanup".into()); }
+                    match fs2::FileExt::try_lock_exclusive(&file) {
+                        Ok(()) => {
+                            if !child.exited() { return Err(format!("{label}: lease became available while PID {pid} was alive")); }
+                            return Ok(json!({"operation":label,"pid":pid,"process_exited_when_lease_available":true,
+                                "lease_wait_ms":started.elapsed().as_millis(),"lease_kind":"injected test-owned shared use lease"}));
+                        }
+                        Err(error) if started.elapsed() >= Duration::from_secs(30) =>
+                            return Err(format!("{label}: lease observation timed out: {error}")),
+                        Err(_) => std::thread::sleep(Duration::from_millis(2)),
+                    }
+                }
+            }).unwrap();
+            Self { process, script, lease_path, cancel, observer:Some(observer) }
+        }
+        pub(super) fn pid(&self) -> u32 { self.process.pid }
+        fn result(&mut self) -> Result<Value,String> {
+            self.observer.take().unwrap().join().map_err(|_| "lease observer panicked".to_owned())?
+        }
+        pub(super) fn finish(mut self) -> Value {
+            let mut result = self.result().unwrap();
+            assert!(self.process.exited(), "worker must be reaped before successful transition");
+            assert!(!self.script.exists(), "stopped worker script must be removed");
+            result["script_removed"] = json!(true);
+            result
+        }
+    }
+    impl Drop for LeaseObservation {
+        fn drop(&mut self) {
+            self.cancel.store(true,Ordering::SeqCst);
+            if let Some(observer) = self.observer.take() { let _ = observer.join(); }
+            let _ = std::fs::remove_file(&self.lease_path);
+        }
+    }
+
+    pub(super) async fn observe(runtime: &AsrRuntime, output: &Path, label: &'static str) -> LeaseObservation {
+        let mut slot = runtime.worker.lock().await;
+        let worker = slot.as_mut().expect("actual model must be loaded before observing a lifecycle transition");
+        let child = worker.child.as_mut().unwrap();
+        assert!(child.try_wait().unwrap().is_none());
+        let pid = child.id().unwrap();
+        let path = output.join(format!("{label}-{}.lease",uuid::Uuid::new_v4()));
+        let lease = std::fs::OpenOptions::new().create_new(true).read(true).write(true).open(&path).unwrap();
+        fs2::FileExt::lock_shared(&lease).unwrap();
+        // Exercise the real Worker's retention/drop path. This does not claim
+        // that the fixture's paths were registered in global MANAGED_ROOT.
+        worker.managed_use_leases.push(lease);
+        LeaseObservation::start(pid,worker.script_path.clone(),path,label)
+    }
+
+    pub(super) async fn pid(runtime: &AsrRuntime) -> u32 {
+        runtime.worker.lock().await.as_ref().unwrap().child.as_ref().unwrap().id().unwrap()
+    }
+
+    pub(super) fn verify_file(path: &Path, bytes: u64, digest: &str) {
+        use sha2::Digest;
+        use std::io::Read;
+        assert!(std::fs::symlink_metadata(path).unwrap().is_file(),"fixture must be a regular file");
+        assert_eq!(std::fs::metadata(path).unwrap().len(),bytes);
+        let mut file = std::fs::File::open(path).unwrap();
+        let mut hash = sha2::Sha256::new(); let mut buffer = [0u8;65536];
+        loop { let count = file.read(&mut buffer).unwrap(); if count == 0 { break; } hash.update(&buffer[..count]); }
+        assert_eq!(format!("{:x}",hash.finalize()),digest,"fixture bytes must match the pinned public source");
+    }
+    pub(super) fn checkpoint(output: &Path, report: &Value) {
+        std::fs::write(output.join("lifecycle.json"),serde_json::to_vec_pretty(report).unwrap()).unwrap();
+    }
+    pub(super) fn transition(output: &Path, report: &mut Value, result: Value) {
+        println!("REAL_OPTIONAL_WORKER_TRANSITION {result}");
+        report["transitions"].as_array_mut().unwrap().push(result);
+        checkpoint(output,report);
+    }
+    pub(super) async fn cold_transcription(runtime: &AsrRuntime, config: &AsrConfig, audio: &Path, duration: u64) -> Value {
+        let result = tokio::time::timeout(Duration::from_secs(180),runtime.request(config,"transcribe",Some(audio),Some("en"),
+            Arc::new(AtomicBool::new(false)),Some(Duration::from_secs(180)),|_|{})).await.unwrap().unwrap();
+        assert_eq!(result["reused"],false); assert_eq!(result["backend"],"faster-whisper"); assert_eq!(result["device"],"cpu");
+        let segments = super::super::validate_segments(&result,duration).unwrap();
+        assert!(crate::subtitles::render_srt(&segments,None).to_lowercase().contains("country"));
+        result
+    }
+
+    #[test]
+    fn lease_observer_rejects_unlock_while_process_is_alive() {
+        let path = std::env::temp_dir().join(format!("luma-early-unlock-{}.lease",uuid::Uuid::new_v4()));
+        let lease = std::fs::OpenOptions::new().create_new(true).read(true).write(true).open(&path).unwrap();
+        fs2::FileExt::lock_shared(&lease).unwrap();
+        let mut observer = LeaseObservation::start(std::process::id(),PathBuf::new(),path,"early-unlock-negative");
+        drop(lease);
+        assert!(observer.result().unwrap_err().contains("was alive"));
+    }
+
+    #[test]
+    fn real_worker_release_observer_uses_private_lease_and_native_process_exit() {
+        tauri::async_runtime::block_on(async {
+            let output = std::env::temp_dir().join(format!("luma-worker-observer-{}",uuid::Uuid::new_v4()));
+            std::fs::create_dir(&output).unwrap();
+            let output = std::fs::canonicalize(output).unwrap();
+            let config = AsrConfig { python_path:which::which("python3").or_else(|_|which::which("python")).unwrap().to_string_lossy().into(),..AsrConfig::default() };
+            let runtime = AsrRuntime::default();
+            *runtime.worker.lock().await = Some(Worker::spawn(&config,"import time\ntime.sleep(30)").unwrap());
+            let observer = observe(&runtime,&output,"lightweight-release").await;
+            assert!(tokio::time::timeout(Duration::from_secs(15),runtime.release_idle()).await.unwrap().unwrap());
+            let result = observer.finish();
+            assert_eq!(result["process_exited_when_lease_available"],true);
+            std::fs::remove_dir(output).unwrap();
+        });
+    }
+}
+
+#[cfg(test)]
 pub(crate) async fn run_real_optional_worker_fixture(
     config: &AsrConfig,
+    replacement_model: &Path,
     audio: &Path,
     long_audio: &Path,
     output: &Path,
@@ -421,6 +594,29 @@ pub(crate) async fn run_real_optional_worker_fixture(
     // fixture. The assertions exercise the same production worker lifecycle.
     config.validate().unwrap();
     std::fs::create_dir_all(output).unwrap();
+    let output = std::fs::canonicalize(output).unwrap();
+    let model = std::fs::canonicalize(&config.model_path).unwrap();
+    let replacement_model = std::fs::canonicalize(replacement_model).unwrap();
+    assert_ne!(model,replacement_model,"replacement must select a genuinely distinct model directory");
+    let pins: Value = serde_json::from_str(include_str!("../../../scripts/asr-components/fixtures.json")).unwrap();
+    for directory in [&model,&replacement_model] {
+        for pin in pins["faster_whisper_tiny"]["files"].as_array().unwrap() {
+            real_worker_lifecycle::verify_file(&directory.join(pin["path"].as_str().unwrap()),pin["bytes"].as_u64().unwrap(),pin["sha256"].as_str().unwrap());
+        }
+    }
+    real_worker_lifecycle::verify_file(audio,pins["audio"]["bytes"].as_u64().unwrap(),pins["audio"]["sha256"].as_str().unwrap());
+    assert!(std::fs::metadata(long_audio).unwrap().len() <= 36*1024*1024);
+    assert_eq!(super::wav_duration_ms(long_audio).unwrap(),1_100_000);
+    use sha2::Digest;
+    let source = std::env::var("LUMA_ASR_TEST_VERIFIER_SOURCE_SHA").ok();
+    if let Some(source) = &source { assert!(source.len()==40 && source.bytes().all(|b|b.is_ascii_hexdigit())); }
+    let mut report = json!({"schema":1,"passed":false,"verifier_source_sha":source,
+        "embedded_worker_sha256":format!("{:x}",sha2::Sha256::digest(WORKER_SOURCE.as_bytes())),
+        "model_revision":pins["faster_whisper_tiny"]["version"],"audio_sha256":pins["audio"]["sha256"],
+        "cold_warm_srt_export_tested":false,"active_cancellation_recovery_tested":false,
+        "injected_lease_retention_tested":false,"global_managed_path_selection_tested":false,
+        "stop_policy":"production kill-and-reap","graceful_eof_tested":false,"transitions":[]});
+    real_worker_lifecycle::checkpoint(&output,&report);
     let runtime = AsrRuntime::default();
     let cancel = Arc::new(AtomicBool::new(false));
     let probe = runtime
@@ -437,6 +633,7 @@ pub(crate) async fn run_real_optional_worker_fixture(
         .unwrap();
     assert_eq!(probe["ready"], true, "{probe}");
     assert_eq!(probe["device"], "cpu");
+    let initial_pid = real_worker_lifecycle::pid(&runtime).await;
     let duration = super::wav_duration_ms(audio).unwrap();
     for (id, reused) in [("cold", false), ("warm", true)] {
         let result = runtime
@@ -480,13 +677,41 @@ pub(crate) async fn run_real_optional_worker_fixture(
         )
         .unwrap();
     }
+    assert_eq!(real_worker_lifecycle::pid(&runtime).await,initial_pid,"cold and warm inference must reuse one process");
+    report["cold_warm_srt_export_tested"] = json!(true);
+    real_worker_lifecycle::checkpoint(&output,&report);
+    let replacement = AsrConfig { model_path:replacement_model.to_string_lossy().into_owned(),..config.clone() };
+    replacement.validate().unwrap();
+    println!("REAL_OPTIONAL_WORKER_STAGE model-replacement");
+    let prior = real_worker_lifecycle::observe(&runtime,&output,"model-replacement").await;
+    let replaced = real_worker_lifecycle::cold_transcription(&runtime,&replacement,audio,duration).await;
+    assert_ne!(real_worker_lifecycle::pid(&runtime).await,prior.pid());
+    real_worker_lifecycle::transition(&output,&mut report,prior.finish());
+    std::fs::write(output.join("replacement.json"),serde_json::to_vec_pretty(&replaced).unwrap()).unwrap();
+
+    println!("REAL_OPTIONAL_WORKER_STAGE release-idle");
+    let prior = real_worker_lifecycle::observe(&runtime,&output,"release-idle").await;
+    assert!(tokio::time::timeout(Duration::from_secs(15),runtime.release_idle()).await.unwrap().unwrap());
+    assert!(runtime.worker.lock().await.is_none());
+    real_worker_lifecycle::transition(&output,&mut report,prior.finish());
+    real_worker_lifecycle::cold_transcription(&runtime,&replacement,audio,duration).await;
+
+    println!("REAL_OPTIONAL_WORKER_STAGE legacy-release");
+    let prior = real_worker_lifecycle::observe(&runtime,&output,"legacy-release").await;
+    tokio::time::timeout(Duration::from_secs(15),runtime.release_for_legacy(&AtomicBool::new(false))).await.unwrap().unwrap();
+    assert!(runtime.worker.lock().await.is_none());
+    real_worker_lifecycle::transition(&output,&mut report,prior.finish());
+    real_worker_lifecycle::cold_transcription(&runtime,&replacement,audio,duration).await;
+
+    println!("REAL_OPTIONAL_WORKER_STAGE active-cancellation");
+    let prior = real_worker_lifecycle::observe(&runtime,&output,"active-cancellation").await;
     let cancelled = Arc::new(AtomicBool::new(false));
     let flag = cancelled.clone();
     let mut armed = false;
     let start = Instant::now();
     let result = runtime
         .request(
-            config,
+            &replacement,
             "transcribe",
             Some(long_audio),
             Some("en"),
@@ -513,9 +738,10 @@ pub(crate) async fn run_real_optional_worker_fixture(
     assert!(matches!(result, Err(JobError::Cancelled)), "{result:?}");
     assert!(start.elapsed() < Duration::from_secs(15));
     assert!(runtime.worker.lock().await.is_none());
+    real_worker_lifecycle::transition(&output,&mut report,prior.finish());
     let recovered = runtime
         .request(
-            config,
+            &replacement,
             "transcribe",
             Some(audio),
             Some("en"),
@@ -532,7 +758,19 @@ pub(crate) async fn run_real_optional_worker_fixture(
         serde_json::to_vec_pretty(&recovered).unwrap(),
     )
     .unwrap();
-    runtime.shutdown().await;
+    report["active_cancellation_recovery_tested"] = json!(true);
+    real_worker_lifecycle::checkpoint(&output,&report);
+    println!("REAL_OPTIONAL_WORKER_STAGE shutdown");
+    let prior = real_worker_lifecycle::observe(&runtime,&output,"shutdown").await;
+    tokio::time::timeout(Duration::from_secs(15),runtime.shutdown()).await.unwrap();
+    assert!(runtime.worker.lock().await.is_none());
+    real_worker_lifecycle::transition(&output,&mut report,prior.finish());
+    let stopped = runtime.request(&replacement,"probe",None,None,Arc::new(AtomicBool::new(false)),Some(Duration::from_secs(1)),|_|{}).await;
+    assert!(matches!(stopped,Err(JobError::Cancelled)));
+    report["injected_lease_retention_tested"] = json!(true);
+    report["passed"] = json!(true);
+    real_worker_lifecycle::checkpoint(&output,&report);
+    println!("REAL_OPTIONAL_WORKER_LIFECYCLE {report}");
 }
 
 #[cfg(test)]
@@ -847,13 +1085,16 @@ mod tests {
             let audio = std::path::PathBuf::from(
                 std::env::var("LUMA_ASR_TEST_AUDIO").expect("set a public test WAV"),
             );
+            let replacement_model = std::path::PathBuf::from(
+                std::env::var("LUMA_ASR_TEST_REPLACEMENT_MODEL").expect("set the second verified Tiny fixture directory"),
+            );
             let long_audio = std::path::PathBuf::from(
                 std::env::var("LUMA_ASR_TEST_LONG_AUDIO").expect("set the cancellation fixture"),
             );
             let output = std::path::PathBuf::from(
                 std::env::var("LUMA_ASR_TEST_OUTPUT").expect("set an isolated output directory"),
             );
-            run_real_optional_worker_fixture(&config, &audio, &long_audio, &output).await;
+            run_real_optional_worker_fixture(&config, &replacement_model, &audio, &long_audio, &output).await;
         });
     }
 

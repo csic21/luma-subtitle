@@ -297,9 +297,12 @@ fn self_test_script(backend: &str) -> Result<String, String> {
         _ => return Err("Unsupported component self-test backend.".into()),
     };
     let compatibility = if cfg!(windows) && backend == "qwen3-asr" {
-        format!("{}\nluma_prepare_nagisa()\n", include_str!("asr/nagisa_compat.py"))
+        format!("{}\nluma_configure_numba_workqueue()\nluma_prepare_nagisa()\nluma_probe_numba_workqueue()\n", include_str!("asr/nagisa_compat.py"))
     } else { String::new() };
-    Ok(format!("import sys, os\nsys.modules['vllm'] = None\ndef offline(event, args):\n    if event in ('socket.connect','socket.getaddrinfo','socket.bind','subprocess.Popen','os.system','os.posix_spawn','os.fork'):\n        raise RuntimeError('Private engine self-test is offline and cannot start child processes')\nsys.addaudithook(offline)\n{compatibility}{code}\n"))
+    let threading_check = if cfg!(windows) && backend == "qwen3-asr" {
+        "luma_check_numba_workqueue(require_initialized=True)\n"
+    } else { "" };
+    Ok(format!("import sys, os\nsys.modules['vllm'] = None\ndef offline(event, args):\n    if event in ('socket.connect','socket.getaddrinfo','socket.bind','subprocess.Popen','os.system','os.posix_spawn','os.fork'):\n        raise RuntimeError('Private engine self-test is offline and cannot start child processes')\nsys.addaudithook(offline)\n{compatibility}{code}\n{threading_check}"))
 }
 fn self_test_failure(status: std::process::ExitStatus) -> String {
     let detail = match status.code() {

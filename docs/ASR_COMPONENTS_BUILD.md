@@ -386,6 +386,24 @@ requests and makes no nested/concurrent Numba calls; heartbeat threads only
 emit progress. These checks do not establish Qwen model inference. Native
 success for the exact final source remains required.
 
+The CI/private-assembly loaded-module audit separately identifies the host's
+Microsoft Defender AMSI `MpOav.dll`. This is a single security-module category,
+not a general ProgramData or signed-DLL exception. It requires the exact native
+HKLM Defender AMSI/CLSID registration, the OS-known versioned Defender platform
+location, identical canonical paths without reparse points, a read-held file,
+successful Windows Authenticode/revocation verification, the Microsoft product-root
+policy with test/flight roots disabled, and matching signed module resource and
+publisher identity. Unknown injected modules still fail; numbered CRT/OpenMP
+libraries must remain private before either OS/security classification applies.
+Evidence records `verified_host_security_modules` separately from the legacy total
+loaded-library check count, including file hash, version and certificate-chain
+identity. Trust APIs' newly loaded libraries are also audited in at most three
+snapshots. Normal Windows certificate/revocation metadata retrieval may occur
+inside the existing timeout-owned proof child; model networking remains blocked,
+and no security settings, Defender state or trust store are changed. This audit
+is CI/private-assembly proof only, not a shipping Rust installer trust subsystem
+or model-inference evidence (`inference_tested:false` remains explicit).
+
 Adding current official TBB wheels is not a simpler unconditional-closure fix:
 the inspected `tbb==2023.1.0` plus `tcmlib==1.5.0` add 795,220 download bytes,
 1,974,592 unpacked bytes and Intel Simplified notices, while the latter also

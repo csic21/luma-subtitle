@@ -78,7 +78,7 @@ jobs:
         with:
           persist-credentials: false
       - id: request
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea9 # v7.0.1
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const { prepareCpuProof } = require('./scripts/asr-components/ct2-cpu/proof_request.cjs');

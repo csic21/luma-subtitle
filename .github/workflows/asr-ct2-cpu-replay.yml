@@ -1,0 +1,207 @@
+name: Replay exact CPU diagnostic
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/asr-components/ct2-cpu/diagnostic_replay.cjs'
+      - 'scripts/asr-components/ct2-cpu/diagnostic_replay.node-test.cjs'
+      - 'scripts/asr-components/ct2-cpu/replay_driver.py'
+      - 'scripts/asr-components/ct2-cpu/test_replay_driver.py'
+      - 'scripts/asr-components/ct2-cpu/lifecycle_probe.py'
+      - 'scripts/asr-components/ct2-cpu/test_lifecycle_probe.py'
+      - '.github/workflows/asr-ct2-cpu-replay.yml'
+  push:
+    branches: [feat/optional-asr-engines]
+    paths: ['.github/requests/ct2-cpu-replay.json']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ct2-replay-guards-{0}', github.event.pull_request.number) || format('ct2-replay-{0}-{1}', github.sha, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  source-guards:
+    name: Diagnostic replay source guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12.10'
+      - run: node --test scripts/asr-components/ct2-cpu/diagnostic_replay.node-test.cjs
+      - run: |
+          python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_replay_driver.py' -v
+          python -B -m unittest discover -s scripts/asr-components/ct2-cpu -p 'test_lifecycle_probe.py' -v
+
+  request:
+    name: Validate exact diagnostic replay request
+    if: github.event_name == 'push'
+    needs: source-guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      verifier_source_sha: ${{ steps.request.outputs.verifier_source_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: request
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { prepareReplayRequest } = require('./scripts/asr-components/ct2-cpu/diagnostic_replay.cjs');
+            await prepareReplayRequest({ github, context, core });
+
+  retrieve-and-replay:
+    name: Replay the pinned failed CPU wheel (diagnostic only)
+    needs: [source-guards, request]
+    if: ${{ !cancelled() && github.event_name == 'push' && needs.request.result == 'success' }}
+    runs-on: windows-2022
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    env:
+      VERIFIER_SOURCE_SHA: ${{ needs.request.outputs.verifier_source_sha }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.VERIFIER_SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+      - name: Check replay guards on native Windows
+        run: node --test scripts/asr-components/ct2-cpu/diagnostic_replay.node-test.cjs
+      - name: Revalidate request and retrieve the exact immutable diagnostic archive
+        id: retrieve
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const path = require('node:path');
+            const { retrieveReplayArtifact } = require('./scripts/asr-components/ct2-cpu/diagnostic_replay.cjs');
+            await retrieveReplayArtifact({ github, context, core,
+              destination: path.join(process.env.RUNNER_TEMP, 'ct2-replay-input', 'diagnostic.zip'),
+              receiptPath: path.join(process.env.RUNNER_TEMP, 'ct2-replay-controller', 'retrieval.json') });
+      - name: Validate original payloads then diagnose in a fresh pinned private runtime
+        id: replay
+        shell: pwsh
+        run: |
+          python -B scripts/asr-components/ct2-cpu/replay_driver.py `
+            --artifact "$env:RUNNER_TEMP/ct2-replay-input/diagnostic.zip" `
+            --verifier-source-sha "$env:VERIFIER_SOURCE_SHA" `
+            --work "$env:RUNNER_TEMP/ct2-replay-private" `
+            --cache "$env:RUNNER_TEMP/ct2-replay-downloads" `
+            --reports "$env:RUNNER_TEMP/ct2-replay-reports"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise the actual Rust manager on the verified replay runtime
+        if: ${{ always() && !cancelled() && steps.retrieve.outcome == 'success' && (steps.replay.outcome == 'success' || steps.replay.outcome == 'failure') }}
+        timeout-minutes: 35
+        shell: pwsh
+        run: |
+          if (!(Test-Path -LiteralPath "$env:RUNNER_TEMP/ct2-replay-reports/replay-runtime.json" -PathType Leaf)) {
+            Write-Host 'Fresh runtime assembly did not finish; no Rust lifecycle process will run.'
+            exit 0
+          }
+          # The helper revalidates ready/setup/closure receipts, exact wheel/model
+          # bytes and both source identities before launching any owned process.
+          # A failed Python baseline stays failed even if this independent test passes.
+          python -B scripts/asr-components/real_worker_fixture.py `
+            --replay-ready "$env:RUNNER_TEMP/ct2-replay-reports/replay-runtime.json" `
+            --cache "$env:RUNNER_TEMP/ct2-replay-downloads" `
+            --fixture-dir "$env:RUNNER_TEMP/ct2-replay-rust-fixture" `
+            --reports "$env:RUNNER_TEMP/ct2-replay-reports" `
+            --verifier-source-sha "$env:VERIFIER_SOURCE_SHA"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # Never upload the input archive, own wheel, source ZIPs, private runtime,
+      # Microsoft DLLs, downloaded wheels or model weights from this replay.
+      - name: Upload bounded replay metadata only (not publication evidence)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ct2-cpu-replay-metadata-${{ env.VERIFIER_SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 1
+          overwrite: false
+          path: |
+            ${{ runner.temp }}/ct2-replay-controller/retrieval.json
+            ${{ runner.temp }}/ct2-replay-reports/**/*.json
+            ${{ runner.temp }}/ct2-replay-reports/**/*.log
+      - name: Remove only owned replay private inputs
+        if: always()
+        timeout-minutes: 5
+        shell: python
+        run: |
+          import json, os, shutil, stat
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
+          def receipt(name):
+              report = root / 'ct2-replay-reports' / name
+              try:
+                  report_info = report.lstat()
+              except FileNotFoundError:
+                  return None
+              if (not stat.S_ISREG(report_info.st_mode) or report_info.st_size > 2 * 1024 * 1024
+                      or getattr(report_info, 'st_file_attributes', 0) & 0x400
+                      or report.resolve(strict=True) != report):
+                  raise RuntimeError('Unsafe replay cleanup receipt')
+              result = json.loads(report.read_text(encoding='utf-8'))
+              if not isinstance(result, dict):
+                  raise RuntimeError('Malformed replay cleanup receipt')
+              return result
+          driver = receipt('replay-child-drain.json')
+          ready = receipt('replay-runtime.json')
+          cases = {f'{threads}-{operation}' for threads in ('default', 'one') for operation in ('eof', 'unload', 'switch')}
+          if driver is None:
+              if ready is not None:
+                  raise RuntimeError('Ready runtime has no confirmed driver child drain receipt')
+          elif (set(driver) != {'schema', 'owner', 'case', 'drained', 'pid'} or driver.get('schema') != 1
+                  or driver.get('owner') != 'replay-driver' or driver.get('case') not in cases
+                  or driver.get('drained') is not True or type(driver.get('pid')) is not int or driver['pid'] <= 0):
+              raise RuntimeError('Retaining private replay inputs because the driver child is not confirmed drained')
+          evidence = receipt('rust-lifecycle.json')
+          if evidence is not None:
+              if (evidence.get('schema') != 1 or evidence.get('kind') != 'ct2-rust-manager-lifecycle'
+                      or evidence.get('tree_drained') is not True):
+                  raise RuntimeError('Retaining private replay inputs because the owned Rust tree is not confirmed drained')
+          names = ('ct2-replay-private', 'ct2-replay-downloads', 'ct2-replay-input', 'ct2-replay-rust-fixture')
+          pending = []
+          seen = 0
+          for name in names:
+              owned = root / name
+              try:
+                  owned.lstat()
+              except FileNotFoundError:
+                  continue
+              todo = [owned]
+              while todo:
+                  entry = todo.pop()
+                  info = entry.lstat()
+                  seen += 1
+                  if seen > 400000:
+                      raise RuntimeError('Owned replay cleanup inventory exceeds bounds')
+                  if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400):
+                      raise RuntimeError('Refusing replay cleanup through a link or reparse point')
+                  if entry.resolve(strict=True) != entry or not entry.is_relative_to(owned):
+                      raise RuntimeError('Owned replay cleanup path escaped its canonical root')
+                  if stat.S_ISDIR(info.st_mode):
+                      todo.extend(entry.iterdir())
+                  elif not stat.S_ISREG(info.st_mode):
+                      raise RuntimeError('Unexpected special file in replay cleanup')
+              if not owned.is_dir() or owned.parent != root:
+                  raise RuntimeError('Owned replay cleanup target must be a direct child directory')
+              pending.append(owned)
+          # All targets are checked before the first deletion. Reports/controller
+          # metadata, checkout files and other runner temporary files are untouched.
+          for owned in pending:
+              shutil.rmtree(owned)

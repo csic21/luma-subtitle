@@ -74,10 +74,11 @@ def runtime(backend, device):
         _luma_numba_proof = dict(selected='workqueue',numeric_passed=True,parallel_jit_tested=True)
     return dict(device='cpu',core=module,module=module)
 ''',encoding='utf-8')
-            (tmp/'self_test.py').write_text('def loaded_native_libraries(): return 3\n')
+            (tmp/'self_test.py').write_text('def loaded_native_libraries(host_security_modules):\n    host_security_modules.append(dict(kind="windows-defender-amsi", verified=True))\n    return 3\n')
             report = managed_worker_runtime_probe(sys.executable,worker,os.environ.copy(),tmp)
             self.assertTrue(report['successful_proof_reused']); self.assertFalse(report['inference'])
             self.assertEqual(report['private_native_libraries_checked'],3)
+            self.assertEqual(report['verified_host_security_modules'],[dict(kind='windows-defender-amsi',verified=True)])
             self.assertEqual(len(report['embedded_worker_sha256']),64)
             with patch('windows_crt_proof.helper_process',return_value=(0,'{}\n{}\n','')):
                 with self.assertRaisesRegex(ValueError,'exactly one'):
