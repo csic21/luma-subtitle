@@ -1,5 +1,7 @@
 import ast
 import copy
+from contextlib import nullcontext
+import io
 import hashlib
 import json
 from pathlib import Path
@@ -163,7 +165,7 @@ class WindowsInstallerJobTests(unittest.TestCase):
             bad=copy.deepcopy(lifecycle);bad['transitions'][0]['process_exited_when_lease_available']=False
             with self.assertRaises(ValueError):proof.validate_native_worker_lifecycle(bad,fixture,'b'*40)
 
-    def exercise(self,root,job_result,*,raises=False,with_fixture=False,prepare_failure=False):
+    def exercise(self,root,job_result,*,raises=False,with_fixture=False,prepare_failure=False,capture_print=True):
         output=root/'output';output.mkdir();cache=root/'cache';cache.mkdir()
         pin={'bytes':6,'sha256':hashlib.sha256(b'python').hexdigest()}
         (cache/pin['sha256']).write_bytes(b'python')
@@ -184,7 +186,8 @@ class WindowsInstallerJobTests(unittest.TestCase):
         with patch.object(proof.sys,'platform','win32'),patch.object(proof.shutil,'which',return_value=str(cargo)), \
              patch.object(job,'run_owned_cargo_test',side_effect=run),patch('real_worker_fixture.final_cpu_recipe',return_value=with_fixture), \
              patch('real_worker_fixture.prepare',side_effect=prepare), \
-             patch.object(proof,'owned',side_effect=AssertionError('must use Job')),patch('builtins.print'):
+             patch.object(proof,'owned',side_effect=AssertionError('must use Job')), \
+             (patch('builtins.print') if capture_print else nullcontext()):
             try:
                 result=proof.prove_native_installer('fixture',output,cache,candidates,progress=lambda value:updates.append(copy.deepcopy(value)))
                 error=None
@@ -199,6 +202,32 @@ class WindowsInstallerJobTests(unittest.TestCase):
             self.assertTrue(result['windows_owned_job']['natural_drain_completed'])
             self.assertNotIn('stdout',result['windows_owned_job']);self.assertEqual(list(output.iterdir()),[])
             self.assertTrue(updates[-1]['windows_owned_job']['tree_drained'])
+
+    def test_unicode_native_diagnostics_preserve_results_under_legacy_streams(self):
+        stdout_text='Native proof completed for 子 日本語 é 测试\n'
+        stderr_text='Native stderr for 子 日本語 é 测试\n'
+        self.assertEqual(proof.stream_diagnostic(stdout_text,io.StringIO()),stdout_text)
+        for code,drained,raises in ((0,True,False),(1,True,False),(0,False,False),(0,True,True),(0,False,True)):
+            with self.subTest(code=code,drained=drained,raises=raises),temporary_root() as root:
+                value={'exit_code':code,'tree_drained':drained,'stdout':stdout_text,'stderr':stderr_text,
+                       'diagnostic_label':'owned 子 日本語'}
+                before=copy.deepcopy(value)
+                with io.BytesIO() as out,io.BytesIO() as err, \
+                     io.TextIOWrapper(out,encoding='cp1252',errors='strict',newline='\n') as stdout, \
+                     io.TextIOWrapper(err,encoding='ascii',errors='strict',newline='\n') as stderr:
+                    with patch.object(proof.sys,'stdout',stdout),patch.object(proof.sys,'stderr',stderr):
+                        output,result,error,updates=self.exercise(root,value,raises=raises,capture_print=False)
+                    self.assertEqual(out.getvalue(),stdout_text.encode('cp1252',errors='backslashreplace'))
+                    self.assertEqual(err.getvalue(),stderr_text.encode('ascii',errors='backslashreplace'))
+                self.assertEqual(value,before)
+                self.assertEqual(updates[-1]['windows_owned_job']['diagnostic_label'],'owned 子 日本語')
+                receipt=root/'progress.json';proof.dump(receipt,updates[-1])
+                self.assertIn('owned 子 日本語'.encode('utf-8'),receipt.read_bytes())
+                self.assertEqual((output/'recipe inputs é 测试').exists(),not drained)
+                if raises:self.assertIsInstance(error,job.JobRunError)
+                elif code or not drained:self.assertIsInstance(error,RuntimeError)
+                else:self.assertIsNone(error);self.assertTrue(result['passed'])
+                if error:self.assertIsNone(result)
 
     def test_windows_job_failure_is_strict_and_cleanup_requires_confirmed_drain(self):
         for drained in (False,True):

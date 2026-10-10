@@ -14,7 +14,7 @@ from fixture_paths import temporary_root
 
 spec = importlib.util.spec_from_file_location('qwen_smoke_draft', Path(__file__).with_name('fixture.py'))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-CATALOG = json.loads((Path(__file__).resolve().parents[3] / 'src-tauri/resources/asr/catalog.json').read_text())
+CATALOG = json.loads((Path(__file__).resolve().parents[3] / 'src-tauri/resources/asr/catalog.json').read_text(encoding='utf-8'))
 
 class Gates(unittest.TestCase):
     def test_redirect_hosts_remain_official_and_https(self):
@@ -61,7 +61,7 @@ class Gates(unittest.TestCase):
 
     def test_failed_inference_preserves_measurement_and_removes_cache(self):
         measurement={'available_ram_bytes':13*m.GIB,'total_ram_bytes':16*m.GIB,'free_disk_bytes':20*m.GIB}
-        audio=json.loads((Path(__file__).resolve().parents[1]/'fixtures.json').read_text())['audio']
+        audio=json.loads((Path(__file__).resolve().parents[1]/'fixtures.json').read_text(encoding='utf-8'))['audio']
         report={}
         with temporary_root() as tmp, patch.object(m.subprocess,'run',return_value=SimpleNamespace(stdout=json.dumps(measurement))), patch.object(m,'download_child'):
             with self.assertRaises(RuntimeError):

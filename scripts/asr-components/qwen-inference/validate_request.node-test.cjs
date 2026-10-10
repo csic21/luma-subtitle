@@ -10,12 +10,18 @@ function fixture(){const source='a'.repeat(40),head='b'.repeat(40);return{
 test('exact request and immutable native job are accepted despite mutable historical PR head',()=>{const f=fixture();assert.equal(c.validRequest(f.request,f.event,f.commit,f.changed).runner,'macos-15');c.validEvidence(f.request,f.run,f.job);});
 for(const [name,mutate]of Object.entries({fork:f=>f.event.repository.full_name='other/repo',branch:f=>f.event.ref='refs/heads/main',symlink:f=>f.commit.request_mode='120000',executableRequest:f=>f.commit.request_mode='100755',oldRequest:f=>f.commit.request_existed=true,forcePush:f=>f.event.forced=true,bundledPush:f=>f.event.before='e'.repeat(40),merge:f=>f.commit.parents.push('e'.repeat(40)),wrongParent:f=>f.commit.parents[0]='e'.repeat(40),extraFile:f=>f.changed.push('src/main.ts'),replay:f=>f.commit.sha='f'.repeat(40),smallRam:f=>f.request.minimum_available_ram_bytes=1,largeModel:f=>f.request.model_revisions['qwen3-asr-0-6b']='f'.repeat(40),publication:f=>f.request.metadata_only=false,extraField:f=>f.request.install_anything=true})){test('reject '+name,()=>{const f=fixture();mutate(f);assert.throws(()=>c.validRequest(f.request,f.event,f.commit,f.changed));});}
 for(const [name,mutate]of Object.entries({forkEvidence:f=>f.run.head_repository.full_name='other/repo',wrongPR:f=>f.run.pull_requests[0].number=3,wrongAttempt:f=>f.run.run_attempt=1,wrongJobAttempt:f=>f.job.run_attempt=1,jobSource:f=>f.job.head_sha='e'.repeat(40),runSource:f=>f.run.head_sha='e'.repeat(40),wrongWorkflow:f=>f.run.path='other.yml',failedJob:f=>f.job.conclusion='failure',skippedProof:f=>f.job.steps[0].conclusion='skipped',wrongJob:f=>f.job.name='other',wrongRun:f=>f.job.run_id=999})){test('reject native '+name,()=>{const f=fixture();mutate(f);assert.throws(()=>c.validEvidence(f.request,f.run,f.job));});}
-test('retired request path skips validation and the model job, while existing entries remain guarded',()=>{
- const workflow=fs.readFileSync(path.join(__dirname,'../../../.github/workflows/asr-qwen-inference-proof.yml'),'utf8');
+function presenceScript(workflow) {
+ // Test-only checkout normalization; request and pinned source bytes stay exact.
+ workflow=workflow.replace(/\r\n/g,'\n');
  assert.match(workflow,/request_present: \$\{\{ steps\.presence\.outputs\.present \}\}/);
  assert.match(workflow,/id: request\n        if: steps\.presence\.outputs\.present == 'true'/);
  assert.match(workflow,/needs: validate\n    if: needs\.validate\.outputs\.request_present == 'true'/);
- const script=workflow.match(/id: presence\n        run: node -e "([^\n]+)"/)[1];
+ return workflow.match(/id: presence\n        run: node -e "([^\n]+)"/)[1];
+}
+for (const newline of ['\n','\r\n']) test('retired request path and guards survive '+(newline==='\n'?'LF':'CRLF')+' workflow checkout',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../../../.github/workflows/asr-qwen-inference-proof.yml'),'utf8');
+ const workflow=source.replace(/\r\n/g,'\n').replace(/\n/g,newline);
+ const script=presenceScript(workflow);
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'qwen-request-presence-'));
  try {
   const request=path.join(root,c.REQUEST),output=path.join(root,'output');

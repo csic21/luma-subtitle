@@ -20,9 +20,9 @@ from fixture_paths import temporary_root
 spec = importlib.util.spec_from_file_location('qwen_download_diagnostics', Path(__file__).with_name('fixture.py'))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 ROOT = Path(__file__).resolve().parents[3]
-CATALOG = json.loads((ROOT / 'src-tauri/resources/asr/catalog.json').read_text())
+CATALOG = json.loads((ROOT / 'src-tauri/resources/asr/catalog.json').read_text(encoding='utf-8'))
 MODELS = m.reviewed_models(CATALOG)
-AUDIO = json.loads((ROOT / 'scripts/asr-components/fixtures.json').read_text())['audio']
+AUDIO = json.loads((ROOT / 'scripts/asr-components/fixtures.json').read_text(encoding='utf-8'))['audio']
 ENTRIES = m.fixture_files(MODELS, AUDIO)
 SECRET = 'never-emit-this-secret'
 SIGNED_URL = 'https://cas-bridge.xethub.hf.co/blob?X-Amz-Signature=' + SECRET
@@ -476,17 +476,39 @@ class ReadmeDiagnostics(unittest.TestCase):
 
     def test_readme_entrypoint_never_accepts_file_overrides_or_calls_pair(self):
         with temporary_root() as root:
-            path=root/'readme-request.json';path.write_text(json.dumps({'root':str(root)}))
+            path=root/'readme-request.json';path.write_text(json.dumps({'root':str(root)}),encoding='utf-8')
             with patch.object(m,'download_readme') as readme,patch.object(m,'fetch_pair',side_effect=AssertionError('no pair')) as pair, \
                  patch.object(m.sys,'stdout',new_callable=io.StringIO) as stdout:
                 self.assertEqual(m.readme_download_main(path),0)
             readme.assert_called_once();pair.assert_not_called()
             self.assertTrue(m.readme_succeeded(stdout.getvalue().encode('utf-8')))
             self.assertLessEqual(readme.call_args.args[0]-m.time.monotonic(),30)
-            path.write_text(json.dumps({'root':str(root),'file':MODELS[0]['files'][5]}))
+            path.write_text(json.dumps({'root':str(root),'file':MODELS[0]['files'][5]}),encoding='utf-8')
             with patch.object(m,'download_readme') as readme,patch.object(m.sys,'stderr',new_callable=io.StringIO) as stderr:
                 self.assertEqual(m.readme_download_main(path),1)
             readme.assert_not_called();self.assertEqual(m.readme_child_error(stderr.getvalue())['category'],'invalid-request')
+
+    def test_actual_readme_producer_accepts_only_exact_lf_or_crlf_records(self):
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=repr(newline)), temporary_root() as root:
+                path=root/'readme-request.json'
+                path.write_text(json.dumps({'root':str(root)}),encoding='utf-8')
+                with io.BytesIO() as output, io.TextIOWrapper(output,encoding='cp1252',newline=newline) as stdout:
+                    with patch.object(m,'download_readme') as readme, \
+                         patch.object(m,'fetch_pair',side_effect=AssertionError('no pair')) as pair, \
+                         patch.object(m.sys,'stdout',stdout):
+                        self.assertEqual(m.readme_download_main(path),0)
+                    readme.assert_called_once();pair.assert_not_called()
+                    actual=output.getvalue()
+                    body=json.dumps({'readme_verified':True,'metadata_bytes':m.README_BYTES}).encode('utf-8')
+                    self.assertEqual(actual,body+newline.encode('ascii'))
+                    self.assertTrue(m.readme_succeeded(actual))
+                    self.assertFalse(m.download_succeeded(actual))
+                    for bad in (body,body+b'\r',actual+actual,actual+b'\n',b' '+actual,
+                                actual+b'extra',actual.replace(b'true',b'1'),
+                                actual.replace(b'57456',b'57457'),
+                                actual.replace(b'{',b'{"readme_verified": true, ')):
+                        self.assertFalse(m.readme_succeeded(bad))
 
     def test_readme_child_protocol_cannot_be_mistaken_for_full_pair(self):
         good=(json.dumps({'readme_verified':True,'metadata_bytes':m.README_BYTES})+'\n').encode()

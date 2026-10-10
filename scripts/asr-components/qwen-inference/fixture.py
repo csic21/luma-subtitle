@@ -268,8 +268,10 @@ def readme_child_error(stderr):
 
 
 def readme_succeeded(stdout):
-    # Fixed byte-for-byte protocol: no extra fields, duplicate keys or text.
-    return stdout == (json.dumps({'readme_verified': True, 'metadata_bytes': README_BYTES}) + '\n').encode('utf-8')
+    # Exact JSON bytes with only the platform text-stream LF/CRLF terminator.
+    # No general whitespace stripping, extra fields, duplicate keys or text.
+    body = json.dumps({'readme_verified': True, 'metadata_bytes': README_BYTES}).encode('utf-8')
+    return stdout in (body + b'\n', body + b'\r\n')
 
 
 

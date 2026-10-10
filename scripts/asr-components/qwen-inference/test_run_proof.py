@@ -42,7 +42,7 @@ class Readiness(unittest.TestCase):
         with temporary_root() as tmp:
             root=tmp;output=root/'fresh';request=root/'request.json'
             request.write_text(json.dumps({'source_sha':'a'*40,'pack_id':pack,
-                'selector':'full-inference','purpose':'one-time-feature-branch-qwen-inference-proof','prior_native_evidence':{}}))
+                'selector':'full-inference','purpose':'one-time-feature-branch-qwen-inference-proof','prior_native_evidence':{}}),encoding='utf-8')
             def fail(*args,**kwargs):
                 cache=output/'private-runtime-cache';cache.mkdir();(cache/'private-binary').write_bytes(b'disposable')
                 raise RuntimeError('early native failure')
@@ -50,7 +50,7 @@ class Readiness(unittest.TestCase):
             with patch.object(sys,'argv',argv), patch.object(m.subprocess,'check_output',return_value='a'*40), \
                  patch.object(m,'prepare_cpu_proof',return_value=None),patch.object(m,'owned',side_effect=fail), patch('builtins.print'):
                 with self.assertRaisesRegex(RuntimeError,'early native failure'):m.main()
-            report=json.loads((output/(pack+'.qwen-inference-proof.json')).read_text())
+            report=json.loads((output/(pack+'.qwen-inference-proof.json')).read_text(encoding='utf-8'))
             self.assertEqual(report['outcome'],'failed');self.assertEqual(report['stage'],'native-readiness')
             self.assertFalse(report['inference']['weights_downloaded']);self.assertTrue(report['private_outputs_removed'])
             self.assertFalse((output/'private-runtime-cache').exists())
@@ -175,7 +175,7 @@ class DiagnosticRouting(unittest.TestCase):
         for section in ('inference','diagnostic'):
             for reaped in (False,True):
                 with self.subTest(section=section,reaped=reaped),temporary_root() as output:
-                    private=output/'private-runtime-cache';private.mkdir();(private/'owned-input').write_text('retain until reaped')
+                    private=output/'private-runtime-cache';private.mkdir();(private/'owned-input').write_text('retain until reaped',encoding='utf-8')
                     report={section:{'download_failure':{'child_reap_confirmed':reaped}}}
                     errors=m.cleanup_private_outputs(output,pack,report)
                     self.assertEqual(bool(errors),not reaped);self.assertEqual(private.exists(),not reaped)

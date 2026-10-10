@@ -13,6 +13,13 @@ from smoke import diagnostic_json
 from prepare_cpu_proof import PACK_ID, shipping_cpu_lock
 
 
+def stream_diagnostic(text, stream):
+    # Rendering only: preserve the original Unicode child result and JSON
+    # evidence, escaping just characters this redirected host stream cannot encode.
+    encoding = getattr(stream, 'encoding', None) or 'utf-8'
+    return text.encode(encoding, errors='backslashreplace').decode(encoding)
+
+
 def owned(command, timeout=900, env=None):
     child = subprocess.Popen(command, env=env)
     try:
@@ -102,8 +109,8 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progres
                     result['windows_owned_job']={key:value for key,value in job_result.items() if key not in ('stdout','stderr')}
                     # These are the same Cargo/test streams formerly inherited
                     # by this process. The supervisor has already bounded them.
-                    print(job_result.get('stdout',''),end='',flush=True)
-                    print(job_result.get('stderr',''),end='',file=sys.stderr,flush=True)
+                    print(stream_diagnostic(job_result.get('stdout',''),sys.stdout),end='',flush=True)
+                    print(stream_diagnostic(job_result.get('stderr',''),sys.stderr),end='',file=sys.stderr,flush=True)
                 if progress:progress(result)
             if not tree_drained:raise RuntimeError('Native installer Windows Job drain was not confirmed')
             if job_result['exit_code']!=0:raise RuntimeError(f"Native installer Cargo failed: {job_result['exit_code']}")
