@@ -22,10 +22,17 @@ pub(super) struct Sandbox {
     root: PathBuf,
     config: String,
     auth: String,
+    #[cfg(windows)]
+    program_data: PathBuf,
 }
 impl Sandbox {
     pub(super) fn new(model: Option<&str>) -> Result<Arc<Self>, String> {
-        reject_managed_config()?;
+        #[cfg(windows)]
+        let program_data = normalize_program_data(std::env::var_os("ProgramData"))?;
+        reject_managed_config(
+            #[cfg(windows)]
+            &program_data,
+        )?;
         let root = std::env::temp_dir().join(format!("luma-opencode-{}", uuid::Uuid::new_v4()));
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
@@ -40,6 +47,8 @@ impl Sandbox {
             root,
             config: String::new(),
             auth: "{}".into(),
+            #[cfg(windows)]
+            program_data,
         };
         for name in ["home", "data", "config", "cache", "state", "tmp", "work"] {
             std::fs::create_dir(sandbox.root.join(name)).map_err(|e| e.to_string())?;
@@ -103,6 +112,8 @@ impl Sandbox {
                 command.env(key, value);
             }
         }
+        #[cfg(windows)]
+        command.env("ProgramData", &self.program_data);
         command
             .env("HOME", self.root.join("home"))
             .env("USERPROFILE", self.root.join("home"))
@@ -174,7 +185,20 @@ fn text_only_config(model: Option<&str>) -> Value {
     config
 }
 
-fn reject_managed_config() -> Result<(), String> {
+#[cfg(windows)]
+fn normalize_program_data(raw: Option<std::ffi::OsString>) -> Result<PathBuf, String> {
+    // Match JavaScript's empty-value fallback, and never let relative values
+    // resolve against different application and isolated working directories.
+    let path = raw
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+    if !path.is_absolute() {
+        return Err("Relative ProgramData cannot be verified for isolated OpenCode".into());
+    }
+    Ok(path)
+}
+fn reject_managed_config(#[cfg(windows)] program_data: &Path) -> Result<(), String> {
     // Do not override organization policy or import machine-level plugins. These
     // profiles cannot be proved isolated, so leave them to the external CLI.
     #[cfg(target_os = "macos")]
@@ -205,12 +229,7 @@ fn reject_managed_config() -> Result<(), String> {
         }
     }
     #[cfg(windows)]
-    if std::env::var_os("ProgramData")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
-        .join("opencode")
-        .exists()
-    {
+    if program_data.join("opencode").exists() {
         return Err(
             "Managed OpenCode configuration is unsupported for isolated subtitle translation"
                 .into(),
@@ -394,6 +413,28 @@ mod tests {
         agent["tools"]["task"] = json!(true);
         assert!(!verified_agent(&agent));
     }
+    #[cfg(windows)]
+    #[test]
+    fn managed_program_data_has_one_absolute_effective_root() {
+        assert_eq!(
+            normalize_program_data(None).unwrap(),
+            PathBuf::from(r"C:\ProgramData")
+        );
+        assert_eq!(
+            normalize_program_data(Some("".into())).unwrap(),
+            PathBuf::from(r"C:\ProgramData")
+        );
+        assert_eq!(
+            normalize_program_data(Some(r"D:\OrganizationData".into())).unwrap(),
+            PathBuf::from(r"D:\OrganizationData")
+        );
+        for value in [".", "data", "C:relative", r"\root-only"] {
+            assert!(
+                normalize_program_data(Some(value.into())).is_err(),
+                "{value}"
+            );
+        }
+    }
     #[test]
     fn isolated_environment_excludes_inherited_config_and_loader_hooks() {
         let root = std::env::temp_dir().join(format!("luma-profile-test-{}", uuid::Uuid::new_v4()));
@@ -402,6 +443,8 @@ mod tests {
             root,
             config: text_only_config(None).to_string(),
             auth: "{}".into(),
+            #[cfg(windows)]
+            program_data: normalize_program_data(std::env::var_os("ProgramData")).unwrap(),
         };
         let command = profile.command(Path::new("opencode"));
         let env: std::collections::HashMap<_, _> = command
@@ -423,6 +466,14 @@ mod tests {
         ] {
             assert!(!env.contains_key(key));
         }
+        // The child must inspect the exact same machine policy root as the precheck.
+        #[cfg(windows)]
+        assert_eq!(
+            env.iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("ProgramData"))
+                .and_then(|(_, value)| value.clone()),
+            Some(profile.program_data.to_string_lossy().into_owned())
+        );
         assert_eq!(env["OPENCODE_PURE"].as_deref(), Some("1"));
         assert_eq!(env["OPENCODE_DISABLE_PROJECT_CONFIG"].as_deref(), Some("1"));
     }

@@ -541,11 +541,12 @@ pub(crate) async fn list_translation_cli_models(command: String) -> Result<Vec<S
     let sandbox = super::opencode_isolation::Sandbox::new(None)?;
     let mut version_command = sandbox.command(&resolved);
     version_command.arg("--version");
-    let output = crate::owned_process::output(
+    let output = crate::owned_process::output_with_lifetime(
         version_command,
         Arc::new(AtomicBool::new(false)),
         Duration::from_secs(10),
         64 * 1024,
+        sandbox.clone(),
     )
     .await
     .map_err(|_| "CLI version check failed".to_string())?;
@@ -555,11 +556,12 @@ pub(crate) async fn list_translation_cli_models(command: String) -> Result<Vec<S
     super::opencode_isolation::validate_version(String::from_utf8_lossy(&output.stdout).trim())?;
     let mut command = sandbox.command(&resolved);
     command.arg("models");
-    let output = crate::owned_process::output(
+    let output = crate::owned_process::output_with_lifetime(
         command,
         Arc::new(AtomicBool::new(false)),
         Duration::from_secs(15),
         256 * 1024,
+        sandbox.clone(),
     )
     .await
     .map_err(|_| "CLI model probe failed or exceeded its time/output limit".to_string())?;
@@ -616,6 +618,90 @@ mod tests {
             None
         );
         assert_eq!(resolve_cli_path("/definitely/not/here/luma-cli"), None);
+    }
+
+    #[test]
+    fn native_version_help_and_unsupported_model_probe_ux() {
+        let root =
+            std::env::temp_dir().join(format!("luma-probe-fixture-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("fixture.rs");
+        std::fs::write(&source, r#"
+            fn main() {
+                let exe = std::env::current_exe().unwrap();
+                let mode = exe.file_stem().unwrap().to_string_lossy();
+                let arg = std::env::args().nth(1).unwrap_or_default();
+                match arg.as_str() {
+                    "--version" if mode == "unsupported" => println!("1.18.34"),
+                    "--version" if mode == "supported" => println!("1.18.35"),
+                    "--version" => std::process::exit(2),
+                    "--help" if mode == "custom" => println!("custom fixture help"),
+                    "models" => { std::fs::write(exe.parent().unwrap().join("models-ran"), "bad").unwrap(); },
+                    _ => std::process::exit(2),
+                }
+            }
+        "#).unwrap();
+        let name = |mode: &str| {
+            root.join(if cfg!(windows) {
+                format!("{mode}.exe")
+            } else {
+                mode.to_string()
+            })
+        };
+        let built = std::process::Command::new("rustc")
+            .arg(&source)
+            .arg("-o")
+            .arg(name("supported"))
+            .status()
+            .unwrap();
+        assert!(built.success());
+        for mode in ["unsupported", "custom", "bad"] {
+            std::fs::copy(name("supported"), name(mode)).unwrap();
+        }
+        tauri::async_runtime::block_on(async {
+            let supported = super::check_translation_cli(
+                name("supported").to_string_lossy().into_owned(),
+                Some("opencode".into()),
+            )
+            .await
+            .unwrap();
+            assert!(supported.available);
+            assert_eq!(supported.version.as_deref(), Some("1.18.35"));
+            let unsupported = super::check_translation_cli(
+                name("unsupported").to_string_lossy().into_owned(),
+                Some("opencode".into()),
+            )
+            .await
+            .unwrap();
+            assert!(!unsupported.available);
+            assert!(unsupported.error.as_deref().unwrap().contains("1.18.35"));
+            assert!(super::list_translation_cli_models(
+                name("unsupported").to_string_lossy().into_owned()
+            )
+            .await
+            .is_err());
+            assert!(
+                !root.join("models-ran").exists(),
+                "unsupported version must not reach model enumeration"
+            );
+            let custom = super::check_translation_cli(
+                name("custom").to_string_lossy().into_owned(),
+                Some("custom".into()),
+            )
+            .await
+            .unwrap();
+            assert!(custom.available);
+            assert!(custom.version.is_none());
+            let bad = super::check_translation_cli(
+                name("bad").to_string_lossy().into_owned(),
+                Some("custom".into()),
+            )
+            .await
+            .unwrap();
+            assert!(!bad.available);
+            assert!(bad.error.is_some());
+        });
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

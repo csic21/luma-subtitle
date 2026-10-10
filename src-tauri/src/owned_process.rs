@@ -1,5 +1,7 @@
 //! Bounded CLI subprocesses. Each launch owns its process group / Windows Job;
-//! cancellation, timeout, overflow and abandoned futures all terminate and reap it.
+//! cancellation, timeout, overflow and abandoned futures terminate/reap owned children.
+//! POSIX groups do not contain helpers that deliberately start a new session.
+//! Pipe readers still stop within a bounded drain period if such helpers retain handles.
 use crate::state::{JobError, JobResult};
 use std::{
     io::Read,
@@ -45,16 +47,108 @@ pub(crate) async fn output_with_lifetime<T: Send + Sync + 'static>(
     result
 }
 
+// Read readiness without a blocking read on a pipe held by a detached helper.
+trait ReadPipe: Read + Send + 'static {
+    fn read_ready(&mut self, buffer: &mut [u8]) -> std::io::Result<usize>;
+}
+#[cfg(unix)]
+impl<T: Read + Send + std::os::fd::AsRawFd + 'static> ReadPipe for T {
+    fn read_ready(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        #[repr(C)]
+        struct PollFd {
+            fd: i32,
+            events: i16,
+            revents: i16,
+        }
+        #[cfg(target_os = "macos")]
+        type Count = u32;
+        #[cfg(not(target_os = "macos"))]
+        type Count = usize;
+        extern "C" {
+            fn poll(fds: *mut PollFd, count: Count, timeout: i32) -> i32;
+        }
+        let mut fd = PollFd {
+            fd: self.as_raw_fd(),
+            events: 1,
+            revents: 0,
+        };
+        match unsafe { poll(&mut fd, 1, 20) } {
+            -1 => Err(std::io::Error::last_os_error()),
+            0 => Err(std::io::ErrorKind::WouldBlock.into()),
+            _ => self.read(buffer),
+        }
+    }
+}
+#[cfg(windows)]
+impl<T: Read + Send + std::os::windows::io::AsRawHandle + 'static> ReadPipe for T {
+    fn read_ready(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn PeekNamedPipe(
+                pipe: *mut std::ffi::c_void,
+                buffer: *mut std::ffi::c_void,
+                size: u32,
+                read: *mut u32,
+                available: *mut u32,
+                left: *mut u32,
+            ) -> i32;
+        }
+        let mut available = 0;
+        let ok = unsafe {
+            PeekNamedPipe(
+                self.as_raw_handle(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                &mut available,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            let error = std::io::Error::last_os_error();
+            // ERROR_BROKEN_PIPE means EOF, just as Read would report it.
+            return if error.raw_os_error() == Some(109) {
+                Ok(0)
+            } else {
+                Err(error)
+            };
+        }
+        if available == 0 {
+            std::thread::sleep(Duration::from_millis(20));
+            return Err(std::io::ErrorKind::WouldBlock.into());
+        }
+        let count = buffer.len().min(available as usize);
+        self.read(&mut buffer[..count])
+    }
+}
 fn reader(
-    mut pipe: impl Read + Send + 'static,
+    mut pipe: impl ReadPipe,
     cap: usize,
     overflow: Arc<AtomicBool>,
+    stopped: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
     std::thread::spawn(move || {
         let mut output = Vec::new();
         let mut chunk = [0u8; 8192];
+        let mut draining = None;
         loop {
-            let count = pipe.read(&mut chunk)?;
+            if stopped.load(Ordering::SeqCst) {
+                let start = draining.get_or_insert_with(Instant::now);
+                if start.elapsed() >= Duration::from_millis(100) {
+                    return Ok(output);
+                }
+            }
+            let count = match pipe.read_ready(&mut chunk) {
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if stopped.load(Ordering::SeqCst) {
+                        return Ok(output);
+                    }
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            };
             if count == 0 {
                 return Ok(output);
             }
@@ -94,15 +188,18 @@ fn run(
             .map_err(|e| JobError::failed(format!("Cannot own CLI process tree: {e}")))?,
     );
     let overflow = Arc::new(AtomicBool::new(false));
+    let stopped = Arc::new(AtomicBool::new(false));
     let stdout = reader(
         owned.child.stdout.take().expect("stdout pipe"),
         max_bytes,
         overflow.clone(),
+        stopped.clone(),
     );
     let stderr = reader(
         owned.child.stderr.take().expect("stderr pipe"),
         max_bytes,
         overflow.clone(),
+        stopped.clone(),
     );
     let started = Instant::now();
     let status = loop {
@@ -126,6 +223,7 @@ fn run(
     };
     // Descendants may outlive a successful parent or retain its pipes.
     owned.terminate();
+    stopped.store(true, Ordering::SeqCst);
     let out = stdout.join();
     let err = stderr.join();
     let status = status?;
@@ -297,6 +395,23 @@ mod tests {
             return;
         };
         let path = std::path::PathBuf::from(std::env::var_os("LUMA_OWNED_TEST_MARKER").unwrap());
+        #[cfg(unix)]
+        if mode == "detached" {
+            extern "C" {
+                fn setsid() -> i32;
+            }
+            assert!(unsafe { setsid() } > 0);
+            std::fs::write(path.with_extension("ready"), "ready").unwrap();
+            std::thread::sleep(Duration::from_millis(2500));
+            std::fs::write(path, "self-ended").unwrap();
+            return;
+        }
+        #[cfg(unix)]
+        if mode == "detach-parent" {
+            let _child = fixture("detached", &path).spawn().unwrap();
+            std::thread::sleep(Duration::from_secs(20));
+            return;
+        }
         if mode == "descendant" {
             std::thread::sleep(Duration::from_millis(900));
             std::fs::write(path, "leaked").unwrap();
@@ -331,6 +446,56 @@ mod tests {
         assert!(!root.join("sleep").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
+    #[test]
+    fn detached_pipe_holders_cannot_extend_timeout_or_cancellation() {
+        let root =
+            std::env::temp_dir().join(format!("luma-detached-proof-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        for cancel_early in [false, true] {
+            let marker = root.join(if cancel_early { "cancel" } else { "timeout" });
+            let cancel = Arc::new(AtomicBool::new(false));
+            let trigger = cancel.clone();
+            let ready = marker.with_extension("ready");
+            let watcher = std::thread::spawn(move || {
+                let start = Instant::now();
+                while !ready.exists() && start.elapsed() < Duration::from_secs(3) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert!(
+                    ready.exists(),
+                    "fixture must detach before testing cancellation"
+                );
+                if cancel_early {
+                    trigger.store(true, Ordering::SeqCst);
+                }
+            });
+            let start = Instant::now();
+            let result = run(
+                &mut fixture("detach-parent", &marker),
+                &cancel,
+                &AtomicBool::new(false),
+                Duration::from_millis(500),
+                8192,
+            );
+            assert!(result.is_err());
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "detached pipe extended the command budget"
+            );
+            watcher.join().unwrap();
+        }
+        let start = Instant::now();
+        while !(root.join("cancel").exists() && root.join("timeout").exists()) {
+            assert!(
+                start.elapsed() < Duration::from_secs(4),
+                "disposable detached fixtures did not self-end"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn cancellation_and_dropped_futures_reap_owned_children() {
         tauri::async_runtime::block_on(async {
