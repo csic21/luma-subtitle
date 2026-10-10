@@ -83,6 +83,68 @@ class ProofTextEncodingTests(unittest.TestCase):
 
 
 class WindowsInstallerJobTests(unittest.TestCase):
+    def test_shipping_cpu_cannot_skip_receipt_selected_lifecycle(self):
+        with temporary_root() as root:
+            candidates=root/'candidates.json'
+            for candidate in ({'id':proof.PACK_ID,'unavailable_reason':'unexpected'},
+                              {'id':proof.PACK_ID,'recipe':{'wheels':[]}}):
+                proof.dump(candidates,{'runtimes':[candidate]})
+                with patch.object(proof,'shipping_cpu_lock',return_value={'cpu_component':{}}), \
+                     patch.object(proof,'owned',side_effect=AssertionError('must fail before child')):
+                    with self.assertRaisesRegex(ValueError,'receipt-selected native worker lifecycle'):
+                        proof.prove_native_installer(proof.PACK_ID,root/'output',root/'cache',candidates)
+            proof.dump(candidates,{'runtimes':[{'id':proof.PACK_ID,'unavailable_reason':'legacy unavailable'}]})
+            with patch.object(proof,'shipping_cpu_lock',return_value=None):
+                self.assertEqual(proof.prove_native_installer(proof.PACK_ID,root/'output',root/'cache',candidates),
+                                 {'tested':False,'reason':'legacy unavailable'})
+
+    def test_own_cpu_native_job_requires_actual_lifecycle_receipt_before_passing(self):
+        from test_own_cpu_recipe import SyntheticPublishedCpu
+        import prepare_cpu_proof as metadata
+        import real_worker_fixture
+        import windows_crt_proof
+        with temporary_root() as root:
+            cpu=SyntheticPublishedCpu(root);output=root/'output';output.mkdir()
+            python={'bytes':6,'sha256':hashlib.sha256(b'python').hexdigest()}
+            (cpu.cache/python['sha256']).write_bytes(b'python')
+            contract=root/'crt.json';proof.dump(contract,{'installer':python})
+            candidate={'id':proof.PACK_ID,'recipe':{'python':python,'wheels':[cpu.wheel],
+                       'windows_crt':windows_crt_proof.ID},'unavailable_reason':'review-only candidate'}
+            candidates=root/'candidates.json';proof.dump(candidates,{'runtimes':[candidate]})
+            cargo=root/'cargo.exe';cargo.touch();fixture={'model_revision':'pinned-tiny','audio_sha256':'c'*64}
+            def prepare(cache,directory):
+                self.assertEqual(cache,cpu.cache)
+                directory.mkdir();(directory/'results').mkdir()
+                return {'LUMA_ASR_TEST_OUTPUT':str(directory/'results'),'LUMA_ASR_TEST_MODEL':'pinned-model'},fixture
+            def native(executable,**kwargs):
+                self.assertEqual(kwargs['test_name'],'asr_components::tests::native_direct_recipe_installs_repairs_and_removes')
+                env=kwargs['env'];self.assertEqual(env['LUMA_ASR_TEST_MODEL'],'pinned-model')
+                self.assertEqual(env['LUMA_ASR_TEST_VERIFIER_SOURCE_SHA'],'b'*40)
+                runtime=json.loads(Path(env['LUMA_ASR_RECIPE_RUNTIME']).read_text(encoding='utf-8'))
+                self.assertEqual(runtime,candidate)
+                self.assertTrue((Path(env['LUMA_ASR_RECIPE_INPUTS'])/cpu.wheel['filename']).is_file())
+                lifecycle={'schema':1,'passed':True,'verifier_source_sha':'b'*40,
+                           'embedded_worker_sha256':proof.sha256(proof.ROOT.parent.parent/'src-tauri/src/asr/worker.py'),
+                           **fixture,'managed_receipt_policy_selection_tested':True,
+                           'cpu_thread_policy':'luma-cpu-seq-1:cpu_threads=1','global_managed_path_selection_tested':False,
+                           'injected_lease_retention_tested':True,'cold_warm_srt_export_tested':True,
+                           'active_cancellation_recovery_tested':True,
+                           'transitions':[{'operation':operation,'process_exited_when_lease_available':True,'script_removed':True}
+                                          for operation in ('model-replacement','release-idle','legacy-release','active-cancellation','shutdown')]}
+                proof.dump(Path(env['LUMA_ASR_TEST_OUTPUT'])/'lifecycle.json',lifecycle)
+                return {'exit_code':0,'tree_drained':True,'stdout':'','stderr':''}
+            with patch.object(metadata,'ROOT',cpu.root),patch.object(real_worker_fixture,'ROOT',cpu.root), \
+                 patch.object(real_worker_fixture,'prepare',side_effect=prepare), \
+                 patch.object(windows_crt_proof,'CONTRACT',contract),patch.object(proof.sys,'platform','win32'), \
+                 patch.object(proof.shutil,'which',return_value=str(cargo)),patch.object(job,'run_owned_cargo_test',side_effect=native), \
+                 patch.object(proof,'owned',side_effect=AssertionError('must use Windows Job')),patch('builtins.print'):
+                result=proof.prove_native_installer(proof.PACK_ID,output,cpu.cache,candidates,source_sha='b'*40)
+            self.assertTrue(result['passed'])
+            self.assertTrue(result['real_worker_lifecycle']['tested'])
+            self.assertTrue(result['real_worker_lifecycle']['managed_use_lease_tested'])
+            self.assertTrue(result['real_worker_lifecycle']['lifecycle']['managed_receipt_policy_selection_tested'])
+            self.assertEqual(list(output.iterdir()),[])
+
     def test_native_worker_lease_coverage_requires_complete_matching_lifecycle(self):
         fixture={'model_revision':'pinned','audio_sha256':'c'*64}
         lifecycle={'schema':1,'passed':True,'verifier_source_sha':'b'*40,'embedded_worker_sha256':'d'*64,

@@ -73,6 +73,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate source and component request
         shell: bash
@@ -93,8 +96,13 @@ jobs:
       - name: Reproduce review-only recipes from exact pinned sources
         shell: bash
         run: |
-          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates.json"
-          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates-second.json"
+          CPU_PUBLICATION_PROOF="$(python -B scripts/asr-components/prepare_cpu_proof.py --cache "$RUNNER_TEMP/asr-downloads")"
+          proof_args=()
+          if [[ -n "$CPU_PUBLICATION_PROOF" ]]; then
+            proof_args=(--cpu-publication-proof "$CPU_PUBLICATION_PROOF")
+          fi
+          python -B scripts/asr-components/generate_recipes.py "${proof_args[@]}" --output "$RUNNER_TEMP/asr-recipe-candidates.json"
+          python -B scripts/asr-components/generate_recipes.py "${proof_args[@]}" --output "$RUNNER_TEMP/asr-recipe-candidates-second.json"
           python - <<'PY'
           import hashlib, os
           from pathlib import Path

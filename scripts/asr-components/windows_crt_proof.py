@@ -114,21 +114,23 @@ def gui_subsystem(path):
     return subsystem
 
 
-def helper_process_bytes(command, env, cwd):
+def helper_process_bytes(command, env, cwd, *, timeout=120, output_limit=16_384):
     # Redirect inherited handles as the shipping app does. File-backed bounded
     # output avoids detached reader threads and unbounded capture buffers.
+    if type(timeout) is not int or not 0 < timeout <= 900 or type(output_limit) is not int or not 0 < output_limit <= 4_000_000:
+        raise ValueError('Invalid bounded helper process limits')
     with tempfile.TemporaryFile(dir=cwd) as stdout, tempfile.TemporaryFile(dir=cwd) as stderr:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, env=env, cwd=cwd)
         started = time.monotonic()
         try:
             while child.poll() is None:
-                if time.monotonic() - started > 120: raise TimeoutError('Real CRT app helper timed out')
-                if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > 16_384:
+                if time.monotonic() - started > timeout: raise TimeoutError('Real CRT app helper timed out')
+                if os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > output_limit:
                     raise ValueError('Real CRT app helper exceeded its output bound')
                 time.sleep(0.05)
             child.wait(); stdout.seek(0); stderr.seek(0)
-            out, err = stdout.read(16_385), stderr.read(16_385)
-            if len(out) + len(err) > 16_384: raise ValueError('Real CRT app helper exceeded its output bound')
+            out, err = stdout.read(output_limit + 1), stderr.read(output_limit + 1)
+            if len(out) + len(err) > output_limit: raise ValueError('Real CRT app helper exceeded its output bound')
             return child.returncode, out, err
         except BaseException:
             if child.poll() is None: child.kill()
@@ -136,8 +138,8 @@ def helper_process_bytes(command, env, cwd):
             raise
 
 
-def helper_process(command, env, cwd):
-    code, out, err = helper_process_bytes(command, env, cwd)
+def helper_process(command, env, cwd, **limits):
+    code, out, err = helper_process_bytes(command, env, cwd, **limits)
     return code, out.decode('utf-8'), err.decode('utf-8')
 
 

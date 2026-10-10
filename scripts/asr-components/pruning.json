@@ -1,18 +1,4 @@
 {
   "schema": 1,
-  "packs": {
-    "faster-whisper-cpu-windows-x64": {
-      "reason": "CPU-only component. Upstream Windows recipe sets WITH_CUDNN=OFF but copies an unused cuDNN loader DLL. Exclude it; do not redistribute or claim CUDA support. Native CPU import and actual inference remain required.",
-      "source_url": "https://github.com/OpenNMT/CTranslate2/blob/d44d2d069eb88c7b7804da864c10c201501cb4a9/python/tools/prepare_build_environment_windows.sh",
-      "files": [
-        {
-          "path": "Lib/site-packages/ctranslate2/cudnn64_9.dll",
-          "bytes": 266288,
-          "sha256": "9edbcdff73b0af070eb160b2ce66e59feca04aa017351d8eedcc5e8e149967d2"
-        }
-      ],
-      "verify_pe_imports": "Lib/site-packages/ctranslate2/ctranslate2.dll",
-      "native_library_sha256": "34ff1eeefef2330f8abe777ae12b2238718e04503ad6e3bc9b6c9cb5be9fd274"
-    }
-  }
+  "packs": {}
 }

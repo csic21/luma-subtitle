@@ -46,7 +46,7 @@ def load_host_auditor(path, expected_hash, source_sha):
                      'scope': 'Exact registered Microsoft Defender AMSI identity only'}
 
 
-def load_source_proof_worker(path, root, provenance_path, provenance_hash, source_sha):
+def load_source_proof_worker(path, root, provenance_path, provenance_hash, source_sha, *, component_source_sha=None, publication_proof=None):
     """Select the production source policy for a locally built exact variant.
 
     This is a source-build proof, not evidence of app-global managed selection.
@@ -55,10 +55,23 @@ def load_source_proof_worker(path, root, provenance_path, provenance_hash, sourc
     """
     if not re.fullmatch('[a-f0-9]{40}', source_sha):
         raise ValueError('Exact source-build commit required')
+    component_sha = source_sha if component_source_sha is None else component_source_sha
+    if not isinstance(component_sha, str) or not re.fullmatch('[a-f0-9]{40}', component_sha):
+        raise ValueError('Exact immutable component source commit required')
     provenance = json.loads(checked_source(provenance_path, provenance_hash))
+    if component_source_sha is not None:
+        helper_path = Path(__file__).resolve().parents[1] / 'own_cpu_recipe.py'
+        spec = importlib.util.spec_from_file_location('luma_pinned_cpu_reference', helper_path)
+        helper = importlib.util.module_from_spec(spec); spec.loader.exec_module(helper)
+        shipping_lock = json.loads((helper_path.parent / 'locks' / (helper.PACK_ID + '.json')).read_text(encoding='utf-8'))
+        component = helper.pinned_component(shipping_lock, publication_proof)
+        if component['component_source_sha'] != component_sha or component['proof']['provenance'] != provenance:
+            raise ValueError('Reference component source/provenance differs from the pinned published wheel')
+    elif publication_proof is not None:
+        raise ValueError('Publication proof requires an explicit immutable component source')
     lock = json.loads(Path(__file__).with_name('sources.lock.json').read_text(encoding='utf-8'))
     if (provenance.get('schema') != 1 or provenance.get('variant') != 'luma-cpu-seq-1'
-            or provenance.get('luma_source_sha') != source_sha or lock.get('variant') != 'luma-cpu-seq-1'
+            or provenance.get('luma_source_sha') != component_sha or lock.get('variant') != 'luma-cpu-seq-1'
             or lock.get('wheel_build_tag') != '1lumacpu'
             or provenance.get('upstream') != lock['sources']
             or provenance.get('ct2_cmake') != lock['ct2_cmake']
@@ -82,6 +95,8 @@ def load_source_proof_worker(path, root, provenance_path, provenance_hash, sourc
                 'constructor_overridden': False, 'worker_sha256': hashlib.sha256(source.encode()).hexdigest(),
                 'prepared_worker_sha256': hashlib.sha256(prepared.encode()).hexdigest(),
                 'build_provenance_sha256': provenance_hash, 'performance_claim': False}
+    if component_source_sha is not None:
+        identity['component_source_sha'] = component_sha
     return worker, identity
 
 
@@ -246,6 +261,8 @@ def main():
         p.add_argument('--' + arg, required=True, type=Path)
     for arg in ('host-auditor-sha256', 'build-provenance-sha256', 'source-sha'):
         p.add_argument('--' + arg, required=True)
+    p.add_argument('--publication-proof', type=Path, help='Required with --component-source-sha; bytes are checked against the committed shipping lock.')
+    p.add_argument('--component-source-sha', help='Immutable component source for later app-source verification; defaults to --source-sha for native builds.')
     a = p.parse_args(); root = a.root.resolve()
     report = {'schema': 1, 'passed': False, 'isolated': bool(sys.flags.isolated),
               'relocated': True, 'system_python_used': False, 'host_crt_fallback_allowed': False}
@@ -269,7 +286,8 @@ def main():
                 'sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
         with journal.stage('worker.module_load'):
             worker, report['cpu_thread_policy'] = load_source_proof_worker(
-                a.worker, root, a.build_provenance, a.build_provenance_sha256, a.source_sha)
+                a.worker, root, a.build_provenance, a.build_provenance_sha256, a.source_sha,
+                component_source_sha=a.component_source_sha, publication_proof=a.publication_proof)
         with journal.stage('worker.offline_audit'):
             worker['configure_offline'](); sys.addaudithook(worker['offline_audit'])
         imports = {}

@@ -41,34 +41,6 @@
         "faster-whisper-cpu-windows-x64"
       ],
       "destination": "licenses/supplemental/onednn-3.1.1/THIRD-PARTY-PROGRAMS"
-    },
-    {
-      "path": "licenses/supplemental/intel-openmp-2025.3.0/LICENSE.txt",
-      "source_url": "https://files.pythonhosted.org/packages/79/69/05addedd727061b61a85b4fd989754edb628b5be1cd5d161727f98cf4d86/intel_openmp-2025.3.0-py2.py3-none-win_amd64.whl",
-      "source_archive_sha256": "8ff899d01a41b92ffe0e618b221ea633127d16df726086082d381c431c31339d",
-      "source_archive_bytes": 32083814,
-      "source_member": "intel_openmp-2025.3.0.dist-info/LICENSE.txt",
-      "bytes": 25224,
-      "sha256": "febfb69a5b058f55892dc7f341108a9ca29d50e9fe85723a57eebbb826436958",
-      "packs": [
-        "faster-whisper-cpu-windows-x64"
-      ],
-      "destination": "licenses/supplemental/intel-openmp-2025.3.0/LICENSE.txt",
-      "provenance": "Publisher PyPI wheel includes byte-identical libiomp5md.dll SHA982233366b0afcda1e0f55a0b134097e35b779613f54ddb69e685e6cd06b755f. Notices alone are not a redist/EULA clearance."
-    },
-    {
-      "path": "licenses/supplemental/intel-openmp-2025.3.0/third-party-programs.txt",
-      "source_url": "https://files.pythonhosted.org/packages/79/69/05addedd727061b61a85b4fd989754edb628b5be1cd5d161727f98cf4d86/intel_openmp-2025.3.0-py2.py3-none-win_amd64.whl",
-      "source_archive_sha256": "8ff899d01a41b92ffe0e618b221ea633127d16df726086082d381c431c31339d",
-      "source_archive_bytes": 32083814,
-      "source_member": "intel_openmp-2025.3.0.data/data/share/doc/compiler/licensing/openmp/third-party-programs.txt",
-      "bytes": 31578,
-      "sha256": "f8ce918fe7311ce279e68380a2e233f8a42b1cd3dda8f4c48d6de97a0255c1d7",
-      "packs": [
-        "faster-whisper-cpu-windows-x64"
-      ],
-      "destination": "licenses/supplemental/intel-openmp-2025.3.0/third-party-programs.txt",
-      "provenance": "Publisher PyPI wheel includes byte-identical libiomp5md.dll SHA982233366b0afcda1e0f55a0b134097e35b779613f54ddb69e685e6cd06b755f. Notices alone are not a redist/EULA clearance."
     }
   ]
 }

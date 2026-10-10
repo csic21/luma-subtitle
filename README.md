@@ -132,6 +132,8 @@ See the [offline setup guide](docs/OPTIONAL_ASR.md) for managed setup, model for
 
 The app assembles pinned upstream binary wheels using its own private, offline pip. You review the sources and applicable terms before installation; no manual pip commands, dependency resolution over the network, or changes to system Python are required.
 
+Windows Whisper uses the published CPU-only CTranslate2 component with a one-thread cleanup policy. Native component and setup checks have passed at the reviewed pre-activation source; final activation-source checks remain release gates. Qwen speech inference and MLX speech inference are not yet established; the successful Metal check was a tensor operation. All four recipes remain experimental.
+
 ## Run
 
 ```powershell

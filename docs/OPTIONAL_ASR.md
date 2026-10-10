@@ -11,12 +11,15 @@ There is no network dependency resolution or source build. You do not install Py
 change the system environment. Luma does not read Hugging Face credentials or
 silently switch engines. Whole Python/runtime bundles are not republished by Luma.
 
-**Availability (2026-10-09):** the current embedded catalog still marks the four
-managed runtime candidates unavailable pending final native evidence, exact pins
-and release review. The steps below describe the supported managed setup flow
-for an enabled, verified recipe; they do not make a pending component available.
-The Windows CPU wheel has no final published size or verified download yet.
-See [the build and publication boundaries](ASR_COMPONENTS_BUILD.md).
+**Availability (2026-10-10):** this catalog enables four optional, experimental
+managed recipes: Windows Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen
+CPU on Windows and Apple Silicon. The Windows Whisper recipe pins the published
+[Luma CPU-only CTranslate2 component](https://github.com/csic21/luma-subtitle/releases/tag/asr-ct2-cpu-4.8.2-1)
+by exact bytes and SHA-256. Its wheel is 25,058,630 bytes; the complete engine
+input download is 138,488,258 bytes including private Python and Microsoft CRT,
+excluding models and temporary/installed copies. These are not memory estimates.
+Final activation-source native checks and release review remain release gates;
+see [the build and publication boundaries](ASR_COMPONENTS_BUILD.md).
 
 ## One-click managed setup
 
@@ -304,29 +307,32 @@ weight or detect every form of corruption.
   without fabricated percentages. Completion timing includes alignment and cue
   validation. Cancellation discards the worker and its warm model.
 
-## Validation boundary (2026-10-09)
+## Validation boundary (2026-10-10)
 
-- **Windows CPU diagnostics passed specific inference/cleanup checks; final proof is pending:**
-  [Producer run 37953677195](https://github.com/csic21/luma-subtitle/actions/runs/37953677195)
-  produced two identical 25,058,630-byte wheels from genuinely fresh builds at
-  the same canonical native path. [Same-wheel replay 37970005361](https://github.com/csic21/luma-subtitle/actions/runs/37970005361)
-  passed cold/warm timed-SRT inference and normal EOF, unload and model switch
-  with `cpu_threads=1`; default-thread cleanup hung. Rust cold/warm transcription,
-  export and five lifecycle transitions also passed under a genuine Unicode
-  model path. The overall replay failed because its outer Cargo Windows Job did
-  not drain naturally; the surviving descendant was not identified. The
-  managed-only one-thread policy is implemented, but a fresh source-build proof
-  of the integrated code remains pending. No CPU wheel is published, and the
-  diagnostic artifact is not a publication candidate.
-  [The build guide](ASR_COMPONENTS_BUILD.md) records its exact identity and proof
-  limits; these bytes are not a final installed-runtime size or approved catalog
-  pin. Fixed-path repeatability is not path-independent or cross-machine
-  reproducibility, and the Linux result below does not validate this Windows wheel.
-- **Native Apple Silicon setup proof passed:** MLX and Qwen private offline
-  installation reproduced exactly, relocated imports passed, and the actual
-  Rust installer exercised install, repair, cancellation and removal. The MLX
-  runner also executed a real Metal tensor. These checks do not perform Whisper
-  or Qwen speech-model inference and are not speed or quality benchmarks.
+- **Published Windows CPU component source proof passed:**
+  [Run 37996190880](https://github.com/csic21/luma-subtitle/actions/runs/37996190880)
+  at source `370c1e3145b1a052a8317d8380f60b78b498f262` produced two identical
+  fresh-built wheels and passed Tiny/JFK cold/warm speech inference, Unicode
+  relocation, model switch, explicit unload and normal EOF. The supported
+  `cpu_threads=1` / `num_workers=1` policy avoids the observed default-thread
+  cleanup hang and may reduce throughput. The exact wheel, sources, notices and
+  proof were published and independently checked against the reviewed bytes.
+  This source-build proof does not test managed receipt or global UI selection.
+  The activation source must separately pass private offline reference assembly
+  and the actual Rust receipt-selected install/repair/cancel/remove and worker
+  lifecycle tests before release. No such final-source native pass is claimed here.
+  Fixed-path repeatability is not path-independent or cross-machine reproducibility.
+- **Three non-CPU-component native setup proofs passed:**
+  [Run 37996197575](https://github.com/csic21/luma-subtitle/actions/runs/37996197575)
+  at the same source passed Windows Qwen and Apple Silicon Qwen/MLX private
+  offline installation, relocation and actual Rust install, repair, cancellation
+  and removal checks. The MLX runner executed a real Metal tensor. These checks
+  do not perform Whisper/Qwen speech-model inference or benchmark performance.
+- **Qwen inference remains unverified:** the bounded real-model attempt
+  [run 37994064106](https://github.com/csic21/luma-subtitle/actions/runs/37994064106)
+  passed runtime/readiness and RAM gating, then stopped at its downloader before
+  inference. The download failure's exact cause is not established. This is not
+  an inference pass, a demonstrated model error, or a measured memory-fit result.
 - **Real Linux CPU functional smoke passed:** Python 3.12.14,
   faster-whisper 1.2.1, CTranslate2 4.8.2, and the official
   `Systran/faster-whisper-tiny` snapshot

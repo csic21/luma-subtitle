@@ -22,9 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      request_present: ${{ steps.presence.outputs.present }}
       source_sha: ${{ steps.request.outputs.source_sha }}
       pack_id: ${{ steps.request.outputs.pack_id }}
       runner: ${{ steps.request.outputs.runner }}
+      selector: ${{ steps.request.outputs.selector }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,15 +36,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      # Retiring an old request also matches the path trigger. Only a missing
+      # path is inert; links and other entries still reach the strict validator.
+      - name: Check whether a request remains
+        id: presence
+        run: node -e "const fs = require('node:fs'); let present = false; try { fs.lstatSync('.github/requests/qwen-inference-proof.json'); present = true; } catch (error) { if (error.code !== 'ENOENT') throw error; } fs.appendFileSync(process.env.GITHUB_OUTPUT, 'present=' + present + '\n');"
       - name: Test source/request guards
         run: node --test scripts/asr-components/qwen-inference/validate_request.node-test.cjs
       - name: Verify exact request and successful native attempt
         id: request
+        if: steps.presence.outputs.present == 'true'
         run: node scripts/asr-components/qwen-inference/validate_request.cjs
 
   proof:
-    name: Bounded Qwen inference ${{ needs.validate.outputs.pack_id }}
+    name: Bounded Qwen ${{ needs.validate.outputs.selector }} ${{ needs.validate.outputs.pack_id }}
     needs: validate
+    if: needs.validate.outputs.request_present == 'true'
     runs-on: ${{ needs.validate.outputs.runner }}
     timeout-minutes: 90
     env:
@@ -68,9 +77,10 @@ jobs:
         with:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.validate.outputs.selector == 'full-inference'
       - name: Test bounded model resource/download guards without downloads
         run: python -B -m unittest discover -s scripts/asr-components/qwen-inference -p 'test_*.py' -v
-      - name: Reprove runtime then attempt bounded Qwen ASR and alignment
+      - name: Execute only the exact reviewed Qwen request selector
         shell: bash
         run: |
           python -B -X utf8 scripts/asr-components/qwen-inference/run_proof.py --source-sha "$SOURCE_SHA" --pack "$PACK_ID" --request-copy "$RUNNER_TEMP/qwen-proof-request.json" --output "$RUNNER_TEMP/qwen-one-time-proof"
