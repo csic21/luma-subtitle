@@ -82,7 +82,8 @@ class SyntheticPublishedCpu:
                              {'name': cpu.SOURCES, **pin(b'synthetic source')},
                              {'name': cpu.NOTICES, **pin(b'synthetic notices')}], key=lambda item: item['name']),
             'source_exports': [constants['exports']], 'checks': dict.fromkeys(constants['checks'], True),
-            'locks': {key: {'name': key + '.lock.json', **pin((self.root / ('ct2-cpu/' + key + '.lock.json')).read_bytes())}
+            # Publication binds Git-blob LF bytes, not autocrlf checkout bytes.
+            'locks': {key: {'name': key + '.lock.json', **pin((self.root / ('ct2-cpu/' + key + '.lock.json')).read_bytes().replace(b'\r\n', b'\n'))}
                       for key in ('sources', 'notices')}}
         self.lock = {'platform': 'windows-x64', 'python': '3.12', 'wheels': [self.wheel],
                      'cpu_component': {'source_sha': COMPONENT_SOURCE}}
@@ -103,6 +104,54 @@ class OwnCpuProofTests(unittest.TestCase):
     def setUp(self):
         self.directory = self.enterContext(temporary_root())
         self.fixture = SyntheticPublishedCpu(self.directory)
+
+    def checkout_fixture(self, name, newline):
+        original_copy = shutil.copyfile
+
+        def copy_lock_with_checkout_newlines(source, target, *args, **kwargs):
+            result = original_copy(source, target, *args, **kwargs)
+            if Path(target).as_posix().endswith(('ct2-cpu/sources.lock.json', 'ct2-cpu/notices.lock.json')):
+                path = Path(target)
+                path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', newline))
+            return result
+
+        # Exercise fixture construction after checkout conversion, not merely
+        # a converted lock after an LF proof was already constructed.
+        with patch.object(shutil, 'copyfile', side_effect=copy_lock_with_checkout_newlines):
+            return SyntheticPublishedCpu(self.directory / name)
+
+    def test_synthetic_lock_identity_matches_git_blob_for_lf_and_crlf_checkouts(self):
+        fixtures = [self.checkout_fixture('lf', b'\n'), self.checkout_fixture('crlf', b'\r\n')]
+        self.assertEqual(fixtures[0].proof['locks'], fixtures[1].proof['locks'])
+        for fixture in fixtures:
+            with self.subTest(checkout=fixture.root):
+                self.assertEqual(fixture.component()['component_source_sha'], COMPONENT_SOURCE)
+                for key in ('sources', 'notices'):
+                    data = (fixture.root / ('ct2-cpu/' + key + '.lock.json')).read_bytes()
+                    self.assertEqual(fixture.proof['locks'][key],
+                                     {'name': key + '.lock.json', **pin(data.replace(b'\r\n', b'\n'))})
+        for key in ('sources', 'notices'):
+            crlf = (fixtures[1].root / ('ct2-cpu/' + key + '.lock.json')).read_bytes()
+            self.assertIn(b'\r\n', crlf)
+            self.assertNotEqual(pin(crlf), pin(crlf.replace(b'\r\n', b'\n')))
+
+    def test_lock_content_changes_still_fail_for_lf_and_crlf_checkouts(self):
+        for name, newline in [('lf-tamper', b'\n'), ('crlf-tamper', b'\r\n')]:
+            fixture = self.checkout_fixture(name, newline)
+            for key in ('sources', 'notices'):
+                with self.subTest(checkout=name, lock=key):
+                    path = fixture.root / ('ct2-cpu/' + key + '.lock.json')
+                    original = path.read_bytes()
+                    altered = original.replace(b'"schema": 1', b'"schema": 2', 1)
+                    self.assertNotEqual(original, altered)
+                    self.assertEqual(len(original), len(altered))
+                    path.write_bytes(altered)
+                    try:
+                        with self.assertRaisesRegex(ValueError, 'publication validator'):
+                            fixture.component()
+                    finally:
+                        path.write_bytes(original)
+                    self.assertEqual(fixture.component()['component_source_sha'], COMPONENT_SOURCE)
 
     def test_original_upstream_lock_is_not_a_shipping_cpu_pin(self):
         lock = copy.deepcopy(self.fixture.lock)
