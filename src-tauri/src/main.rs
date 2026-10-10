@@ -8,6 +8,7 @@ mod environment;
 mod job_events;
 mod jobs;
 mod paths;
+mod owned_process;
 mod process_utils;
 mod settings;
 mod state;

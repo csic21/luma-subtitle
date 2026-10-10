@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.1 — 2026-10-10
+
+### Security and reliability
+- Bind API credentials to normalized provider/origin. Saved tasks cannot borrow a key from a different current endpoint. Existing ambiguous keys require explicit one-origin binding in Settings; API redirects are refused.
+- Run OpenCode only through an isolated text-only profile for reviewed version 1.18.35. Global/project plugins, MCP, inherited overrides, tool use and subagents are disabled; effective configuration and tool-denial checks run before subtitle submission. Unsupported versions and managed/custom provider profiles fail closed. Existing built-in provider logins remain usable; no new credentials or login is created automatically.
+- Bound CLI detection, model listing and translation by time/output, with owned process groups or Windows Jobs and cancellation/reaping. Abandoned source-build requests also stop owned processes before staging cleanup.
+- Pin new FFmpeg, whisper.cpp, llama.cpp, Whisper/Silero and Hy-MT2 downloads to reviewed URLs, revisions, SHA-256 and exact sizes. Strict resume, redirect, extraction and atomic activation checks preserve an existing working install on failure. Existing user-supplied/bundled binaries are not retroactively certified.
+- Restrict renderer content/network policy. Existing SQLite credential storage is intentionally retained; it remains readable to sufficiently privileged local software and backups. This release does not encrypt or migrate stored keys.
+
+### Queue and memory
+- Fix fresh optional-engine tasks incorrectly requiring a legacy whisper.cpp model path. Original-engine tasks keep that requirement.
+- Remove the unused completed-subtitle memory cache entirely. In-flight results stay operation-owned; persisted previews and exports load on demand, avoiding cumulative retained subtitle text after jobs complete.
+
+### Validation boundary
+- Regression coverage includes saved-task credential mismatches, explicit legacy binding, fresh-settings optional-engine queue UI flows, bounded child-process lifecycle and legacy artifact trust/extraction.
+- The pinned native OpenCode proof uses a disposable loopback dummy provider, forced filesystem/command/MCP/subagent tool calls and a private-file canary. It uses no real credentials or paid model service. It establishes the reviewed profile's capability boundary, not a general OS sandbox for arbitrary custom commands or malicious user-installed executables.
+- Native app checks, applicable existing optional-runtime tests and independent review are release gates. This patch does not add new Qwen/MLX/CUDA inference, performance, peak-memory or physical-desktop GUI claims; 1.2.0's documented limitations still apply.
+
 ## 1.2.0 — 2026-10-10
 
 ### Optional local transcription engines

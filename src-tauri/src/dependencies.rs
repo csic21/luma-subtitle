@@ -1,8 +1,5 @@
 use serde::Deserialize;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
 #[cfg(not(target_os = "macos"))]
@@ -14,12 +11,16 @@ use crate::{
     state::AppState,
 };
 
+mod archive;
 mod download;
 mod events;
 mod install;
 mod llama;
 #[cfg(target_os = "macos")]
 mod source_build;
+mod trust;
+#[cfg(test)]
+mod trust_tests;
 
 use download::download_dependency_archive;
 use download::{download_file_with_resume, download_message};
@@ -34,24 +35,14 @@ pub(crate) use llama::llama_backend_label;
 #[cfg(target_os = "macos")]
 use source_build::{install_ffmpeg_from_official_source, install_whisper_cpp_from_official_source};
 
-#[cfg(not(target_os = "macos"))]
-const FFMPEG_DOWNLOAD_URL: &str =
-    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
-#[cfg(target_os = "macos")]
-const FFMPEG_SOURCE_URL: &str = "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz";
-#[cfg(target_os = "macos")]
-const FFMPEG_SOURCE_ARCHIVE_NAME: &str = "ffmpeg-8.1.1.tar.xz";
 #[cfg(target_os = "macos")]
 const MACOS_ARM64_DEPLOYMENT_TARGET: &str = "11.0";
-const WHISPER_RELEASES_API_URL: &str = "https://api.github.com/repos/ggml-org/whisper.cpp/releases";
-#[cfg(any(target_os = "macos", test))]
-const WHISPER_LATEST_RELEASE_API_URL: &str =
-    "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest";
 const WHISPER_VAD_MODEL_FILE_NAME: &str = "ggml-silero-v6.2.0.bin";
-const WHISPER_VAD_MODEL_URL: &str =
-    "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin";
 const HTTP_USER_AGENT: &str = "Luma Subtitle dependency installer";
 const DOWNLOAD_MAX_ATTEMPTS: usize = 4;
+static INSTALL_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static MODEL_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static VAD_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[cfg(any(not(target_os = "macos"), test))]
 const WHISPER_CPP_CUDA_ASSET_CANDIDATES: &[&str] = &[
     "whisper-cublas-12.4.0-bin-x64.zip",
@@ -66,49 +57,40 @@ const TRANSLATION_MODEL_PRESETS: &[TranslationModelPreset] = &[
     TranslationModelPreset {
         id: "hy-mt2-1.8b-q4",
         file_name: "Hy-MT2-1.8B-Q4_K_M.gguf",
-        url: "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf",
     },
     TranslationModelPreset {
         id: "hy-mt2-7b-q4",
         file_name: "Hy-MT2-7B-Q4_K_M.gguf",
-        url: "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf",
     },
 ];
 const WHISPER_MODEL_PRESETS: &[WhisperModelPreset] = &[
     WhisperModelPreset {
         id: "tiny",
         file_name: "ggml-tiny.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
     },
     WhisperModelPreset {
         id: "base",
         file_name: "ggml-base.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
     },
     WhisperModelPreset {
         id: "small",
         file_name: "ggml-small.bin",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
     },
     WhisperModelPreset {
         id: "large-v3-turbo-q5_0",
         file_name: "ggml-large-v3-turbo-q5_0.bin",
-        url:
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
     },
 ];
 #[derive(Clone, Copy)]
 struct WhisperModelPreset {
     id: &'static str,
     file_name: &'static str,
-    url: &'static str,
 }
 
 #[derive(Clone, Copy)]
 struct TranslationModelPreset {
     id: &'static str,
     file_name: &'static str,
-    url: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -120,25 +102,6 @@ pub(crate) struct DownloadWhisperModelRequest {
 pub(crate) struct DownloadTranslationModelRequest {
     preset_id: String,
 }
-#[cfg(any(not(target_os = "macos"), test))]
-#[derive(Clone, Deserialize)]
-struct GithubRelease {
-    assets: Vec<GithubAsset>,
-}
-#[cfg(any(not(target_os = "macos"), test))]
-#[derive(Clone, Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
-#[cfg(any(target_os = "macos", test))]
-#[derive(Deserialize)]
-struct WhisperSourceRelease {
-    tag_name: String,
-    tarball_url: String,
-}
-
 #[tauri::command]
 pub(crate) fn download_status(state: State<'_, AppState>) -> DownloadStatus {
     DownloadStatus {
@@ -148,11 +111,13 @@ pub(crate) fn download_status(state: State<'_, AppState>) -> DownloadStatus {
 }
 #[tauri::command]
 pub(crate) async fn install_llama_cpp(app: AppHandle) -> Result<String, String> {
+    let _guard = INSTALL_GATE.lock().await;
     llama::install_llama_cpp(app).await
 }
 
 #[tauri::command]
 pub(crate) async fn install_dependencies(app: AppHandle) -> Result<Vec<String>, String> {
+    let _guard = INSTALL_GATE.lock().await;
     let mut installed = Vec::new();
     installed.push(install_ffmpeg(&app).await?);
     installed.push(install_whisper_cpp(&app).await?);
@@ -161,12 +126,16 @@ pub(crate) async fn install_dependencies(app: AppHandle) -> Result<Vec<String>, 
 }
 
 pub(crate) async fn ensure_whisper_vad_model(app: &AppHandle) -> Result<PathBuf, String> {
+    let _guard = VAD_GATE.lock().await;
     let models_dir = whisper_models_dir(app)?;
     tokio::fs::create_dir_all(&models_dir)
         .await
         .map_err(|error| format!("创建 VAD 模型目录失败: {error}"))?;
     let model_path = models_dir.join(WHISPER_VAD_MODEL_FILE_NAME);
-    if is_existing_file(&model_path) {
+    if trust::verify_file(&model_path, &trust::artifact("vad")?)
+        .await
+        .is_ok()
+    {
         emit_dependency_install(
             app,
             "Silero VAD",
@@ -179,17 +148,13 @@ pub(crate) async fn ensure_whisper_vad_model(app: &AppHandle) -> Result<PathBuf,
         return Ok(model_path);
     }
 
-    let partial_path = models_dir.join(format!("{WHISPER_VAD_MODEL_FILE_NAME}.part"));
-    let _ = tokio::fs::remove_file(&partial_path).await;
-    download_dependency_archive(app, "Silero VAD", WHISPER_VAD_MODEL_URL, &partial_path).await?;
-    if model_path.exists() {
-        tokio::fs::remove_file(&model_path)
-            .await
-            .map_err(|error| format!("替换旧 VAD 模型失败: {error}"))?;
-    }
-    tokio::fs::rename(&partial_path, &model_path)
-        .await
-        .map_err(|error| format!("保存 VAD 模型失败: {error}"))?;
+    let partial_path = models_dir.join(format!(
+        "{WHISPER_VAD_MODEL_FILE_NAME}.{}.part",
+        uuid::Uuid::new_v4()
+    ));
+    let _cleanup = download::PartialFile(partial_path.clone());
+    download_dependency_archive(app, "Silero VAD", &trust::artifact("vad")?, &partial_path).await?;
+    install::activate_model(&partial_path, &model_path)?;
     emit_dependency_install(
         app,
         "Silero VAD",
@@ -229,6 +194,7 @@ pub(crate) async fn download_whisper_model(
     app: AppHandle,
     request: DownloadWhisperModelRequest,
 ) -> Result<String, String> {
+    let _guard = MODEL_GATE.lock().await;
     let preset = find_whisper_model_preset(&request.preset_id)
         .ok_or_else(|| "未知 Whisper 模型预设".to_string())?;
     let models_dir = whisper_models_dir(&app)?;
@@ -236,7 +202,10 @@ pub(crate) async fn download_whisper_model(
         .await
         .map_err(|error| format!("创建模型目录失败: {error}"))?;
     let model_path = models_dir.join(preset.file_name);
-    if is_existing_file(&model_path) {
+    if trust::verify_file(&model_path, &trust::artifact(preset.id)?)
+        .await
+        .is_ok()
+    {
         let path = path_to_string(model_path);
         emit_model_download(
             &app,
@@ -250,8 +219,12 @@ pub(crate) async fn download_whisper_model(
         );
         return Ok(path);
     }
-    let partial_path = models_dir.join(format!("{}.part", preset.file_name));
-    let _ = tokio::fs::remove_file(&partial_path).await;
+    let partial_path = models_dir.join(format!(
+        "{}.{}.part",
+        preset.file_name,
+        uuid::Uuid::new_v4()
+    ));
+    let _cleanup = download::PartialFile(partial_path.clone());
     emit_model_download(
         &app,
         preset.id,
@@ -265,14 +238,7 @@ pub(crate) async fn download_whisper_model(
     let result = download_whisper_model_to_path(&app, preset, &partial_path).await;
     match result {
         Ok(()) => {
-            if model_path.exists() {
-                tokio::fs::remove_file(&model_path)
-                    .await
-                    .map_err(|error| format!("替换旧模型失败: {error}"))?;
-            }
-            tokio::fs::rename(&partial_path, &model_path)
-                .await
-                .map_err(|error| format!("保存模型失败: {error}"))?;
+            install::activate_model(&partial_path, &model_path)?;
             let path = path_to_string(model_path);
             emit_model_download(
                 &app,
@@ -307,55 +273,7 @@ async fn download_whisper_model_to_path(
     preset: WhisperModelPreset,
     partial_path: &Path,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30 * 60))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|error| format!("创建下载客户端失败: {error}"))?;
-    download_file_with_resume(
-        &client,
-        preset.url,
-        partial_path,
-        1.0,
-        |update| {
-            let metrics = update.metrics;
-            let message = download_message("模型", update);
-            emit_model_download_with_metrics(
-                app,
-                preset.id,
-                preset.file_name,
-                "running",
-                message,
-                update.progress,
-                None,
-                None,
-                metrics,
-            );
-        },
-        |attempt, error, downloaded| {
-            emit_model_download_with_metrics(
-                app,
-                preset.id,
-                preset.file_name,
-                "running",
-                format!(
-                    "下载中断，保留 {}，正在重试 {}/{}: {}",
-                    format_bytes(downloaded),
-                    attempt,
-                    DOWNLOAD_MAX_ATTEMPTS,
-                    error
-                ),
-                0.0,
-                None,
-                None,
-                DownloadMetrics {
-                    downloaded_bytes: Some(downloaded),
-                    ..DownloadMetrics::default()
-                },
-            );
-        },
-    )
-    .await
+    download_named_model_to_path(app, preset.id, preset.file_name, "模型", partial_path).await
 }
 
 #[tauri::command]
@@ -363,6 +281,7 @@ pub(crate) async fn download_translation_model(
     app: AppHandle,
     request: DownloadTranslationModelRequest,
 ) -> Result<String, String> {
+    let _guard = MODEL_GATE.lock().await;
     let preset = find_translation_model_preset(&request.preset_id)
         .ok_or_else(|| "未知本地翻译模型预设".to_string())?;
     let models_dir = whisper_models_dir(&app)?;
@@ -370,7 +289,10 @@ pub(crate) async fn download_translation_model(
         .await
         .map_err(|error| format!("创建模型目录失败: {error}"))?;
     let model_path = models_dir.join(preset.file_name);
-    if is_existing_file(&model_path) {
+    if trust::verify_file(&model_path, &trust::artifact(preset.id)?)
+        .await
+        .is_ok()
+    {
         let path = path_to_string(model_path);
         emit_model_download(
             &app,
@@ -384,8 +306,12 @@ pub(crate) async fn download_translation_model(
         );
         return Ok(path);
     }
-    let partial_path = models_dir.join(format!("{}.part", preset.file_name));
-    let _ = tokio::fs::remove_file(&partial_path).await;
+    let partial_path = models_dir.join(format!(
+        "{}.{}.part",
+        preset.file_name,
+        uuid::Uuid::new_v4()
+    ));
+    let _cleanup = download::PartialFile(partial_path.clone());
     emit_model_download(
         &app,
         preset.id,
@@ -396,25 +322,12 @@ pub(crate) async fn download_translation_model(
         None,
         None,
     );
-    let result = download_named_model_to_path(
-        &app,
-        preset.id,
-        preset.file_name,
-        preset.url,
-        "翻译模型",
-        &partial_path,
-    )
-    .await;
+    let result =
+        download_named_model_to_path(&app, preset.id, preset.file_name, "翻译模型", &partial_path)
+            .await;
     match result {
         Ok(()) => {
-            if model_path.exists() {
-                tokio::fs::remove_file(&model_path)
-                    .await
-                    .map_err(|error| format!("替换旧模型失败: {error}"))?;
-            }
-            tokio::fs::rename(&partial_path, &model_path)
-                .await
-                .map_err(|error| format!("保存模型失败: {error}"))?;
+            install::activate_model(&partial_path, &model_path)?;
             let path = path_to_string(model_path);
             emit_model_download(
                 &app,
@@ -448,18 +361,12 @@ async fn download_named_model_to_path(
     app: &AppHandle,
     preset_id: &str,
     file_name: &str,
-    url: &str,
     label: &str,
     partial_path: &Path,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30 * 60))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|error| format!("创建下载客户端失败: {error}"))?;
+    let artifact = trust::artifact(preset_id)?;
     download_file_with_resume(
-        &client,
-        url,
+        &artifact,
         partial_path,
         1.0,
         |update| {
@@ -527,13 +434,20 @@ async fn install_ffmpeg(app: &AppHandle) -> Result<String, String> {
         tokio::fs::create_dir_all(&downloads_dir)
             .await
             .map_err(|error| format!("创建下载目录失败: {error}"))?;
-        let archive_path = downloads_dir.join("ffmpeg-release-essentials.zip");
-        download_dependency_archive(app, "ffmpeg", FFMPEG_DOWNLOAD_URL, &archive_path).await?;
+        let artifact = trust::artifact("ffmpeg-windows")?;
+        let archive_path = downloads_dir.join(format!(
+            "{}.{}.part",
+            artifact.file_name,
+            uuid::Uuid::new_v4()
+        ));
+        let _cleanup = download::PartialFile(archive_path.clone());
+        download_dependency_archive(app, "ffmpeg", &artifact, &archive_path).await?;
         let path = extract_dependency_archive(
             "ffmpeg",
             "ffmpeg.exe",
             app,
             &archive_path,
+            &artifact,
             &sidecars_dir.join("ffmpeg"),
         )
         .await?;
@@ -574,30 +488,39 @@ async fn install_whisper_cpp(app: &AppHandle) -> Result<String, String> {
             app,
             "whisper.cpp",
             "running",
-            "正在查询 whisper.cpp 发布包",
+            "正在准备已固定版本的 whisper.cpp 发布包",
             0.0,
             None,
             None,
         );
-        let asset = latest_whisper_cpp_asset().await?;
+        let available = [
+            "whisper-cublas-12.4.0-bin-x64.zip",
+            "whisper-blas-bin-x64.zip",
+            "whisper-bin-x64.zip",
+        ];
+        let name = select_whisper_cpp_asset_name(&available, has_nvidia_gpu())
+            .ok_or("No reviewed whisper.cpp build for this platform")?;
+        let id = match name {
+            "whisper-cublas-12.4.0-bin-x64.zip" => "whisper-cuda",
+            "whisper-blas-bin-x64.zip" => "whisper-blas",
+            _ => "whisper-cpu",
+        };
+        let asset = trust::artifact(id)?;
         let sidecars_dir = sidecars_dir(app)?;
         let downloads_dir = sidecars_dir.join("downloads");
         tokio::fs::create_dir_all(&downloads_dir)
             .await
             .map_err(|error| format!("创建下载目录失败: {error}"))?;
-        let archive_path = downloads_dir.join(&asset.name);
-        download_dependency_archive(
-            app,
-            "whisper.cpp",
-            &asset.browser_download_url,
-            &archive_path,
-        )
-        .await?;
+        let archive_path =
+            downloads_dir.join(format!("{}.{}.part", asset.file_name, uuid::Uuid::new_v4()));
+        let _cleanup = download::PartialFile(archive_path.clone());
+        download_dependency_archive(app, "whisper.cpp", &asset, &archive_path).await?;
         let path = extract_dependency_archive(
             "whisper.cpp",
             "whisper-cli.exe",
             app,
             &archive_path,
+            &asset,
             &sidecars_dir.join("whisper.cpp"),
         )
         .await?;
@@ -613,49 +536,6 @@ async fn install_whisper_cpp(app: &AppHandle) -> Result<String, String> {
         );
         Ok(path)
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn latest_whisper_cpp_asset() -> Result<GithubAsset, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|error| format!("创建 GitHub 客户端失败: {error}"))?;
-    let releases = client
-        .get(WHISPER_RELEASES_API_URL)
-        .query(&[("per_page", "20")])
-        .send()
-        .await
-        .map_err(|error| format!("查询 whisper.cpp 发布包失败: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("查询 whisper.cpp 发布包失败: {error}"))?
-        .json::<Vec<GithubRelease>>()
-        .await
-        .map_err(|error| format!("解析 whisper.cpp 发布包失败: {error}"))?;
-    select_whisper_cpp_asset_from_releases(&releases, has_nvidia_gpu())
-        .ok_or_else(|| "未找到可用的 whisper.cpp Windows x64 发布包".to_string())
-}
-
-#[cfg(any(not(target_os = "macos"), test))]
-fn select_whisper_cpp_asset_from_releases(
-    releases: &[GithubRelease],
-    has_nvidia_gpu: bool,
-) -> Option<GithubAsset> {
-    releases.iter().find_map(|release| {
-        let available_assets = release
-            .assets
-            .iter()
-            .map(|asset| asset.name.as_str())
-            .collect::<Vec<_>>();
-        let selected_name = select_whisper_cpp_asset_name(&available_assets, has_nvidia_gpu)?;
-        release.assets.iter().find_map(|asset| {
-            (asset.name == selected_name).then(|| GithubAsset {
-                name: asset.name.clone(),
-                browser_download_url: asset.browser_download_url.clone(),
-            })
-        })
-    })
 }
 
 #[cfg(any(not(target_os = "macos"), test))]
@@ -718,91 +598,24 @@ fn find_translation_model_preset(id: &str) -> Option<TranslationModelPreset> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        select_whisper_cpp_asset_from_releases, select_whisper_cpp_asset_name, GithubAsset,
-        GithubRelease,
-    };
-
     #[test]
-    fn macos_source_release_uses_the_single_release_contract() {
-        assert_eq!(
-            super::WHISPER_LATEST_RELEASE_API_URL,
-            format!("{}/latest", super::WHISPER_RELEASES_API_URL)
-        );
-        let body = r#"{"tag_name":"v1.8.3","tarball_url":"https://api.github.com/repos/ggml-org/whisper.cpp/tarball/v1.8.3","assets":[]}"#;
-        let release: super::WhisperSourceRelease = serde_json::from_str(body).unwrap();
-        assert_eq!(release.tag_name, "v1.8.3");
-        assert!(release.tarball_url.ends_with("/tarball/v1.8.3"));
-        assert!(serde_json::from_str::<super::WhisperSourceRelease>(&format!("[{body}]")).is_err());
-    }
-
-    #[test]
-    fn selects_cuda_package_for_nvidia_windows() {
+    fn selects_reviewed_whisper_backends() {
         let assets = [
             "whisper-bin-x64.zip",
             "whisper-blas-bin-x64.zip",
             "whisper-cublas-12.4.0-bin-x64.zip",
         ];
-
         assert_eq!(
-            select_whisper_cpp_asset_name(&assets, true),
+            super::select_whisper_cpp_asset_name(&assets, true),
             Some("whisper-cublas-12.4.0-bin-x64.zip")
         );
-    }
-
-    #[test]
-    fn selects_blas_package_for_non_nvidia_windows() {
-        let assets = [
-            "whisper-bin-x64.zip",
-            "whisper-blas-bin-x64.zip",
-            "whisper-cublas-12.4.0-bin-x64.zip",
-        ];
-
         assert_eq!(
-            select_whisper_cpp_asset_name(&assets, false),
+            super::select_whisper_cpp_asset_name(&assets, false),
             Some("whisper-blas-bin-x64.zip")
         );
-    }
-
-    #[test]
-    fn falls_back_to_cpu_package_when_preferred_assets_are_missing() {
-        let assets = ["whisper-bin-x64.zip"];
-
         assert_eq!(
-            select_whisper_cpp_asset_name(&assets, false),
+            super::select_whisper_cpp_asset_name(&["whisper-bin-x64.zip"], false),
             Some("whisper-bin-x64.zip")
         );
-        assert_eq!(
-            select_whisper_cpp_asset_name(&assets, true),
-            Some("whisper-bin-x64.zip")
-        );
-    }
-
-    #[test]
-    fn skips_latest_release_without_windows_assets() {
-        let releases = [
-            GithubRelease { assets: vec![] },
-            GithubRelease {
-                assets: vec![
-                    GithubAsset {
-                        name: "whisper-blas-bin-x64.zip".into(),
-                        browser_download_url: "https://example.test/blas".into(),
-                    },
-                    GithubAsset {
-                        name: "whisper-cublas-12.4.0-bin-x64.zip".into(),
-                        browser_download_url: "https://example.test/cuda".into(),
-                    },
-                ],
-            },
-        ];
-
-        let selected = select_whisper_cpp_asset_from_releases(&releases, false)
-            .expect("should pick first release that still ships Windows packages");
-        assert_eq!(selected.name, "whisper-blas-bin-x64.zip");
-        assert_eq!(selected.browser_download_url, "https://example.test/blas");
-
-        let selected_cuda = select_whisper_cpp_asset_from_releases(&releases, true)
-            .expect("cuda should also skip empty latest");
-        assert_eq!(selected_cuda.name, "whisper-cublas-12.4.0-bin-x64.zip");
     }
 }

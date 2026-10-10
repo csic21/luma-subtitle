@@ -72,9 +72,10 @@ export function useTasksPageState(t: TFunction) {
       environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
       ffmpegReady: Boolean(env?.ffmpeg_path),
       hasApiCredential: settings.has_api_key,
+      apiKeyScopes: settings.api_key_scopes ?? [],
       llamaReady: Boolean(env?.llama_path),
     }),
-    [env?.ffmpeg_path, env?.whisper_path, env?.llama_path, settings.has_api_key],
+    [env?.ffmpeg_path, env?.whisper_path, env?.llama_path, settings.has_api_key, settings.api_key_scopes],
   );
 
   const taskCounts = useMemo(() => {

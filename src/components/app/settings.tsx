@@ -1,3 +1,4 @@
+import { credentialScope, hasScopedCredential } from "@/lib/credential-scope";
 import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
@@ -454,7 +455,7 @@ export function ModelApiSettingsCard({
               >
                 <Input
                   value={settings.base_url}
-                  onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value }))}
+                  onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value, bind_legacy_api_key: false }))}
                   aria-invalid={missingBaseUrl}
                 />
                 <label className="checkbox-row">
@@ -497,10 +498,18 @@ export function ModelApiSettingsCard({
                     type="password"
                     value={apiKey}
                     onChange={(event) => setApiKey(event.target.value)}
-                    placeholder={settings.has_api_key ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
+                    placeholder={hasScopedCredential(settings) ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
                     aria-invalid={missingApiKey}
                   />
                 </div>
+                <p className="field-hint">{t("settings.apiKeyScope", { origin: credentialScope(translationProvider, settings.base_url)?.slice(4) ?? t("settings.invalidApiOrigin") })}</p>
+                {settings.legacy_api_key_available && (
+                  <label className="checkbox-row">
+                    <Checkbox checked={settings.bind_legacy_api_key === true}
+                      onCheckedChange={(checked) => setSettings((current) => ({ ...current, bind_legacy_api_key: checked === true }))} />
+                    <span>{t("settings.bindLegacyApiKey", { origin: credentialScope(translationProvider, settings.base_url)?.slice(4) ?? t("settings.invalidApiOrigin") })}</span>
+                  </label>
+                )}
               </FieldBlock>
               <FieldBlock label="Temperature">
                 <Input

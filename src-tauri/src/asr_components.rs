@@ -6,6 +6,15 @@ use std::{collections::HashSet, future::Future, path::{Path, PathBuf}, process::
 use tauri::{AppHandle, Emitter, Manager};
 
 mod archive;
+// Share the hardened archive primitives with the pinned legacy installers.
+pub(crate) fn legacy_relative_path(name: &str) -> Result<PathBuf, String> { archive::relative_path(name) }
+pub(crate) fn legacy_private_dir(path: &Path) -> Result<(), String> { store::create_private_dir(path) }
+pub(crate) fn legacy_regular_file(path: &Path) -> Result<std::fs::Metadata, String> { store::regular_file(path) }
+#[cfg(test)] pub(crate) fn legacy_validate_zip_extra(bytes: &[u8]) -> Result<(), String> { archive::validate_extra(bytes) }
+pub(crate) fn extract_legacy_zip(source: &Path, destination: &Path, byte_limit: u64, file_limit: usize) -> Result<(), String> {
+    archive::extract(source, destination, byte_limit, file_limit, &AtomicBool::new(false)).map(|_| ())
+}
+
 mod assembly;
 mod catalog;
 mod download;

@@ -32,12 +32,20 @@ beforeEach(() => {
   vi.mocked(api.getTask).mockResolvedValue(task);
   vi.mocked(api.getTaskLogs).mockResolvedValue([]);
   vi.mocked(api.subtitlePreview).mockResolvedValue(preview);
-  vi.mocked(api.loadSettings).mockResolvedValue({ ...defaultSettings, has_api_key: true });
+  vi.mocked(api.loadSettings).mockResolvedValue({ ...defaultSettings, has_api_key: true, api_key_scopes: ["api|https://api.openai.com"] });
   vi.mocked(api.checkEnvironment).mockResolvedValue({ ffmpeg_path: "/ffmpeg", whisper_path: "/whisper", llama_path: "/llama", gpu_name: null, cuda_driver: null, resource_dir: "", config_dir: "", sidecar_dir: "", model_dir: "" });
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); });
 
 describe("task detail behavior", () => {
+  it("blocks a saved task when only another origin has a key", async () => {
+    vi.mocked(api.loadSettings).mockResolvedValue({ ...defaultSettings, has_api_key: true, api_key_scopes: ["api|https://different.test"] });
+    await mount();
+    await act(async () => { await state.runOperation("translate"); });
+    expect(api.runTaskOperation).not.toHaveBeenCalled();
+    expect(state.notice).toContain("requirement.missingApiKey");
+  });
+
   it("refreshes same-path subtitle revisions without changing the selected tab", async () => {
     await mount();
     act(() => state.setSubtitleView("parallel"));

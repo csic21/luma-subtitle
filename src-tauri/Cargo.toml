@@ -1,6 +1,6 @@
 [package]
 name = "luma-subtitle"
-version = "1.2.0"
+version = "1.2.1"
 description = "Local video transcription, translation, and SRT export."
 authors = ["Luma Subtitle"]
 license = "GPL-3.0-or-later"
@@ -47,4 +47,4 @@ tauri-plugin-dialog = "=2.6.0"
 tauri-plugin-updater = "=2.10.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }

@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager};
 use crate::{
     job_events::{publish_job_event, JobEventDraft, JobOutputs, StoredSubtitleResult},
     paths::{path_to_string, resolve_output_dir, safe_stem},
-    state::{ensure_not_cancelled, AppState, JobError, JobResult},
+    state::{ensure_not_cancelled, JobError, JobResult},
     subtitles::{parse_whisper_json, render_srt, validate_whisper_repetition, SubtitleSegment},
     translation::{
         is_api_provider, normalize_translation_cli_args, normalize_translation_cli_command,
@@ -127,7 +127,7 @@ pub(super) async fn run_job(
     job_id: String,
     request: JobRequest,
     cancel: Arc<AtomicBool>,
-) -> JobResult<JobOutputs> {
+) -> JobResult<(StoredSubtitleResult, JobOutputs)> {
     let media_path = PathBuf::from(&request.media_path);
     let model_path = PathBuf::from(&request.whisper_model_path);
     let output_dir = resolve_output_dir(&media_path, request.output_dir.as_deref())?;
@@ -180,16 +180,12 @@ pub(super) async fn run_job(
     ensure_not_cancelled(&cancel)?;
     let (stored, outputs) = source_subtitle_result(segments, &source_file_name, &output_dir);
 
-    app.state::<AppState>()
-        .subtitle_results
-        .lock()
-        .insert(job_id.clone(), stored);
     publish_job_event(
         &app,
         JobEventDraft::running(&job_id, "source-srt", "原文字幕已生成到内存", 0.9),
     );
 
-    Ok(outputs)
+    Ok((stored, outputs))
 }
 
 async fn prepare_transcription_audio(

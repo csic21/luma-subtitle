@@ -25,9 +25,16 @@ pub(super) fn validate_extra(mut bytes: &[u8]) -> Result<(), String> {
         let kind = u16::from_le_bytes([bytes[0], bytes[1]]);
         let size = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
         if size > bytes.len() - 4 { return Err("Malformed ZIP extra metadata.".into()); }
-        // Only ZIP64 and timestamps. In particular reject PKWARE/ASi Unix link
-        // metadata (0x000d/0x756e), aliases and all unrecognized extensions.
-        if !matches!(kind, 0x0001 | 0x000a | 0x5455) { return Err("Unsupported ZIP metadata; link/alias extensions are not allowed.".into()); }
+        // ZIP64, timestamps, and inert Unix UID/GID metadata only. Ownership is
+        // never restored. Keep PKWARE/ASi link metadata and unknown fields blocked.
+        if kind == 0x7875 {
+            let data = &bytes[4..4 + size];
+            if data.len() < 3 || data[0] != 1 { return Err("Malformed ZIP UID/GID metadata.".into()); }
+            let uid_bytes = data[1] as usize;
+            if uid_bytes == 0 || uid_bytes > 8 || data.len() <= 2 + uid_bytes { return Err("Malformed ZIP UID metadata.".into()); }
+            let gid_bytes = data[2 + uid_bytes] as usize;
+            if gid_bytes == 0 || gid_bytes > 8 || data.len() != 3 + uid_bytes + gid_bytes { return Err("Malformed ZIP GID metadata.".into()); }
+        } else if !matches!(kind, 0x0001 | 0x000a | 0x5455) { return Err("Unsupported ZIP metadata; link/alias extensions are not allowed.".into()); }
         bytes = &bytes[4 + size..];
     }
     Ok(())

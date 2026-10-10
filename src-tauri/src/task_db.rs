@@ -24,7 +24,7 @@ pub(crate) use events::{
 };
 pub(crate) use models::{QueueSettings, TaskRecord, TaskSettingsSnapshot};
 pub(crate) use preferences::{
-    has_api_key, load_api_key, load_queue_settings, save_api_key, save_queue_settings,
+    api_key_scopes, bind_legacy_api_key, credential_scope, has_legacy_api_key, load_api_key, load_queue_settings, save_api_key, save_queue_settings,
 };
 use schema::{app_data_dir, connection, enable_wal, migrate, task_from_row};
 pub(crate) use source_edit::save_source_subtitles;

@@ -56,5 +56,7 @@ jobs:
         run: pnpm build
       - name: Rust regression tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Pinned OpenCode adversarial isolation proof (loopback dummy model only)
+        run: python scripts/test_opencode_isolation.py
       - name: Native application build without distributable packaging
         run: pnpm tauri build --no-bundle

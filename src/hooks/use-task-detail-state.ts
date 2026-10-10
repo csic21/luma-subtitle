@@ -59,7 +59,7 @@ type FlowStep = {
 export function useTaskDetailState(taskId: string, t: TFunction) {
   const [task, setTask] = useState<TaskRecord | null>(null);
   const [settingsDraft, setSettingsDraftState] = useState<TaskSettingsSnapshot | null>(null);
-  const [globalSettings, setGlobalSettings] = useState<Pick<SettingsState, "has_api_key"> | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<Pick<SettingsState, "has_api_key" | "api_key_scopes"> | null>(null);
   const [env, setEnv] = useState<EnvironmentState | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null);
@@ -98,9 +98,10 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
       environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
       ffmpegReady: Boolean(env?.ffmpeg_path),
       hasApiCredential: Boolean(globalSettings?.has_api_key),
+      apiKeyScopes: globalSettings?.api_key_scopes ?? [],
       llamaReady: Boolean(env?.llama_path),
     }),
-    [env?.ffmpeg_path, env?.llama_path, env?.whisper_path, globalSettings?.has_api_key],
+    [env?.ffmpeg_path, env?.llama_path, env?.whisper_path, globalSettings?.has_api_key, globalSettings?.api_key_scopes],
   );
 
   const refreshLogs = useCallback(async () => {
@@ -151,7 +152,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const refreshRunPrerequisites = useCallback(async () => {
     try {
       const [loadedSettings, loadedEnv] = await Promise.all([loadSettings(), checkEnvironment()]);
-      setGlobalSettings({ has_api_key: loadedSettings.has_api_key });
+      setGlobalSettings({ has_api_key: loadedSettings.has_api_key, api_key_scopes: loadedSettings.api_key_scopes ?? [] });
       setEnv(loadedEnv);
     } catch (error) {
       setNotice(errorText(error));

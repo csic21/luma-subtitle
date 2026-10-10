@@ -40,6 +40,9 @@ export type SettingsState = {
   whisper_language: string;
   target_language: string;
   has_api_key: boolean;
+  api_key_scopes?: string[];
+  legacy_api_key_available?: boolean;
+  bind_legacy_api_key?: boolean;
   translation_provider: string;
   translation_cli_tool: string;
   translation_cli_command: string;

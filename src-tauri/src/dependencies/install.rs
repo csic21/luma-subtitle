@@ -1,21 +1,81 @@
 #[cfg(any(target_os = "macos", not(target_os = "macos")))]
 use std::fs;
-#[cfg(not(target_os = "macos"))]
-use std::io;
 use std::path::Path;
 #[cfg(target_os = "macos")]
-use std::{path::PathBuf, process::Stdio};
+use std::{
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
-use tauri::AppHandle;
 #[cfg(target_os = "macos")]
-use tokio::process::Command;
+use std::process::Command;
+use tauri::AppHandle;
 
 #[cfg(not(target_os = "macos"))]
 use crate::paths::{find_file_recursive, path_to_string};
 
-#[cfg(not(target_os = "macos"))]
-pub(super) fn extract_zip_into_dir(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
-    extract_zip_archive(archive_path, output_dir)
+pub(super) fn extract_zip_into_dir(
+    archive_path: &Path,
+    output_dir: &Path,
+    artifact: &super::trust::Artifact,
+) -> Result<(), String> {
+    crate::asr_components::extract_legacy_zip(
+        archive_path,
+        output_dir,
+        artifact.unpacked_bytes,
+        artifact.file_limit,
+    )
+}
+
+#[derive(Clone)]
+pub(super) struct StagedDirectory(pub std::path::PathBuf, std::sync::Arc<StagingCleanup>);
+struct StagingCleanup(std::path::PathBuf);
+impl StagedDirectory {
+    pub(super) fn new(target: &Path) -> Result<Self, String> {
+        let path = target.with_extension(format!("{}.installing", uuid::Uuid::new_v4()));
+        crate::asr_components::legacy_private_dir(&path)?;
+        Ok(Self(
+            path.clone(),
+            std::sync::Arc::new(StagingCleanup(path)),
+        ))
+    }
+}
+impl Drop for StagingCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+/// Preserve a previous install on all pre-activation failures and roll back if
+/// the final rename fails. Callers serialize installers and finish all payloads first.
+pub(super) fn activate_directory(staged: &Path, target: &Path) -> Result<(), String> {
+    let backup = target.with_extension(format!("{}.previous", uuid::Uuid::new_v4()));
+    let existed = match fs::symlink_metadata(target) {
+        Ok(m) if m.is_dir() && !m.file_type().is_symlink() => true,
+        Ok(_) => return Err("Refusing a non-directory dependency target".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e.to_string()),
+    };
+    if existed {
+        fs::rename(target, &backup).map_err(|e| e.to_string())?;
+    }
+    if let Err(error) = fs::rename(staged, target) {
+        if existed {
+            fs::rename(&backup, target).map_err(|rollback| {
+                format!(
+                    "Activation failed ({error}); restore {} manually: {rollback}",
+                    backup.display()
+                )
+            })?;
+        }
+        return Err(format!(
+            "Dependency activation failed; previous install preserved: {error}"
+        ));
+    }
+    if existed {
+        let _ = fs::remove_dir_all(backup);
+    }
+    Ok(())
 }
 
 use super::events::emit_dependency_install;
@@ -26,6 +86,7 @@ pub(super) async fn extract_dependency_archive(
     exe_name: &str,
     app: &AppHandle,
     archive_path: &Path,
+    artifact: &super::trust::Artifact,
     target_dir: &Path,
 ) -> Result<String, String> {
     emit_dependency_install(
@@ -37,15 +98,13 @@ pub(super) async fn extract_dependency_archive(
         None,
         None,
     );
-    let staging_dir = target_dir.with_extension("installing");
-    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
-    tokio::fs::create_dir_all(&staging_dir)
-        .await
-        .map_err(|error| format!("创建 {item} 解压目录失败: {error}"))?;
+    let staging = StagedDirectory::new(target_dir)?;
+    let staging_dir = &staging.0;
+    let artifact = artifact.clone();
     let archive_path = archive_path.to_path_buf();
-    let staging_for_extract = staging_dir.clone();
+    let staging_for_extract = staging.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        extract_zip_archive(&archive_path, &staging_for_extract)
+        extract_zip_into_dir(&archive_path, &staging_for_extract.0, &artifact)
     })
     .await
     .map_err(|error| format!("解压 {item} 任务失败: {error}"))?
@@ -56,12 +115,9 @@ pub(super) async fn extract_dependency_archive(
         .strip_prefix(&staging_dir)
         .map_err(|error| format!("定位 {item} 可执行文件失败: {error}"))?
         .to_path_buf();
-    let _ = tokio::fs::remove_dir_all(target_dir).await;
-    tokio::fs::rename(&staging_dir, target_dir)
-        .await
-        .map_err(|error| format!("保存 {item} 失败: {error}"))?;
+    ensure_executable(&exe_path).await?;
+    activate_directory(staging_dir, target_dir)?;
     let installed_path = target_dir.join(relative_exe);
-    ensure_executable(&installed_path).await?;
     Ok(path_to_string(installed_path))
 }
 
@@ -71,15 +127,29 @@ pub(super) async fn extract_tar_archive(
     item: &str,
     archive_path: &Path,
     output_dir: &Path,
+    artifact: &super::trust::Artifact,
+    lifetime: &StagedDirectory,
     progress: f32,
 ) -> Result<(), String> {
-    let mut command = Command::new("tar");
-    command
-        .arg("-xf")
-        .arg(archive_path)
-        .arg("-C")
-        .arg(output_dir);
-    run_install_command(app, item, format!("正在解包 {item}"), progress, command).await
+    emit_dependency_install(
+        app,
+        item,
+        "running",
+        format!("正在解包 {item}"),
+        progress,
+        None,
+        None,
+    );
+    let source = archive_path.to_path_buf();
+    let destination = output_dir.to_path_buf();
+    let artifact = artifact.clone();
+    let lifetime = lifetime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _owner = lifetime;
+        super::archive::extract_tar(&source, &destination, &artifact)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(target_os = "macos")]
@@ -88,17 +158,12 @@ pub(super) async fn run_install_command(
     item: &str,
     message: impl Into<String>,
     progress: f32,
-    mut command: Command,
+    command: Command,
+    lifetime: &StagedDirectory,
 ) -> Result<(), String> {
     let message = message.into();
     emit_dependency_install(app, item, "running", message, progress, None, None);
-    command.stdin(Stdio::null());
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
-    let output = command
-        .output()
-        .await
-        .map_err(|error| format!("执行 {item} 安装命令失败: {error}"))?;
+    let output = bounded_install_output(command, lifetime, Duration::from_secs(45 * 60)).await?;
     if output.status.success() {
         return Ok(());
     }
@@ -127,24 +192,29 @@ fn trim_command_output(output: &str) -> String {
         .filter(|line| !line.trim().is_empty())
         .collect::<Vec<_>>();
     let start = lines.len().saturating_sub(24);
-    lines[start..].join("\n")
+    lines[start..]
+        .iter()
+        .map(|line| line.chars().take(512).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(target_os = "macos")]
 pub(super) async fn fix_whisper_macos_rpaths(
     target_dir: &Path,
     staging_dir: &Path,
+    lifetime: &StagedDirectory,
 ) -> Result<(), String> {
     let staging_prefix = staging_dir.to_string_lossy().to_string();
     let target_prefix = target_dir.to_string_lossy().to_string();
-    for path in collect_whisper_macos_binaries(target_dir)? {
-        let rpaths = read_macos_rpaths(&path).await?;
+    for path in collect_whisper_macos_binaries(staging_dir)? {
+        let rpaths = read_macos_rpaths(&path, lifetime).await?;
         for old_rpath in rpaths {
             if !old_rpath.starts_with(&staging_prefix) {
                 continue;
             }
             let new_rpath = old_rpath.replacen(&staging_prefix, &target_prefix, 1);
-            change_macos_rpath(&path, &old_rpath, &new_rpath).await?;
+            change_macos_rpath(&path, &old_rpath, &new_rpath, lifetime).await?;
         }
     }
     Ok(())
@@ -176,16 +246,10 @@ fn collect_whisper_macos_binaries(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 #[cfg(target_os = "macos")]
-async fn read_macos_rpaths(path: &Path) -> Result<Vec<String>, String> {
-    let output = Command::new("otool")
-        .arg("-l")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|error| format!("读取 Mach-O rpath 失败: {error}"))?;
+async fn read_macos_rpaths(path: &Path, lifetime: &StagedDirectory) -> Result<Vec<String>, String> {
+    let mut command = Command::new("otool");
+    command.arg("-l").arg(path);
+    let output = bounded_install_output(command, lifetime, Duration::from_secs(60)).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -208,18 +272,19 @@ async fn read_macos_rpaths(path: &Path) -> Result<Vec<String>, String> {
 }
 
 #[cfg(target_os = "macos")]
-async fn change_macos_rpath(path: &Path, old_rpath: &str, new_rpath: &str) -> Result<(), String> {
-    let output = Command::new("install_name_tool")
+async fn change_macos_rpath(
+    path: &Path,
+    old_rpath: &str,
+    new_rpath: &str,
+    lifetime: &StagedDirectory,
+) -> Result<(), String> {
+    let mut command = Command::new("install_name_tool");
+    command
         .arg("-rpath")
         .arg(old_rpath)
         .arg(new_rpath)
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|error| format!("修复 whisper.cpp 动态库路径失败: {error}"))?;
+        .arg(path);
+    let output = bounded_install_output(command, lifetime, Duration::from_secs(60)).await?;
     if output.status.success() {
         return Ok(());
     }
@@ -282,25 +347,46 @@ pub(super) async fn ensure_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn extract_zip_archive(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
-    let file = fs::File::open(archive_path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    for index in 0..archive.len() {
-        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
-        let Some(enclosed_name) = file.enclosed_name() else {
-            continue;
-        };
-        let output_path = output_dir.join(enclosed_name);
-        if file.is_dir() {
-            fs::create_dir_all(&output_path).map_err(|error| error.to_string())?;
-            continue;
+pub(super) fn activate_model(staged: &Path, target: &Path) -> Result<(), String> {
+    let backup = target.with_extension(format!("{}.previous", uuid::Uuid::new_v4()));
+    let existed = match fs::symlink_metadata(target) {
+        Ok(_) => {
+            crate::asr_components::legacy_regular_file(target)?;
+            true
         }
-        if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e.to_string()),
+    };
+    if existed {
+        fs::rename(target, &backup).map_err(|e| e.to_string())?;
+    }
+    if let Err(error) = fs::rename(staged, target) {
+        if existed {
+            fs::rename(&backup, target).map_err(|rollback| {
+                format!(
+                    "Model activation failed ({error}); restore {} manually: {rollback}",
+                    backup.display()
+                )
+            })?;
         }
-        let mut output = fs::File::create(&output_path).map_err(|error| error.to_string())?;
-        io::copy(&mut file, &mut output).map_err(|error| error.to_string())?;
+        return Err(format!(
+            "Model activation failed; previous file preserved: {error}"
+        ));
+    }
+    if existed {
+        let _ = fs::remove_file(backup);
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+async fn bounded_install_output(
+    command: Command,
+    lifetime: &StagedDirectory,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    crate::owned_process::output_with_lifetime(command, Arc::new(AtomicBool::new(false)), timeout, 8 * 1024 * 1024, Arc::new(lifetime.clone())).await.map_err(|error| match error {
+        crate::state::JobError::Cancelled => "Dependency installation was cancelled; the previous install is unchanged.".to_string(),
+        crate::state::JobError::Failed(_) => "Dependency build tool failed, timed out, or exceeded its output limit; the previous install is unchanged.".to_string(),
+    })
 }

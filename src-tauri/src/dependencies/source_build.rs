@@ -1,7 +1,5 @@
-use std::time::Duration;
-
+use std::process::Command;
 use tauri::AppHandle;
-use tokio::process::Command;
 
 use crate::paths::{find_file_recursive, path_to_string, sidecars_dir};
 
@@ -9,11 +7,10 @@ use super::{
     download::download_dependency_archive,
     events::emit_dependency_install,
     install::{
-        build_parallelism, ensure_executable, extract_tar_archive, first_child_dir,
-        fix_whisper_macos_rpaths, run_install_command,
+        activate_directory, build_parallelism, ensure_executable, extract_tar_archive,
+        first_child_dir, fix_whisper_macos_rpaths, run_install_command, StagedDirectory,
     },
-    WhisperSourceRelease, FFMPEG_SOURCE_ARCHIVE_NAME, FFMPEG_SOURCE_URL, HTTP_USER_AGENT,
-    MACOS_ARM64_DEPLOYMENT_TARGET, WHISPER_LATEST_RELEASE_API_URL,
+    trust, MACOS_ARM64_DEPLOYMENT_TARGET,
 };
 
 pub(super) async fn install_ffmpeg_from_official_source(app: &AppHandle) -> Result<String, String> {
@@ -40,21 +37,36 @@ async fn install_ffmpeg_from_official_source_inner(app: &AppHandle) -> Result<St
     tokio::fs::create_dir_all(&downloads_dir)
         .await
         .map_err(|error| format!("创建下载目录失败: {error}"))?;
-    let archive_path = downloads_dir.join(FFMPEG_SOURCE_ARCHIVE_NAME);
-    download_dependency_archive(app, "FFmpeg 源码", FFMPEG_SOURCE_URL, &archive_path).await?;
+    let artifact = trust::artifact("ffmpeg-source")?;
+    let archive_path = downloads_dir.join(format!(
+        "{}.{}.part",
+        artifact.file_name,
+        uuid::Uuid::new_v4()
+    ));
+    let _cleanup = super::download::PartialFile(archive_path.clone());
+    download_dependency_archive(app, "FFmpeg 源码", &artifact, &archive_path).await?;
 
     let target_dir = sidecars_dir.join("ffmpeg");
-    let staging_dir = target_dir.with_extension("installing");
+    let staging = StagedDirectory::new(&target_dir)?;
+    let staging_dir = &staging.0;
     let source_dir = staging_dir.join("source");
     let install_dir = staging_dir.join("install");
-    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
     tokio::fs::create_dir_all(&source_dir)
         .await
         .map_err(|error| format!("创建 FFmpeg 构建目录失败: {error}"))?;
     tokio::fs::create_dir_all(&install_dir)
         .await
         .map_err(|error| format!("创建 FFmpeg 安装目录失败: {error}"))?;
-    extract_tar_archive(app, "FFmpeg 源码", &archive_path, &source_dir, 0.86).await?;
+    extract_tar_archive(
+        app,
+        "FFmpeg 源码",
+        &archive_path,
+        &source_dir,
+        &artifact,
+        &staging,
+        0.86,
+    )
+    .await?;
     let configure_path = find_file_recursive(&source_dir, "configure")
         .ok_or_else(|| "FFmpeg 源码包里没有找到 configure".to_string())?;
     let source_root = configure_path
@@ -75,24 +87,45 @@ async fn install_ffmpeg_from_official_source_inner(app: &AppHandle) -> Result<St
         .arg("--enable-audiotoolbox")
         .arg("--enable-avfoundation")
         .arg("--enable-videotoolbox");
-    run_install_command(app, "ffmpeg", "正在配置官方 FFmpeg 源码", 0.9, configure).await?;
+    run_install_command(
+        app,
+        "ffmpeg",
+        "正在配置官方 FFmpeg 源码",
+        0.9,
+        configure,
+        &staging,
+    )
+    .await?;
 
     let mut make = Command::new("make");
     make.current_dir(&source_root)
         .arg("-j")
         .arg(jobs.to_string());
-    run_install_command(app, "ffmpeg", "正在编译 FFmpeg，可能需要几分钟", 0.95, make).await?;
+    run_install_command(
+        app,
+        "ffmpeg",
+        "正在编译 FFmpeg，可能需要几分钟",
+        0.95,
+        make,
+        &staging,
+    )
+    .await?;
 
     let mut make_install = Command::new("make");
     make_install.current_dir(&source_root).arg("install");
-    run_install_command(app, "ffmpeg", "正在安装 FFmpeg", 0.98, make_install).await?;
+    run_install_command(
+        app,
+        "ffmpeg",
+        "正在安装 FFmpeg",
+        0.98,
+        make_install,
+        &staging,
+    )
+    .await?;
 
     let installed_path = install_dir.join("bin").join("ffmpeg");
     ensure_executable(&installed_path).await?;
-    let _ = tokio::fs::remove_dir_all(&target_dir).await;
-    tokio::fs::rename(&staging_dir, &target_dir)
-        .await
-        .map_err(|error| format!("保存 FFmpeg 失败: {error}"))?;
+    activate_directory(staging_dir, &target_dir)?;
     let _ = tokio::fs::remove_file(&archive_path).await;
     let path = path_to_string(target_dir.join("install").join("bin").join("ffmpeg"));
     emit_dependency_install(
@@ -142,30 +175,43 @@ async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Resu
         app,
         "whisper.cpp",
         "running",
-        "正在查询 whisper.cpp 官方发布源码",
+        "正在准备已固定版本的 whisper.cpp 官方源码",
         0.0,
         None,
         None,
     );
-    let source = latest_whisper_cpp_source().await?;
+    let artifact = trust::artifact("whisper-source")?;
     let sidecars_dir = sidecars_dir(app)?;
     let downloads_dir = sidecars_dir.join("downloads");
     tokio::fs::create_dir_all(&downloads_dir)
         .await
         .map_err(|error| format!("创建下载目录失败: {error}"))?;
-    let archive_path = downloads_dir.join(format!("whisper.cpp-{}.tar.gz", source.tag_name));
-    download_dependency_archive(app, "whisper.cpp 源码", &source.tarball_url, &archive_path)
-        .await?;
+    let archive_path = downloads_dir.join(format!(
+        "{}.{}.part",
+        artifact.file_name,
+        uuid::Uuid::new_v4()
+    ));
+    let _cleanup = super::download::PartialFile(archive_path.clone());
+    download_dependency_archive(app, "whisper.cpp 源码", &artifact, &archive_path).await?;
 
     let target_dir = sidecars_dir.join("whisper.cpp");
-    let staging_dir = target_dir.with_extension("installing");
+    let staging = StagedDirectory::new(&target_dir)?;
+    let staging_dir = &staging.0;
     let source_dir = staging_dir.join("source");
     let build_dir = staging_dir.join("build");
-    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
     tokio::fs::create_dir_all(&source_dir)
         .await
         .map_err(|error| format!("创建 whisper.cpp 构建目录失败: {error}"))?;
-    extract_tar_archive(app, "whisper.cpp 源码", &archive_path, &source_dir, 0.86).await?;
+    extract_tar_archive(
+        app,
+        "whisper.cpp 源码",
+        &archive_path,
+        &source_dir,
+        &artifact,
+        &staging,
+        0.86,
+    )
+    .await?;
     let source_root = first_child_dir(&source_dir)
         .await?
         .ok_or_else(|| "whisper.cpp 源码包为空".to_string())?;
@@ -191,6 +237,7 @@ async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Resu
         "正在配置 whisper.cpp Metal 构建",
         0.9,
         configure,
+        &staging,
     )
     .await?;
 
@@ -211,6 +258,7 @@ async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Resu
         "正在编译 Metal 版 whisper-cli",
         0.97,
         build,
+        &staging,
     )
     .await?;
 
@@ -221,11 +269,8 @@ async fn install_whisper_cpp_from_official_source_inner(app: &AppHandle) -> Resu
         .strip_prefix(&staging_dir)
         .map_err(|error| format!("定位 whisper-cli 失败: {error}"))?
         .to_path_buf();
-    let _ = tokio::fs::remove_dir_all(&target_dir).await;
-    tokio::fs::rename(&staging_dir, &target_dir)
-        .await
-        .map_err(|error| format!("保存 whisper.cpp 失败: {error}"))?;
-    fix_whisper_macos_rpaths(&target_dir, &staging_dir).await?;
+    fix_whisper_macos_rpaths(&target_dir, staging_dir, &staging).await?;
+    activate_directory(staging_dir, &target_dir)?;
     let _ = tokio::fs::remove_file(&archive_path).await;
     let path = path_to_string(target_dir.join(relative_path));
     emit_dependency_install(
@@ -260,31 +305,4 @@ fn ensure_build_tools(item: &str, tools: &[&str]) -> Result<(), String> {
         "编译 {item} 需要本机已有构建工具: {}。请先安装 Xcode Command Line Tools 后重试。",
         missing.join(", ")
     ))
-}
-
-struct WhisperCppSource {
-    tag_name: String,
-    tarball_url: String,
-}
-
-async fn latest_whisper_cpp_source() -> Result<WhisperCppSource, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|error| format!("创建 GitHub 客户端失败: {error}"))?;
-    let release = client
-        .get(WHISPER_LATEST_RELEASE_API_URL)
-        .send()
-        .await
-        .map_err(|error| format!("查询 whisper.cpp 发布源码失败: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("查询 whisper.cpp 发布源码失败: {error}"))?
-        .json::<WhisperSourceRelease>()
-        .await
-        .map_err(|error| format!("解析 whisper.cpp 发布源码失败: {error}"))?;
-    Ok(WhisperCppSource {
-        tag_name: release.tag_name,
-        tarball_url: release.tarball_url,
-    })
 }

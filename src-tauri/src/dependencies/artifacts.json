@@ -1,0 +1,211 @@
+[
+  {
+    "id": "ffmpeg-windows",
+    "version": "8.1.1",
+    "file_name": "ffmpeg-8.1.1-essentials_build.zip",
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/8.1.1/ffmpeg-8.1.1-essentials_build.zip",
+    "bytes": 109282242,
+    "sha256": "6f58ce889f59c311410f7d2b18895b33c03456463486f3b1ebc93d97a0f54541",
+    "source": "github",
+    "unpacked_bytes": 317268035,
+    "file_limit": 49
+  },
+  {
+    "id": "whisper-cpu",
+    "version": "v1.8.3",
+    "file_name": "whisper-bin-x64.zip",
+    "url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.3/whisper-bin-x64.zip",
+    "bytes": 3968674,
+    "sha256": "d824b1e37599f882b396e73f1ee0bfd5d0529f700314c48311dcbd00b803321d",
+    "source": "github",
+    "unpacked_bytes": 9944064,
+    "file_limit": 21
+  },
+  {
+    "id": "whisper-blas",
+    "version": "v1.8.3",
+    "file_name": "whisper-blas-bin-x64.zip",
+    "url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.3/whisper-blas-bin-x64.zip",
+    "bytes": 16535503,
+    "sha256": "2c9e6b95d9b679120553631d07b97d4bb1a56668a592052838dc9e7e24769c04",
+    "source": "github",
+    "unpacked_bytes": 61124486,
+    "file_limit": 23
+  },
+  {
+    "id": "whisper-cuda",
+    "version": "v1.8.3",
+    "file_name": "whisper-cublas-12.4.0-bin-x64.zip",
+    "url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.3/whisper-cublas-12.4.0-bin-x64.zip",
+    "bytes": 459854042,
+    "sha256": "c12a563333d3c3707be70754dc0e87c1cb58aa6333a87055bbcf9b524488dfb0",
+    "source": "github",
+    "unpacked_bytes": 732205568,
+    "file_limit": 28
+  },
+  {
+    "id": "llama-cudart",
+    "version": "b11243",
+    "file_name": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11243/cudart-llama-bin-win-cuda-12.4-x64.zip",
+    "bytes": 391443627,
+    "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+    "source": "github",
+    "unpacked_bytes": 574138880,
+    "file_limit": 3
+  },
+  {
+    "id": "llama-metal",
+    "version": "b11243",
+    "file_name": "llama-b11243-bin-macos-arm64.tar.gz",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11243/llama-b11243-bin-macos-arm64.tar.gz",
+    "bytes": 11763346,
+    "sha256": "372a6e3f6e93ee56e74fa58c5ef0f7a4a29183981a969f3fbd0ef461795cc8ce",
+    "source": "github",
+    "unpacked_bytes": 70135958,
+    "file_limit": 60
+  },
+  {
+    "id": "llama-cpu-arm64",
+    "version": "b11243",
+    "file_name": "llama-b11243-bin-win-cpu-arm64.zip",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11243/llama-b11243-bin-win-cpu-arm64.zip",
+    "bytes": 12049353,
+    "sha256": "8a4bdd5fd4632a3e73005f4586e99ab96e8fa1ca4ccff3609e44d2b880cae377",
+    "source": "github",
+    "unpacked_bytes": 26600733,
+    "file_limit": 38
+  },
+  {
+    "id": "llama-cpu",
+    "version": "b11243",
+    "file_name": "llama-b11243-bin-win-cpu-x64.zip",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11243/llama-b11243-bin-win-cpu-x64.zip",
+    "bytes": 19161151,
+    "sha256": "29f91327f4e98fcac93e3b44e6cc54beda26468eb9ffeb804a08cfa67bda8c5b",
+    "source": "github",
+    "unpacked_bytes": 49173789,
+    "file_limit": 51
+  },
+  {
+    "id": "llama-cuda",
+    "version": "b11243",
+    "file_name": "llama-b11243-bin-win-cuda-12.4-x64.zip",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11243/llama-b11243-bin-win-cuda-12.4-x64.zip",
+    "bytes": 264524962,
+    "sha256": "768382e4dc029f0bd7f4a641af33b17fd5509345ed7bc07b4049e45df81d9537",
+    "source": "github",
+    "unpacked_bytes": 618531613,
+    "file_limit": 52
+  },
+  {
+    "id": "llama-vulkan",
+    "version": "b11243",
+    "file_name": "llama-b11243-bin-win-vulkan-x64.zip",
+    "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11243/llama-b11243-bin-win-vulkan-x64.zip",
+    "bytes": 33065310,
+    "sha256": "147f88e011cb04cbaea45917b6f5f639b76c53d3b15e3e077d1458963af61b25",
+    "source": "github",
+    "unpacked_bytes": 94461213,
+    "file_limit": 52
+  },
+  {
+    "id": "base",
+    "version": "5359861c739e955e79d9a303bcbc70fb988958b1",
+    "file_name": "ggml-base.bin",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin",
+    "bytes": 147951465,
+    "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "large-v3-turbo-q5_0",
+    "version": "5359861c739e955e79d9a303bcbc70fb988958b1",
+    "file_name": "ggml-large-v3-turbo-q5_0.bin",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin",
+    "bytes": 574041195,
+    "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "small",
+    "version": "5359861c739e955e79d9a303bcbc70fb988958b1",
+    "file_name": "ggml-small.bin",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin",
+    "bytes": 487601967,
+    "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "tiny",
+    "version": "5359861c739e955e79d9a303bcbc70fb988958b1",
+    "file_name": "ggml-tiny.bin",
+    "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin",
+    "bytes": 77691713,
+    "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "vad",
+    "version": "9ffd54a1e1ee413ddf265af9913beaf518d1639b",
+    "file_name": "ggml-silero-v6.2.0.bin",
+    "url": "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin",
+    "bytes": 885098,
+    "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "hy-mt2-1.8b-q4",
+    "version": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+    "file_name": "Hy-MT2-1.8B-Q4_K_M.gguf",
+    "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/a0c709d9fac510f2c807aa3af52872340dc37a4a/Hy-MT2-1.8B-Q4_K_M.gguf",
+    "bytes": 1133080448,
+    "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "hy-mt2-7b-q4",
+    "version": "ab8472660ac61fac25f1af43fac2599d52a8a775",
+    "file_name": "Hy-MT2-7B-Q4_K_M.gguf",
+    "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf",
+    "bytes": 4624648896,
+    "sha256": "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
+    "source": "model",
+    "unpacked_bytes": 0,
+    "file_limit": 0
+  },
+  {
+    "id": "ffmpeg-source",
+    "version": "8.1.1",
+    "file_name": "ffmpeg-8.1.1.tar.gz",
+    "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.gz",
+    "bytes": 17674354,
+    "sha256": "1b856f26a07082b6879f3e5300d81e8c7ce3b410ade5898b14382d90c2904634",
+    "source": "ffmpeg",
+    "unpacked_bytes": 88141158,
+    "file_limit": 10109
+  },
+  {
+    "id": "whisper-source",
+    "version": "2eeeba56e9edd762b4b38467bab96c2517163158",
+    "file_name": "whisper.cpp-2eeeba56e9edd762b4b38467bab96c2517163158.tar.gz",
+    "url": "https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/2eeeba56e9edd762b4b38467bab96c2517163158",
+    "bytes": 7901615,
+    "sha256": "089b898aa83b24a8321e0fd554eeb0967fb03dd687e27f6374c72d3363b5b429",
+    "source": "codeload",
+    "unpacked_bytes": 30079227,
+    "file_limit": 1423
+  }
+]

@@ -80,6 +80,8 @@ pub(crate) struct SettingsPayload {
     api_key: Option<String>,
     has_api_key: Option<bool>,
     #[serde(default)]
+    bind_legacy_api_key: bool,
+    #[serde(default)]
     translation_provider: Option<String>,
     #[serde(default)]
     translation_cli_tool: Option<String>,
@@ -105,6 +107,8 @@ pub(crate) struct SettingsResponse {
     target_language: String,
     translation_shard_size: usize,
     has_api_key: bool,
+    api_key_scopes: Vec<String>,
+    legacy_api_key_available: bool,
     translation_provider: String,
     translation_cli_tool: String,
     translation_cli_command: String,
@@ -117,7 +121,7 @@ pub(crate) struct SettingsResponse {
 pub(crate) async fn load_settings(app: AppHandle) -> Result<SettingsResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let settings = read_settings(&app)?;
-        Ok(settings.into_response(task_db::has_api_key(&app)?))
+        settings.into_response(&app)
     })
     .await
     .map_err(|error| format!("读取设置失败: {error}"))?
@@ -128,7 +132,7 @@ pub(crate) fn save_settings(
     payload: SettingsPayload,
 ) -> Result<SettingsResponse, String> {
     let _ = payload.has_api_key;
-    let has_api_key = task_db::has_api_key(&app)?;
+
     let base_url_is_complete = payload.base_url_is_complete;
     let read_previous = read_settings(&app).unwrap_or_default();
     let settings = PersistedSettings {
@@ -143,7 +147,7 @@ pub(crate) fn save_settings(
         whisper_model_path: payload.whisper_model_path.trim().to_string(),
         whisper_language: normalize_language(&payload.whisper_language),
         target_language: payload.target_language.trim().to_string(),
-        has_api_key,
+        has_api_key: false,
         translation_shard_size: normalize_translation_shard_size(
             payload
                 .translation_shard_size
@@ -186,22 +190,32 @@ pub(crate) fn save_settings(
                 .unwrap_or(&read_previous.translation_local_model_path),
         ),
     };
+    if payload.bind_legacy_api_key {
+        if payload
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+        {
+            return Err("请选择保存新密钥或绑定旧密钥，不能同时操作".to_string());
+        }
+        task_db::bind_legacy_api_key(&app, &settings.translation_provider, &settings.base_url)?;
+    }
     if let Some(api_key) = payload.api_key {
         let api_key = api_key.trim();
         if !api_key.is_empty() {
-            task_db::save_api_key(&app, api_key)
-                .map_err(|error| format!("API Key 保存失败: {error}"))?;
+            task_db::save_api_key(
+                &app,
+                &settings.translation_provider,
+                &settings.base_url,
+                api_key,
+            )
+            .map_err(|error| format!("API Key 保存失败: {error}"))?;
         }
     }
-    let settings = PersistedSettings {
-        has_api_key: task_db::has_api_key(&app)?,
-        ..settings
-    };
     let path = settings_path(&app)?;
     let body = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
     fs::write(path, body).map_err(|error| error.to_string())?;
-    let has_api_key = settings.has_api_key;
-    Ok(settings.into_response(has_api_key))
+    settings.into_response(&app)
 }
 
 pub(crate) fn normalize_language(language: &str) -> String {
@@ -291,8 +305,13 @@ fn default_translation_cli_command() -> String {
     DEFAULT_TRANSLATION_CLI_COMMAND.to_string()
 }
 impl PersistedSettings {
-    fn into_response(self, has_api_key: bool) -> SettingsResponse {
-        SettingsResponse {
+    fn into_response(self, app: &AppHandle) -> Result<SettingsResponse, String> {
+        let api_key_scopes = task_db::api_key_scopes(app)?;
+        let has_api_key = task_db::credential_scope(&self.translation_provider, &self.base_url)
+            .map(|scope| api_key_scopes.contains(&scope))
+            .unwrap_or(false);
+        let legacy_api_key_available = task_db::has_legacy_api_key(app)?;
+        Ok(SettingsResponse {
             asr: self.asr.normalized(),
             base_url: self.base_url,
             base_url_is_complete: self.base_url_is_complete,
@@ -303,6 +322,8 @@ impl PersistedSettings {
             target_language: self.target_language,
             translation_shard_size: normalize_translation_shard_size(self.translation_shard_size),
             has_api_key,
+            api_key_scopes,
+            legacy_api_key_available,
             translation_provider: normalize_translation_provider(&self.translation_provider),
             translation_cli_tool: normalize_translation_cli_tool(&self.translation_cli_tool),
             translation_cli_command: normalize_translation_cli_command(
@@ -313,7 +334,7 @@ impl PersistedSettings {
             translation_local_model_path: normalize_translation_local_model_path(
                 &self.translation_local_model_path,
             ),
-        }
+        })
     }
 }
 
