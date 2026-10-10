@@ -30,6 +30,32 @@ private installation directory. The catalog does not bundle these model weights.
   hardware compatibility, memory fit, or native runtime readiness. The worker
   still enforces local-only loading and `trust_remote_code=False` for Qwen.
 
+## Reviewed CDN redirects
+
+Reviewed 2026-10-10 against Hugging Face's official
+[download/firewall documentation](https://huggingface.co/docs/hub/models-downloading#downloading-behind-a-proxy-or-firewall)
+and [published host metadata](https://huggingface.co/.well-known/meta.json).
+Both identify `us.aws.cdn.hf.co` and `us.gcp.cdn.hf.co` as Hugging Face CDN hosts.
+The app's model downloader and the bounded Qwen fixture add only those two exact
+HTTPS redirect hosts; this does not trust all `hf.co` subdomains, arbitrary CDN
+regions, or cloud-provider domains. Original catalog URLs must still be pinned
+Hugging Face repository URLs, and exact byte/hash verification remains mandatory.
+No model file, model revision, hash, byte count, or resource budget changes.
+
+The previous Qwen attempt did not record its rejected hostname. This correction
+addresses an independently documented compatibility gap, not a claim that either
+new hostname was observed in that historical failure. Future fixture rejection
+evidence may include only a validated lowercase ASCII hostname, capped at 253
+characters, with no URL, path, query, userinfo, port, or response-header content.
+An unparseable hostname is omitted. These diagnostics never authorize a host.
+
+Both policies reject effective nonempty credentials, HTTP, custom ports and
+lookalike hosts. Their URL parsers are not lexically identical: Rust's parsed URL
+normalizes empty userinfo away and permits fragments that HTTP does not send;
+Python conservatively rejects raw empty userinfo and fragments. Existing redirect
+loop/depth limits are retained, including reqwest's cutoff at eight previous URLs
+(the initial URL is included). No raw-Location driver is introduced.
+
 ## Pinned models
 
 All byte totals include the downloaded model card and metadata. They are decimal

@@ -63,11 +63,128 @@ fn model_download_requires_official_owner_immutable_revision_and_sha() {
     let Component::Model(model) = model() else { unreachable!() };
     let file = &model.files[0];
     assert!(catalog::validate_download(&file.url, 4, &file.sha256, catalog::Source::Model).is_ok());
-    for url in [file.url.replace(&"a".repeat(40), "main"), file.url.replace("Systran", "unknown-owner"), format!("{}?token=secret", file.url)] {
+    for url in [file.url.replace(&"a".repeat(40), "main"), file.url.replace("Systran", "unknown-owner"), format!("{}?token=secret", file.url), format!("{}#fragment", file.url)] {
         assert!(catalog::validate_download(&url, 4, &file.sha256, catalog::Source::Model).is_err());
     }
     assert!(catalog::validate_download(&file.url, 0, &file.sha256, catalog::Source::Model).is_err());
+    assert!(catalog::validate_download(&file.url, catalog::MAX_DOWNLOAD_BYTES + 1, &file.sha256, catalog::Source::Model).is_err());
     assert!(catalog::validate_download(&file.url, 4, "missing", catalog::Source::Model).is_err());
+    assert!(catalog::validate_download(&file.url, 4, &"g".repeat(64), catalog::Source::Model).is_err());
+}
+#[test]
+fn model_cdn_redirects_accept_exact_signed_uppercase_and_default_port_urls_only_for_models() {
+    for host in ["us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        for raw in [
+            format!("https://{host}/model.bin"),
+            format!("https://{host}/model.bin?X-Amz-Signature=fixture&Expires=123"),
+            format!("https://{}/model.bin", host.to_ascii_uppercase()),
+            format!("https://{host}:443/model.bin"),
+        ] {
+            let url = url::Url::parse(&raw).unwrap();
+            assert!(catalog::allowed_redirect(&url, catalog::Source::Model), "{raw}");
+            for (label, source) in [
+                ("runtime", catalog::Source::Runtime),
+                ("python", catalog::Source::Python),
+                ("wheel", catalog::Source::Wheel),
+                ("CPU wheel", catalog::Source::CpuWheel),
+                ("Microsoft CRT", catalog::Source::MicrosoftCrt),
+            ] {
+                assert!(!catalog::allowed_redirect(&url, source), "{label}: {raw}");
+            }
+        }
+    }
+}
+#[test]
+fn model_cdn_redirects_reject_unsafe_authorities_and_lookalike_hosts() {
+    for host in ["us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        for raw in [
+            format!("http://{host}/model.bin"),
+            format!("https://user@{host}/model.bin"),
+            format!("https://user:@{host}/model.bin"),
+            format!("https://:password@{host}/model.bin"),
+            format!("https://user:password@{host}/model.bin"),
+            format!("https://{host}:444/model.bin"),
+            format!("https://{host}./model.bin"),
+            format!("https://{host}.evil.example/model.bin"),
+            format!("https://evil.{host}/model.bin"),
+            format!("https://evil{host}/model.bin"),
+        ] {
+            assert!(!catalog::allowed_redirect(&url::Url::parse(&raw).unwrap(), catalog::Source::Model), "{raw}");
+        }
+    }
+    for host in ["eu.aws.cdn.hf.co", "eu.gcp.cdn.hf.co", "cdn.hf.co", "arbitrary.s3.amazonaws.com", "storage.googleapis.com", "arbitrary.storage.googleapis.com", "github.com", "release-assets.githubusercontent.com", "files.pythonhosted.org", "download.visualstudio.microsoft.com"] {
+        let url = url::Url::parse(&format!("https://{host}/model.bin")).unwrap();
+        assert!(!catalog::allowed_redirect(&url, catalog::Source::Model), "{host}");
+    }
+}
+#[test]
+fn model_cdn_redirects_reject_malformed_ports_before_policy_evaluation() {
+    for host in ["us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        for port in ["not-a-port", "443x", "-1", "65536", "99999999999999999999"] {
+            let raw = format!("https://{host}:{port}/model.bin");
+            assert!(url::Url::parse(&raw).is_err(), "{raw}");
+        }
+    }
+}
+#[test]
+fn model_cdn_hosts_are_never_accepted_as_original_catalog_sources() {
+    let Component::Model(model) = model() else { unreachable!() };
+    let file = &model.files[0];
+    for host in ["us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        // Even an otherwise valid immutable model path, size and hash must
+        // originate at the pinned Hugging Face repository, not at a CDN.
+        let raw = file.url.replace("huggingface.co", host);
+        assert!(catalog::validate_download(&raw, file.bytes, &file.sha256, catalog::Source::Model).is_err(), "{raw}");
+    }
+}
+#[test]
+fn model_redirects_retain_existing_hugging_face_hosts() {
+    for host in ["huggingface.co", "cdn-lfs.huggingface.co", "cdn-lfs.hf.co", "cdn-lfs-us-1.hf.co", "cdn-lfs-eu-1.hf.co", "cas-bridge.xethub.hf.co"] {
+        let url = url::Url::parse(&format!("https://{host}/model.bin?signature=fixture")).unwrap();
+        assert!(catalog::allowed_redirect(&url, catalog::Source::Model), "{host}");
+    }
+}
+#[test]
+fn parsed_model_redirect_urls_cannot_distinguish_normalized_empty_userinfo() {
+    // url 2.5.4 normalizes empty userinfo away before reqwest's callback.
+    // The callback cannot reject its original spelling; nonempty credentials
+    // are rejected above. Raw-string diagnostic validation can be stricter.
+    for host in ["us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        let canonical = url::Url::parse(&format!("https://{host}/model.bin")).unwrap();
+        for userinfo in ["@", ":@"] {
+            let parsed = url::Url::parse(&format!("https://{userinfo}{host}/model.bin")).unwrap();
+            assert_eq!(parsed, canonical);
+            assert_eq!(parsed.username(), "");
+            assert_eq!(parsed.password(), None);
+            assert!(catalog::allowed_redirect(&parsed, catalog::Source::Model));
+        }
+    }
+}
+#[test]
+fn model_redirect_fragments_retain_existing_parsed_url_behavior() {
+    // Fragments are not transmitted in the HTTP request. The Rust redirect
+    // policy permits them; the raw-string diagnostic policy remains stricter.
+    // Original catalog URLs still reject fragments before any request.
+    for host in ["huggingface.co", "us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        let parsed = url::Url::parse(&format!("https://{host}/model.bin#fragment")).unwrap();
+        assert_eq!(parsed.fragment(), Some("fragment"));
+        assert!(catalog::allowed_redirect(&parsed, catalog::Source::Model));
+    }
+}
+#[test]
+fn model_redirect_depth_retains_the_eight_previous_url_cutoff() {
+    for host in ["huggingface.co", "us.aws.cdn.hf.co", "us.gcp.cdn.hf.co"] {
+        let url = url::Url::parse(&format!("https://{host}/model.bin?signature=fixture")).unwrap();
+        // reqwest's previous URL history includes the initial request URL.
+        for previous_urls in 1..8 {
+            assert!(download::validate_redirect(&url, catalog::Source::Model, previous_urls).is_ok(), "{host}: {previous_urls}");
+        }
+        for previous_urls in [8, 9, usize::MAX] {
+            assert_eq!(download::validate_redirect(&url, catalog::Source::Model, previous_urls), Err("Too many component download redirects"));
+        }
+    }
+    let untrusted = url::Url::parse("https://evil.example/model.bin").unwrap();
+    assert_eq!(download::validate_redirect(&untrusted, catalog::Source::Model, 7), Err("Component redirect is outside the trusted HTTPS origin allowlist"));
 }
 #[test]
 fn local_fixture_transport_rejects_truncated_oversized_hash_mismatch_and_cancelled_downloads() {

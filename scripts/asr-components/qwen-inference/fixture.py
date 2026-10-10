@@ -96,15 +96,50 @@ def resource_gate(measurement):
 
 
 def allowed_download_url(url, huggingface):
-    parsed = urlsplit(url)
-    if (parsed.scheme != 'https' or parsed.username or parsed.password or parsed.fragment
-            or parsed.port not in (None, 443)):
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    if (parsed.scheme != 'https' or parsed.username is not None or parsed.password is not None
+            or parsed.fragment or port not in (None, 443)):
         return False
     if not huggingface:
         return parsed.hostname == 'raw.githubusercontent.com'
     return (parsed.hostname in {'huggingface.co', 'cdn-lfs.huggingface.co', 'cdn-lfs.hf.co',
-                                'cdn-lfs-us-1.hf.co', 'cdn-lfs-eu-1.hf.co'}
+                                'cdn-lfs-us-1.hf.co', 'cdn-lfs-eu-1.hf.co',
+                                'us.aws.cdn.hf.co', 'us.gcp.cdn.hf.co'}
             or bool(parsed.hostname and parsed.hostname.endswith('.xethub.hf.co')))
+
+
+def valid_diagnostic_hostname(host):
+    # Hostname only: no URL, userinfo, path, query, fragment, control characters,
+    # Unicode lookalikes or unbounded labels can enter the diagnostic protocol.
+    return (type(host) is str and 0 < len(host) <= 253
+            and all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                    for label in host.split('.')))
+
+
+def redirect_diagnostic_hostname(url):
+    try:
+        host = urlsplit(url).hostname
+    except (TypeError, ValueError):
+        return None
+    return host if valid_diagnostic_hostname(host) else None
+
+
+def redirect_error_details(error):
+    host = getattr(error, 'redirect_host', None)
+    if (isinstance(error, DownloadCheckError) and error.category == 'redirect-rejected'
+            and valid_diagnostic_hostname(host)):
+        return {'redirect_host': host}
+    return {}
+
+
+def valid_redirect_details(record):
+    return ('redirect_host' not in record or
+            (record.get('category') == 'redirect-rejected'
+             and valid_diagnostic_hostname(record['redirect_host'])))
 
 
 class FixtureRedirects(urllib.request.HTTPRedirectHandler):
@@ -116,7 +151,7 @@ class FixtureRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if not allowed_download_url(newurl, self.huggingface):
-            raise DownloadCheckError('redirect-rejected')
+            raise DownloadCheckError('redirect-rejected', redirect_diagnostic_hostname(newurl))
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -152,8 +187,9 @@ class ReadmeRedirects(FixtureRedirects):
 
 class DownloadCheckError(ValueError):
     """A fixed category, never a URL or arbitrary server/exception text."""
-    def __init__(self, category):
+    def __init__(self, category, redirect_host=None):
         self.category = category if type(category) is str and category in DOWNLOAD_ERROR_CATEGORIES else 'unexpected-error'
+        self.redirect_host = redirect_host if self.category == 'redirect-rejected' and valid_diagnostic_hostname(redirect_host) else None
         super().__init__(self.category)
 
 
@@ -208,7 +244,7 @@ def download(item, destination, deadline, identity=None):
         if type(status) is not int or not 100 <= status <= 599: status = None
         raise FixtureDownloadError({'schema': 1, 'category': error_category(exc),
                                     'file': identity, 'bytes_received': total,
-                                    'http_status': status}) from None
+                                    'http_status': status, **redirect_error_details(exc)}) from None
 
 
 
@@ -244,7 +280,8 @@ def download_readme(deadline):
         raise FixtureDownloadError({'schema': 1, 'category': error_category(exc),
                                     'file': dict(README_IDENTITY), 'bytes_received': total,
                                     'http_status': status, 'weights_complete': False,
-                                    'transfer_state': 'partial' if total else 'not-observed'}) from None
+                                    'transfer_state': 'partial' if total else 'not-observed',
+                                    **redirect_error_details(exc)}) from None
 
 
 def readme_child_error(stderr):
@@ -257,8 +294,10 @@ def readme_child_error(stderr):
         if (type(record) is dict and type(record.get('schema')) is int
                 and record == unconfirmed_child_error(category, None)): return record
     expected = {'schema', 'category', 'file', 'bytes_received', 'http_status', 'weights_complete', 'transfer_state'}
+    if isinstance(record, dict) and 'redirect_host' in record: expected.add('redirect_host')
     if (type(record) is not dict or set(record) != expected or type(record['schema']) is not int
             or record['schema'] != 1 or record['category'] not in DOWNLOAD_ERROR_CATEGORIES
+            or not valid_redirect_details(record)
             or record['file'] != README_IDENTITY or record['weights_complete'] is not False
             or type(record['bytes_received']) is not int or not 0 <= record['bytes_received'] <= README_BYTES
             or record['transfer_state'] != ('partial' if record['bytes_received'] else 'not-observed')
@@ -366,8 +405,10 @@ def child_error(stderr, request_path):
                 and record == unconfirmed_child_error(category, None)): return record
     common = {'schema', 'category', 'file', 'bytes_received', 'http_status'}
     complete = common | {'files_completed', 'completed_bytes', 'weights_complete', 'transfer_state'}
+    if isinstance(record, dict) and 'redirect_host' in record: complete.add('redirect_host')
     if (not isinstance(record, dict) or set(record) != complete or type(record['schema']) is not int
-            or record['schema'] != 1 or record['category'] not in DOWNLOAD_ERROR_CATEGORIES):
+            or record['schema'] != 1 or record['category'] not in DOWNLOAD_ERROR_CATEGORIES
+            or not valid_redirect_details(record)):
         raise ValueError('Invalid diagnostic schema')
     if request_path.stat().st_size > 65536: raise ValueError('Oversized request')
     request = json.loads(request_path.read_text(encoding='utf-8'))
