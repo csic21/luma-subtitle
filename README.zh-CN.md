@@ -122,6 +122,16 @@ Whisper 模型可以放在任意位置，在应用内选择模型文件即可。
 | small | `ggml-small.bin` | 466 MiB | https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin |
 | large-v3-turbo-q5_0 | `ggml-large-v3-turbo-q5_0.bin` | 547 MiB | https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin |
 
+## 可选转写引擎（实验性）
+
+默认仍为 whisper.cpp，包括上方已有的 Turbo 预设。现有模型、任务结果和设置无需安装 Python，也无需手动迁移。
+
+可在全局设置或任务配置中主动选择常驻本地 MLX/faster-whisper 引擎，或 Qwen3-ASR 0.6B/1.7B + 强制对齐模型。在应用内按需安装独立引擎组件，再单独选择模型下载，无需自行安装 Python、运行终端命令或修改系统 PATH。下载只在主动点击后开始，展示体积，并在校验通过后启用。托管组件提供 Windows x64 Whisper CPU、Apple Silicon MLX Whisper/Metal，以及两平台的 Qwen CPU；这些组件不包含 CUDA。已有外部运行环境可在高级设置中继续使用。
+
+[离线安装指南](docs/OPTIONAL_ASR.md)提供应用内安装、模型格式、存储规划、故障恢复，以及可选的外部运行环境高级配置示例，设置页面也内置了同一份指南。新引擎尚未完成 Luma 实际音频基准测试，使用前应以自己的样本检查结果；不会替换原来的默认引擎。
+
+应用会使用自己的私有 pip，在离线状态下安装版本与哈希固定的上游二进制依赖。安装前会展示来源与适用条款；无需手动输入 pip 命令，不在线解析依赖，也不改动系统 Python。
+
 ## 运行
 
 ```powershell

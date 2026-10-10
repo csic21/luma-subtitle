@@ -1,0 +1,118 @@
+name: ASR components
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/asr-components/**'
+      - '!scripts/asr-components/ct2-cpu/**'
+      # These bounded helpers are also inputs to the Qwen/direct-CRT proof.
+      - 'scripts/asr-components/ct2-cpu/native_inventory.py'
+      - 'scripts/asr-components/ct2-cpu/direct-crt/**'
+      - 'scripts/asr-components/ct2-cpu/verify_direct_crt_signatures.ps1'
+      - 'src-tauri/src/asr/**'
+      - 'src-tauri/src/asr_components.rs'
+      - 'src-tauri/src/asr_components/**'
+      - 'src-tauri/resources/asr/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/build.rs'
+      - 'src-tauri/tauri.conf.json'
+      - '.github/workflows/asr-components.yml'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact reviewed source commit (blank uses this ref)
+        type: string
+        required: false
+      tag:
+        description: Exact component tag from packs.json
+        type: string
+        default: asr-components-1.2.0-r1
+        required: true
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Superseded direct PR attempts may stop; exact-source/manual/reusable evidence
+# has its own run group and is never implicitly cancelled by a later push.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && !inputs.source_sha && format('asr-components-pr-{0}', github.event.pull_request.number) || format('asr-components-source-{0}-run-{1}', inputs.source_sha || github.sha, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.source_sha }}
+
+jobs:
+  build:
+    name: Build component ${{ matrix.pack }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {pack: faster-whisper-cpu-windows-x64, os: windows-2022}
+          - {pack: mlx-whisper-metal-macos-arm64, os: macos-15}
+          - {pack: qwen3-asr-cpu-windows-x64, os: windows-2022}
+          - {pack: qwen3-asr-cpu-macos-arm64, os: macos-15}
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || inputs.source_sha || github.sha }}
+      COMPONENT_TAG: ${{ inputs.tag || 'asr-components-1.2.0-r1' }}
+      PACK_ID: ${{ matrix.pack }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate source and component request
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          source = os.environ['SOURCE_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', source)
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == source
+          cfg = json.loads(Path('scripts/asr-components/packs.json').read_text())
+          assert os.environ['COMPONENT_TAG'] == cfg['release_tag']
+          assert cfg['release_tag'] == 'asr-components-' + cfg['version']
+          assert any(p['id'] == os.environ['PACK_ID'] for p in cfg['packs'])
+          PY
+      - name: Test deterministic packaging and license locks
+        run: python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+      - name: Reproduce review-only recipes from exact pinned sources
+        shell: bash
+        run: |
+          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates.json"
+          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates-second.json"
+          python - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          first = root / 'asr-recipe-candidates.json'
+          second = root / 'asr-recipe-candidates-second.json'
+          assert first.read_bytes() == second.read_bytes(), 'Review-only recipe generation differs'
+          print('RECIPE_CANDIDATES_SHA256=' + hashlib.sha256(first.read_bytes()).hexdigest())
+          second.unlink()
+          PY
+      - name: Prove private offline-pip assembly without system Python packages
+        shell: bash
+        run: |
+          python -B scripts/asr-components/prove_offline_pip.py --pack "$PACK_ID" --source-sha "$SOURCE_SHA" --output "$RUNNER_TEMP/asr-pip-proof/$PACK_ID" --cache "$RUNNER_TEMP/asr-downloads" --worker src-tauri/src/asr/worker.py --recipe-candidates "$RUNNER_TEMP/asr-recipe-candidates.json"
+      - name: Upload offline assembly proof metadata only
+        uses: actions/upload-artifact@v4
+        with:
+          name: asr-offline-pip-proof-${{ matrix.pack }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/asr-pip-proof/${{ matrix.pack }}/*.offline-pip-proof.json

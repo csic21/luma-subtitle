@@ -7,6 +7,8 @@ use crate::translation::{
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct TaskSettingsSnapshot {
+    #[serde(default)]
+    pub(crate) asr: crate::asr::AsrConfig,
     pub(crate) output_dir: Option<String>,
     pub(crate) target_language: String,
     pub(crate) whisper_model_path: String,

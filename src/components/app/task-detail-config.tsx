@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { FolderOpen, Loader2, RefreshCw, Save, Settings } from "lucide-react";
 
+import { AsrSettingsFields } from "@/components/app/asr-settings-fields";
+import { normalizeAsrConfig } from "@/lib/asr-config";
 import { FieldBlock, IconAction, SectionTitle } from "@/components/app/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
@@ -47,7 +49,7 @@ export function TaskConfigCard({
   onSaveTaskSettings: () => void | Promise<void>;
   setSettingsDraft: Dispatch<SetStateAction<TaskSettingsSnapshot | null>>;
 }) {
-  const missingWhisperModel = !taskConfig.whisper_model_path.trim();
+  const missingWhisperModel = normalizeAsrConfig(taskConfig.asr).engine === "whisper-cpp" && !taskConfig.whisper_model_path.trim();
   const missingBaseUrl = !taskConfig.base_url.trim();
   const missingTranslationModel = !taskConfig.model.trim();
   const normalizedProvider = taskConfig.translation_provider ?? defaultSettings.translation_provider;
@@ -107,29 +109,38 @@ export function TaskConfigCard({
         </CardAction>
       </CardHeader>
       <CardContent className="settings-form">
-        <FieldBlock
-          label={t("common.whisperModel")}
-          invalid={missingWhisperModel}
-          description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+        <AsrSettingsFields
+          key={task.id}
+          value={taskConfig.asr}
+          onChange={(asr) => setSettingsDraft((current) => current ? { ...current, asr } : current)}
+          disabled={taskBusy(task) || commandPending}
+          t={t}
         >
-          <div className="input-action">
-            <Input
-              value={taskConfig.whisper_model_path}
-              onChange={(event) =>
-                setSettingsDraft((current) =>
-                  current ? { ...current, whisper_model_path: event.target.value } : current,
-                )
-              }
-              disabled={(taskBusy(task) || commandPending)}
-              placeholder={t("settings.notSet")}
-              title={taskConfig.whisper_model_path || t("settings.selectWhisper")}
-              aria-invalid={missingWhisperModel}
-            />
-            <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel} disabled={(taskBusy(task) || commandPending)}>
-              <FolderOpen />
-            </IconAction>
-          </div>
-        </FieldBlock>
+          <FieldBlock
+            label={t("common.whisperModel")}
+            invalid={missingWhisperModel}
+            description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+          >
+            <div className="input-action">
+              <Input
+                value={taskConfig.whisper_model_path}
+                onChange={(event) =>
+                  setSettingsDraft((current) =>
+                    current ? { ...current, whisper_model_path: event.target.value } : current,
+                  )
+                }
+                disabled={(taskBusy(task) || commandPending)}
+                placeholder={t("settings.notSet")}
+                title={taskConfig.whisper_model_path || t("settings.selectWhisper")}
+                aria-invalid={missingWhisperModel}
+              />
+              <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel} disabled={(taskBusy(task) || commandPending)}>
+                <FolderOpen />
+              </IconAction>
+            </div>
+          </FieldBlock>
+
+        </AsrSettingsFields>
 
         <div className="grid-two">
           <FieldBlock label={t("settings.sourceLanguage")}>

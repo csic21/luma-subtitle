@@ -122,6 +122,16 @@ The in-app model presets download into the app data directory's `models` folder 
 | small | `ggml-small.bin` | 466 MiB | https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin |
 | large-v3-turbo-q5_0 | `ggml-large-v3-turbo-q5_0.bin` | 547 MiB | https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin |
 
+## Optional ASR Engines (Experimental)
+
+Whisper.cpp remains the default, including the existing Turbo preset above. Existing models, task results, and settings do not require Python or migration steps.
+
+Settings and per-task configuration can explicitly select a persistent local MLX/faster-whisper worker, or Qwen3-ASR 0.6B/1.7B with its forced aligner. Install the optional private engine component and choose separate model downloads inside Luma; no system Python, terminal commands or PATH changes are required. Downloads start only when requested, show their sizes, and are verified before activation. Managed components provide Windows x64 Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen CPU on both platforms. CUDA is not included in these components; advanced external runtimes remain optional.
+
+See the [offline setup guide](docs/OPTIONAL_ASR.md) for managed setup, model formats, storage planning, recovery and optional advanced external-runtime examples. The same guide is bundled in the settings screen. Optional engines are unbenchmarked in Luma and should be validated with your own sample audio before use. They do not replace the existing default.
+
+The app assembles pinned upstream binary wheels using its own private, offline pip. You review the sources and applicable terms before installation; no manual pip commands, dependency resolution over the network, or changes to system Python are required.
+
 ## Run
 
 ```powershell

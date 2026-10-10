@@ -1,0 +1,27 @@
+name: ASR recipe guard tests
+
+# Whole-runtime binary publication is retired. End-user runtimes are assembled
+# privately from pinned upstream inputs; this workflow has no write permissions
+# or request/push/manual entry point. Keep historical controller regressions.
+on:
+  pull_request:
+    paths:
+      - 'scripts/asr-components/**'
+      - '.github/workflows/asr-components*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Historical component publication guards
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node --test scripts/asr-components/publish.node-test.cjs

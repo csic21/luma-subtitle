@@ -87,3 +87,39 @@ describe("saveTranslatedSubtitles", () => {
     });
   });
 });
+
+describe("optional ASR commands", () => {
+  it("uses the explicit nested config contract and release command", async () => {
+    const { checkAsrBackend, releaseAsrBackend } = await import("./tauri-api");
+    const config = { engine: "qwen3-asr", python_path: "/venv/bin/python", model_path: "/models/qwen", aligner_path: "/models/aligner", device: "cpu" as const };
+    await checkAsrBackend(config);
+    expect(invoke).toHaveBeenCalledWith("check_asr_backend", { config });
+    await releaseAsrBackend();
+    expect(invoke).toHaveBeenCalledWith("release_asr_backend");
+  });
+});
+
+describe("managed ASR component commands", () => {
+  it("uses pinned command names and request IDs without sending filesystem paths", async () => {
+    const api = await import("./tauri-api");
+    await api.asrComponentCatalog(); expect(invoke).toHaveBeenCalledWith("asr_component_catalog");
+    await api.asrComponentStatus(); expect(invoke).toHaveBeenCalledWith("asr_component_status");
+    for (const [action, command] of [[api.installAsrComponent, "install_asr_component"], [api.repairAsrComponent, "repair_asr_component"], [api.removeAsrComponent, "remove_asr_component"]] as const) {
+      await action("pinned-component", "request-id");
+      expect(invoke).toHaveBeenCalledWith(command, { request: { component_id: "pinned-component", request_id: "request-id" } });
+    }
+    await api.cancelAsrComponent("request-id"); expect(invoke).toHaveBeenCalledWith("cancel_asr_component", { requestId: "request-id" });
+  });
+});
+
+
+describe("runtime plan acceptance IPC", () => {
+  it("sends exact acknowledged hashes for install and repair without embedding text or general permission", async () => {
+    const { installAsrComponent, repairAsrComponent } = await import("./tauri-api");
+    const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "vendor-license", version: "2026", sha256: "b".repeat(64) }] };
+    await installAsrComponent("runtime", "request", consent);
+    expect(invoke).toHaveBeenCalledWith("install_asr_component", { request: { component_id: "runtime", request_id: "request", ...consent } });
+    await repairAsrComponent("runtime", "repair", consent);
+    expect(invoke).toHaveBeenCalledWith("repair_asr_component", { request: { component_id: "runtime", request_id: "repair", ...consent } });
+  });
+});

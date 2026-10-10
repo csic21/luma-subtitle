@@ -139,6 +139,13 @@ pub(super) async fn run_job(
     let stem = safe_stem(&media_path);
     let source_file_name = format!("{stem}.source.srt");
 
+    if request.asr.is_legacy() {
+        // Returning to the original engine also returns optional model memory.
+        // This is a no-op for existing users and never starts Python.
+        app.state::<crate::asr::AsrRuntime>()
+            .release_for_legacy(&cancel)
+            .await?;
+    }
     let audio_path = prepare_transcription_audio(
         &app,
         &job_id,
@@ -148,16 +155,29 @@ pub(super) async fn run_job(
         cancel.clone(),
     )
     .await?;
-    let segments = transcribe_prepared_audio(
-        &app,
-        &job_id,
-        &model_path,
-        &audio_path,
-        &transcript_base,
-        &request.whisper_language,
-        cancel.clone(),
-    )
-    .await?;
+    let segments = if request.asr.is_legacy() {
+        transcribe_prepared_audio(
+            &app,
+            &job_id,
+            &model_path,
+            &audio_path,
+            &transcript_base,
+            &request.whisper_language,
+            cancel.clone(),
+        )
+        .await?
+    } else {
+        crate::asr::transcribe(
+            &app,
+            &job_id,
+            &request.asr,
+            &audio_path,
+            &request.whisper_language,
+            cancel.clone(),
+        )
+        .await?
+    };
+    ensure_not_cancelled(&cancel)?;
     let (stored, outputs) = source_subtitle_result(segments, &source_file_name, &output_dir);
 
     app.state::<AppState>()

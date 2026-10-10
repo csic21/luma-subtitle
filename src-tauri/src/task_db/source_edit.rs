@@ -212,6 +212,7 @@ mod tests {
             let conn = Connection::open_in_memory().unwrap();
             migrate(&conn).unwrap();
             let settings = serde_json::to_string(&TaskSettingsSnapshot {
+                asr: crate::asr::AsrConfig::default(),
                 output_dir: Some(path_to_string(dir.clone())),
                 target_language: "简体中文".to_string(),
                 whisper_model_path: "model.bin".to_string(),

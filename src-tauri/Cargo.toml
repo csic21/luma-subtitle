@@ -1,6 +1,6 @@
 [package]
 name = "luma-subtitle"
-version = "1.1.15"
+version = "1.2.0"
 description = "Local video transcription, translation, and SRT export."
 authors = ["Luma Subtitle"]
 license = "GPL-3.0-or-later"
@@ -13,6 +13,9 @@ tauri-build = { version = "=2.6.2", features = [] }
 
 [dependencies]
 dirs = "5.0"
+fs2 = "=0.4.3"
+flate2 = "=1.1.9"
+tar = "=0.4.45"
 home = "=0.5.9"
 idna_adapter = "=1.0.0"
 indexmap = "=2.7.0"
@@ -26,6 +29,7 @@ rfd = "0.15"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 serde_with = "=3.11.0"
 serde_with_macros = "=3.11.0"
 tauri = { version = "=2.11.2", features = [] }
@@ -41,3 +45,6 @@ tauri-plugin-dialog = "=2.6.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "=2.10.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_Security_WinTrust", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_System_SystemInformation", "Win32_System_LibraryLoader"] }

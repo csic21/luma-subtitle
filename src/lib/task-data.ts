@@ -1,3 +1,4 @@
+import { normalizeAsrConfig, asrConfigsEqual } from "@/lib/asr-config";
 import { defaultSettings } from "@/config";
 import type { JobEvent, SettingsState, TaskRecord, TaskSettingsSnapshot } from "@/types";
 
@@ -64,6 +65,7 @@ export function nextSubtitleView(current: "source" | "translated" | "parallel", 
 export function normalizeTaskSettings(settings: TaskSettingsSnapshot): TaskSettingsSnapshot {
   return {
     ...settings,
+    asr: normalizeAsrConfig(settings.asr),
     base_url_is_complete: settings.base_url_is_complete ?? defaultSettings.base_url_is_complete,
     translation_shard_size: settings.translation_shard_size ?? defaultSettings.translation_shard_size,
     translation_provider: settings.translation_provider ?? defaultSettings.translation_provider,
@@ -82,6 +84,7 @@ export function taskSettingsEqual(left: TaskSettingsSnapshot, right: TaskSetting
   const normalizedRight = normalizeTaskSettings(right);
 
   return (
+    asrConfigsEqual(normalizedLeft.asr, normalizedRight.asr) &&
     normalizedLeft.output_dir === normalizedRight.output_dir &&
     normalizedLeft.target_language === normalizedRight.target_language &&
     normalizedLeft.whisper_model_path === normalizedRight.whisper_model_path &&
@@ -113,6 +116,7 @@ export function taskSettingsUpdatePayload(settings: TaskSettingsSnapshot) {
   return {
     target_language: settings.target_language,
     whisper_model_path: settings.whisper_model_path,
+    asr: normalizeAsrConfig(settings.asr),
     whisper_language: settings.whisper_language,
     base_url: settings.base_url,
     base_url_is_complete: settings.base_url_is_complete,
@@ -146,6 +150,7 @@ export function taskCreatePayload(
     output_dir: settings.output_dir || null,
     target_language: settings.target_language,
     whisper_model_path: settings.whisper_model_path,
+    asr: normalizeAsrConfig(settings.asr),
     whisper_language: settings.whisper_language,
     base_url: settings.base_url,
     base_url_is_complete: settings.base_url_is_complete,

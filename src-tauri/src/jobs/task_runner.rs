@@ -90,6 +90,7 @@ async fn run_transcribe_task(
     let task = task_db::require_task(&app, task_id).map_err(JobError::failed)?;
     let media_path = transcription_media_path(&task)?;
     let request = JobRequest {
+        asr: task.settings.asr.clone(),
         media_path,
         source_type: task.source_type.clone(),
         output_dir: task.settings.output_dir.clone(),

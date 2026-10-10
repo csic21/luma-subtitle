@@ -96,6 +96,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const operationContext = useMemo(
     () => ({
       environmentReady: Boolean(env?.ffmpeg_path && env?.whisper_path),
+      ffmpegReady: Boolean(env?.ffmpeg_path),
       hasApiCredential: Boolean(globalSettings?.has_api_key),
       llamaReady: Boolean(env?.llama_path),
     }),

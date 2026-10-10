@@ -1,3 +1,4 @@
+import { normalizeAsrConfig, normalizeSettings } from "@/lib/asr-config";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
@@ -76,7 +77,7 @@ export function useSettingsPageState(t: TFunction) {
   const modelDownloading = modelDownload?.status === "running";
   const dependencyInstalling = dependencyInstall?.status === "running";
   const hasApiCredential = settings.has_api_key || apiKey.trim().length > 0;
-  const environmentReady = Boolean(env?.ffmpeg_path && env?.whisper_path);
+  const environmentReady = Boolean(env?.ffmpeg_path && (normalizeAsrConfig(settings.asr).engine !== "whisper-cpp" || env?.whisper_path));
   const llamaReady = Boolean(env?.llama_path);
   const tauriReady = hasTauriRuntime();
   const appUpdating = appUpdate.status === "checking" || appUpdate.status === "downloading";
@@ -103,7 +104,7 @@ export function useSettingsPageState(t: TFunction) {
   const refreshSettings = useCallback(async () => {
     try {
       const loaded = await loadSettings();
-      setSettings({ ...defaultSettings, ...loaded });
+      setSettings(normalizeSettings(loaded));
     } catch (error) {
       setNotice(errorText(error));
     }
@@ -288,7 +289,7 @@ export function useSettingsPageState(t: TFunction) {
           ...settings,
           api_key: apiKey,
         });
-        setSettings(saved);
+        setSettings(normalizeSettings(saved));
         if (showNotice) setNotice(t("notice.settingsSaved"));
       } catch (error) {
         if (showNotice) setNotice(t("error.saveSettings", { error: errorText(error) }));
@@ -335,7 +336,7 @@ export function useSettingsPageState(t: TFunction) {
         ...nextSettings,
         api_key: apiKey,
       });
-      setSettings(saved);
+      setSettings(normalizeSettings(saved));
       setModelDownload((current) => ({
         ...(current ?? {}),
         preset_id: selectedWhisperPreset.id,
@@ -388,7 +389,7 @@ export function useSettingsPageState(t: TFunction) {
         ...nextSettings,
         api_key: apiKey,
       });
-      setSettings(saved);
+      setSettings(normalizeSettings(saved));
       setModelDownload((current) => ({
         ...(current ?? {}),
         preset_id: selectedTranslationPreset.id,
@@ -449,7 +450,7 @@ export function useSettingsPageState(t: TFunction) {
           ...nextSettings,
           api_key: apiKey,
         });
-        setSettings(saved);
+        setSettings(normalizeSettings(saved));
         setNotice(t("notice.llamaInstalled"));
       }
     } catch (error) {

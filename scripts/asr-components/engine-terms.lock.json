@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "status": "exact-official-source-texts-not-a-native-dependency-clearance",
+  "terms": [
+    {
+      "id": "mlx-engine-license",
+      "version": "0.4.3",
+      "path": "licenses/engine-mlx-0.4.3/LICENSE.txt",
+      "text_bytes": 1066,
+      "sha256": "ccfab7ccb2ea306f71531c8ca77bb55507606cd90768b1e32b8b52ab5b48cf01",
+      "raw_sha256": "ccfab7ccb2ea306f71531c8ca77bb55507606cd90768b1e32b8b52ab5b48cf01",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after UTF-8 decoding; no other changes",
+      "url": "https://github.com/ml-explore/mlx-examples/blob/c1af8c46bd4c4704cff1561736a634cee38efc6c/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/ml-explore/mlx-examples/c1af8c46bd4c4704cff1561736a634cee38efc6c/LICENSE",
+      "source_commit": "c1af8c46bd4c4704cff1561736a634cee38efc6c",
+      "version_evidence": {
+        "path": "whisper/mlx_whisper/_version.py",
+        "sha256": "693c8b5935c7e4a2a48176a195dd990c2fcb2630bfc0766830a1d8e87d1559e9",
+        "asserted_version": "0.4.3"
+      },
+      "applies_to": [
+        "mlx-whisper-metal-macos-arm64"
+      ]
+    },
+    {
+      "id": "qwen-engine-license",
+      "version": "0.0.6",
+      "path": "licenses/engine-qwen-0.0.6/LICENSE.txt",
+      "text_bytes": 11343,
+      "sha256": "a44a6081c73ad75f0255bb2bb5cab74ef1829565a895a24e53a4f11290ab7655",
+      "raw_sha256": "a44a6081c73ad75f0255bb2bb5cab74ef1829565a895a24e53a4f11290ab7655",
+      "source_encoding": "utf-8",
+      "normalization": "CRLF to LF after UTF-8 decoding; no other changes",
+      "url": "https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/LICENSE",
+      "source_url": "https://raw.githubusercontent.com/QwenLM/Qwen3-ASR/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/LICENSE",
+      "source_commit": "c17a131fe028b2e428b6e80a33d30bb4fa57b8df",
+      "version_evidence": {
+        "path": "pyproject.toml",
+        "sha256": "073b776779667e112aa809df94f0dcc5b1caa3cdd031f0f9f01af29749b5df14",
+        "asserted_version": "0.0.6"
+      },
+      "applies_to": [
+        "qwen3-asr-cpu-windows-x64",
+        "qwen3-asr-cpu-macos-arm64"
+      ]
+    }
+  ]
+}

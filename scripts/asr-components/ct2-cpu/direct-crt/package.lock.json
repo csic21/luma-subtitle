@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "purpose": "Fixed direct upstream CRT delivery contract; not a redistribution grant",
+  "version": "14.44.35211.0",
+  "architecture": "x86_64",
+  "source_url": "https://download.visualstudio.microsoft.com/download/pr/73aabf2e-9532-4f68-99f7-3247081a619c/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+  "source_manifest": "https://raw.githubusercontent.com/microsoft/winget-pkgs/3956ea1dc1086c62fa6d2d05484952caee010646/manifests/m/Microsoft/VCRedist/2015%2B/x64/14.44.35211.0/Microsoft.VCRedist.2015%2B.x64.installer.yaml",
+  "installer": {
+    "bytes": 25635768,
+    "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
+  },
+  "containers": {
+    "ux.cab": {
+      "offset": 479744,
+      "bytes": 195988,
+      "sha256": "2f57cf2cd504bd100c9222bb123b9c3a40802cca73e89ca05c97885d91be3a78"
+    },
+    "attached.cab": {
+      "offset": 686152,
+      "bytes": 24939223,
+      "sha256": "468f1264d50b9e3b9d309ab9e13c02ff379fd95a2837383bf65c9616583013d6"
+    }
+  },
+  "minimum_cab": {
+    "parent": "attached.cab",
+    "member": "a12",
+    "original_path": "packages\\vcRuntimeMinimum_amd64\\cab1.cab",
+    "bytes": 987836,
+    "sha256": "640aa6c516c72444523b8fbe034db46ff4e118ed02705340e3ccb62d426ff040"
+  },
+  "dlls": {
+    "msvcp140.dll": {
+      "member": "msvcp140.dll_amd64",
+      "bytes": 557728,
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    "msvcp140_1.dll": {
+      "member": "msvcp140_1.dll_amd64",
+      "bytes": 35952,
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    }
+  },
+  "notices": {
+    "license-en.rtf": {
+      "parent": "ux.cab",
+      "member": "u4",
+      "bytes": 9235,
+      "sha256": "8099dc3cf9502c335da829e5c755948a12e3e6de490eb492a99deb673d883d8b",
+      "locale": "en-US",
+      "eula_id": "Cpp_2015-2022_ENU.1033",
+      "original_path": "license.rtf",
+      "display_utf8_sha256": "f815ace86c91d3dadc62ed85292b7c79066447f2277774803df87b1d1a9ecfc8"
+    },
+    "license-zh-CN.rtf": {
+      "parent": "ux.cab",
+      "member": "u28",
+      "bytes": 18214,
+      "sha256": "a808b4933ce3b3e0893504dbef43ebf90b8b567f94bd6481b6315ed9141e1b11",
+      "locale": "zh-CN",
+      "eula_id": "Cpp_2015-2022_CHS.2052",
+      "original_path": "2052\\license.rtf",
+      "display_utf8_sha256": "bf17656105173f49b79623f1508c4c8eddf9b09e78a6ea79ee5aad99015eb38e"
+    }
+  },
+  "terms_url": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/",
+  "eula_id": "Cpp_2015-2022_ENU.1033",
+  "binaries_in_repository": false,
+  "redistribution_permission_established": false,
+  "source_manifest_provenance": {
+    "repository": "microsoft/winget-pkgs",
+    "commit": "3956ea1dc1086c62fa6d2d05484952caee010646",
+    "blob_sha1": "6cdab74037d685cf44e9f811043cb9fc3a44cb80",
+    "bytes": 907,
+    "sha256": "de0d58bf1227acee24c6a920f31fc0f3f922d263725ccfec2bc5fe7553875f60",
+    "url": "https://github.com/microsoft/winget-pkgs/blob/3956ea1dc1086c62fa6d2d05484952caee010646/manifests/m/Microsoft/VCRedist/2015%2B/x64/14.44.35211.0/Microsoft.VCRedist.2015%2B.x64.installer.yaml"
+  },
+  "certificate_pins": {
+    "installer": {
+      "leaf_der_sha256": "e4ab39116a7dc57d073164eb1c840b1fb8334a8c920b92efafea19112dce643b",
+      "native_signer_thumbprint_sha1": "8F985BE8FD256085C90A95D3C74580511A1DB975"
+    },
+    "dlls": {
+      "leaf_der_sha256": "2ebcd329b745ae0efb6a72bb8a471b29c3994b074dbf94bdc2bb65936c54f4a7",
+      "native_signer_thumbprint_sha1": "81915C173D7FFCBF49EAA8CF7594696B29A035E1"
+    }
+  }
+}

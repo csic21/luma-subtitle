@@ -1,7 +1,10 @@
+import { asrConfigurationIssues, normalizeAsrConfig, type AsrConfigurationIssue } from "@/lib/asr-config";
 import type { Locale } from "@/i18n";
 import type { DependencyInstallEvent, ModelDownloadEvent, TaskOperation, TaskRecord, TFunction } from "@/types";
 
 export type OperationRequirementIssue =
+  | AsrConfigurationIssue
+  | "missingFfmpeg"
   | "taskBusy"
   | "unsupportedSource"
   | "missingSourceSubtitles"
@@ -18,6 +21,7 @@ export type OperationRequirementIssue =
 
 export type OperationReadinessContext = {
   environmentReady: boolean;
+  ffmpegReady?: boolean;
   hasApiCredential: boolean;
   llamaReady: boolean;
 };
@@ -164,8 +168,13 @@ export function operationRequirementIssues(
 
   if (operation === "transcribe") {
     if (task.source_type !== "video" && task.source_type !== "audio") issues.push("unsupportedSource");
-    if (!hasConfiguredText(task.settings.whisper_model_path)) issues.push("missingWhisperModel");
-    if (!context.environmentReady) issues.push("missingEnvironment");
+    if (normalizeAsrConfig(task.settings.asr).engine === "whisper-cpp") {
+      if (!hasConfiguredText(task.settings.whisper_model_path)) issues.push("missingWhisperModel");
+      if (!context.environmentReady) issues.push("missingEnvironment");
+    } else {
+      issues.push(...asrConfigurationIssues(task.settings.asr));
+      if (!(context.ffmpegReady ?? context.environmentReady)) issues.push("missingFfmpeg");
+    }
     return issues;
   }
 
@@ -204,6 +213,12 @@ export function canRunOperation(task: TaskRecord, operation: TaskOperation, cont
 
 export function operationRequirementIssueLabel(issue: OperationRequirementIssue, t: TFunction) {
   const labels: Record<OperationRequirementIssue, string> = {
+    unsupportedAsrEngine: t("requirement.unsupportedAsrEngine"),
+    unsupportedAsrDevice: t("requirement.unsupportedAsrDevice"),
+    missingAsrPython: t("requirement.missingAsrPython"),
+    missingAsrModel: t("requirement.missingAsrModel"),
+    missingAsrAligner: t("requirement.missingAsrAligner"),
+    missingFfmpeg: t("requirement.missingFfmpeg"),
     taskBusy: t("requirement.taskBusy"),
     unsupportedSource: t("requirement.unsupportedSource"),
     missingSourceSubtitles: t("requirement.missingSourceSubtitles"),

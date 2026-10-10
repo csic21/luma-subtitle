@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.0 — 2026-10-09
+
+### Optional local transcription engines
+- Add experimental Whisper acceleration with faster-whisper on CPU/CUDA and MLX Whisper on native Apple Silicon. Keep the existing whisper.cpp engine and GGML/Turbo models as the default path.
+- Add experimental Qwen3-ASR 0.6B/1.7B with a separate mandatory Qwen3-ForcedAligner model for validated subtitle timestamps. The Qwen adapter supports CPU/CUDA; macOS Qwen uses CPU.
+- Reuse an optional engine's loaded model between jobs, report the observed device and cold/warm timings, and release its process and memory on cancellation or shutdown.
+- Add local capability/model checks, actionable setup errors, storage estimates, and forced-alignment/CJK subtitle validation.
+
+### Setup and compatibility
+- Add user-triggered installation of verified private engine components and separate model downloads, with size/storage information, progress, cancellation, repair, removal and atomic activation. No user-installed Python, terminal commands, system PATH changes or automatic first-launch downloads.
+- Assemble exact upstream binary wheels with the app's private pinned pip, fully offline, after the user reviews sources and applicable terms. No network dependency resolution or source builds occur during setup.
+- Managed components provide Windows Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen CPU on both platforms. They do not include CUDA; advanced external runtimes remain optional. Failed setup retains the previous component and never deletes external models.
+- Existing settings, downloaded GGML models, results, subtitle import/export and updater configuration are preserved. Existing users do not need Python or receive optional-runtime requirements unless they select a new engine.
+- Qwen CPU keeps both ASR and aligner weights resident as float32. The 0.6B pair needs roughly 7.5 GB for weights alone, plus runtime/audio/activation memory; do not assume an 8 GB device can run it.
+
+### Validation boundary
+- Windows/macOS regression coverage includes the optional worker protocol, cancellation, shutdown, stale-result handling, Unicode paths and legacy defaults.
+- A real Linux CPU faster-whisper tiny-model smoke passed transcription, timed SRT/export, warm reuse, cancellation and recovery. Actual Qwen package imports/API compatibility were checked without loading Qwen weights.
+- Native Apple Silicon MLX and Qwen managed-install lifecycle proofs passed. A real Metal tensor check passed; this is distinct from speech-model inference and GPU performance validation.
+- Qwen inference and memory fit, Metal/CUDA inference and performance, representative quality/speed comparisons, and a full native desktop UI/queue smoke remain unverified. New engines remain opt-in and experimental; no speed or quality improvement is promised.
+
 ## 1.1.15 — 2026-10-09
 
 ### Subtitle editing
