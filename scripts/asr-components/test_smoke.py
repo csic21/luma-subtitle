@@ -4,14 +4,89 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
-from fixture_paths import temporary_root
+from fixture_paths import temporary_root, windows_short_path_alias
 
+import smoke
 from smoke import terminate_idle_worker, clean_environment, diagnostic_json, managed_worker_runtime_probe
 from unittest.mock import patch
 
 
 class SmokeHarnessTests(unittest.TestCase):
+    def exercise_owned_smoke_root(self, parent, alias):
+        from test_own_cpu_recipe import SyntheticPublishedCpu
+        import own_cpu_recipe as cpu
+        from build import archive_tree, sha256
+        from types import SimpleNamespace
+
+        fixture = SyntheticPublishedCpu(parent / 'synthetic-reference')
+        output = parent / 'manifest'; output.mkdir()
+        archive = output / 'reference.zip'
+        archive_tree(fixture.runtime, archive)
+        files = [path for path in fixture.runtime.rglob('*') if path.is_file()]
+        manifest = output / 'reference.json'
+        manifest.write_text(json.dumps({'id': cpu.PACK_ID, 'platform': 'windows-x64',
+            'backend': 'faster-whisper', 'entrypoint': 'python.exe',
+            'installed_bytes': sum(path.stat().st_size for path in files), 'max_files': len(files),
+            'archive': {'url': 'https://example.invalid/reference.zip',
+                        'bytes': archive.stat().st_size, 'sha256': sha256(archive)}}), encoding='utf-8')
+        roots = []
+
+        class ReferenceReached(Exception): pass
+
+        def inspect_reference(_manifest, root, _worker, _cache, _destination):
+            roots.append(root.parent)
+            self.assertEqual(root, root.resolve(strict=True))
+            self.assertEqual(root.parent.parent, alias.resolve(strict=True))
+            cpu.verify_installed_wheel(root, fixture.wheel, fixture.cache, fixture.provenance)
+            # Canonicalizing the freshly owned root must not normalize unsafe
+            # descendants or weaken the existing installed-byte identity guard.
+            native = root / 'Lib/site-packages/ctranslate2/ctranslate2.dll'
+            original = native.read_bytes(); native.write_bytes(b'x' * len(original))
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                cpu.verify_installed_wheel(root, fixture.wheel, fixture.cache, fixture.provenance)
+            native.write_bytes(original)
+            original_lstat = Path.lstat
+            def reparse(path, *args, **kwargs):
+                info = original_lstat(path, *args, **kwargs)
+                if path == native.parent:
+                    return SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400)
+                return info
+            with patch.object(Path, 'lstat', reparse), self.assertRaisesRegex(ValueError, 'reparse'):
+                cpu.verify_installed_wheel(root, fixture.wheel, fixture.cache, fixture.provenance)
+            raise ReferenceReached
+
+        argv = ['smoke.py', '--manifest', str(manifest), '--worker', str(fixture.worker),
+                '--cache', str(fixture.cache)]
+        # Use the real smoke main and its real owned-root allocator. Stop before
+        # engine subprocess/native execution; these package bytes are synthetic.
+        with patch.object(tempfile, 'tempdir', str(alias)), patch.object(sys, 'argv', argv), \
+             patch.object(smoke, 'prepare_cpu_smoke', side_effect=inspect_reference):
+            with self.assertRaises(ReferenceReached): smoke.main()
+        self.assertEqual(len(roots), 1)
+        self.assertFalse(roots[0].exists(), 'Smoke must clean only its owned temporary child')
+        self.assertTrue(alias.exists())
+        self.assertTrue(fixture.runtime.exists())
+
+    def test_smoke_canonicalizes_owned_root_before_deriving_runtime_paths(self):
+        with temporary_root() as parent:
+            actual = parent / 'long temporary parent'; actual.mkdir()
+            alias = parent / 'alias'
+            try: alias.symlink_to(actual, target_is_directory=True)
+            except OSError as error: self.skipTest('Directory aliases unavailable: ' + str(error))
+            self.exercise_owned_smoke_root(parent, alias)
+            self.assertTrue(alias.is_symlink())
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires native Windows GetShortPathNameW')
+    def test_actual_windows_short_temp_parent_reaches_strict_cpu_verifier(self):
+        with temporary_root(prefix='Luma native smoke long parent ') as parent:
+            try: alias = windows_short_path_alias(parent)
+            except OSError as error: self.skipTest('Native short-path probe unavailable: ' + str(error))
+            if alias is None: self.skipTest('This filesystem does not expose a distinct 8.3 alias')
+            self.assertNotEqual(os.path.normcase(str(alias)), os.path.normcase(str(parent)))
+            self.exercise_owned_smoke_root(parent, alias)
+
     def test_unicode_evidence_survives_windows_legacy_log_encoding(self):
         evidence = {'words': ['Python', 'で', '簡単', 'に', '使える', 'ツール', 'です'],
                     'cwd_before': 'runtime é 测试', 'finder_removed': True}

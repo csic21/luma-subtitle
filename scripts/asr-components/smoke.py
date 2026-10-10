@@ -9,9 +9,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from build import ROOT, ALLOWED, dump, embed_nagisa, fetch, safe_name, sha256
+from fixture_paths import temporary_root
 
 
 def diagnostic_json(value, **kwargs):
@@ -224,8 +224,10 @@ def main():
     a = p.parse_args(); manifest = json.loads(a.manifest.read_text(encoding='utf-8')); output = a.manifest.parent
     archive = output / manifest['archive']['url'].rsplit('/', 1)[-1]
     assert sha256(archive) == manifest['archive']['sha256'] and archive.stat().st_size == manifest['archive']['bytes']
-    with tempfile.TemporaryDirectory(prefix='luma-asr-clean-') as temp:
-        work = Path(temp); unpacked = work / 'first-location'; extract(archive, unpacked)
+    # Canonicalize only this newly owned root before deriving any child paths.
+    # Windows TEMP may use an 8.3 spelling; installed-member guards stay strict.
+    with temporary_root(prefix='luma-asr-clean-') as work:
+        unpacked = work / 'first-location'; extract(archive, unpacked)
         assert sum(p.stat().st_size for p in unpacked.rglob('*') if p.is_file()) == manifest['installed_bytes']
         assert len([p for p in unpacked.rglob('*') if p.is_file()]) == manifest['max_files']
         env = clean_environment(work / 'clean-home')
