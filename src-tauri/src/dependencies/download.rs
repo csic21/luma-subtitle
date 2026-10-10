@@ -1,4 +1,7 @@
-use reqwest::{header::RANGE, StatusCode};
+use reqwest::{
+    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_RANGE, RANGE},
+    StatusCode,
+};
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -11,13 +14,14 @@ use super::{
         emit_dependency_install, emit_dependency_install_with_metrics, format_bytes,
         DownloadMetrics, DownloadUpdate,
     },
-    DOWNLOAD_MAX_ATTEMPTS, HTTP_USER_AGENT,
+    trust::{self, Artifact},
+    DOWNLOAD_MAX_ATTEMPTS,
 };
 
 pub(super) async fn download_dependency_archive(
     app: &AppHandle,
     item: &str,
-    url: &str,
+    artifact: &Artifact,
     archive_path: &Path,
 ) -> Result<(), String> {
     emit_dependency_install(
@@ -29,14 +33,8 @@ pub(super) async fn download_dependency_archive(
         None,
         None,
     );
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30 * 60))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|error| format!("创建下载客户端失败: {error}"))?;
     let result = download_file_with_resume(
-        &client,
-        url,
+        artifact,
         archive_path,
         0.82,
         |update| {
@@ -90,9 +88,9 @@ pub(super) async fn download_dependency_archive(
     result
 }
 
+/// A resumed prefix is never trusted: the complete file is rehashed before return.
 pub(super) async fn download_file_with_resume<F, R>(
-    client: &reqwest::Client,
-    url: &str,
+    artifact: &Artifact,
     path: &Path,
     progress_scale: f32,
     mut on_update: F,
@@ -102,109 +100,189 @@ where
     F: FnMut(DownloadUpdate),
     R: FnMut(usize, &str, u64),
 {
+    let client = trust::client(artifact)?;
     let mut last_error = String::new();
     for attempt in 1..=DOWNLOAD_MAX_ATTEMPTS {
-        let existing_bytes = file_len(path).await.unwrap_or(0);
-        let mut request = client.get(url);
+        let existing_bytes = match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                crate::asr_components::legacy_regular_file(path)?.len()
+            }
+            Ok(_) => return Err("Refusing a non-regular dependency download destination".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.to_string()),
+        };
+        if existing_bytes >= artifact.bytes {
+            if trust::verify_file(path, artifact).await.is_ok() {
+                return Ok(());
+            }
+            tokio::fs::remove_file(path)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        let existing_bytes = if existing_bytes >= artifact.bytes {
+            0
+        } else {
+            existing_bytes
+        };
+        let mut request = client
+            .get(&artifact.url)
+            .header(ACCEPT_ENCODING, "identity");
         if existing_bytes > 0 {
             request = request.header(RANGE, format!("bytes={existing_bytes}-"));
         }
         let mut response = match request.send().await {
             Ok(response) => response,
-            Err(error) => {
-                last_error = error.to_string();
+            Err(_) => {
+                last_error = "Cannot connect to the reviewed dependency source".into();
                 retry_download(attempt, &last_error, existing_bytes, &mut on_retry).await;
                 continue;
             }
         };
         let status = response.status();
-        if status == StatusCode::RANGE_NOT_SATISFIABLE && existing_bytes > 0 {
-            return Ok(());
-        }
-        if !(status.is_success() || status == StatusCode::PARTIAL_CONTENT) {
+        if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
             last_error = format!("HTTP {status}");
             retry_download(attempt, &last_error, existing_bytes, &mut on_retry).await;
             continue;
         }
-        last_error.clear();
-        let resumed = existing_bytes > 0 && status == StatusCode::PARTIAL_CONTENT;
-        let mut downloaded = if resumed { existing_bytes } else { 0 };
-        let total = response.content_length().and_then(|remaining| {
-            if resumed {
-                existing_bytes.checked_add(remaining)
-            } else {
-                Some(remaining)
-            }
-        });
-        let mut file = if resumed {
-            tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(path)
-                .await
-                .map_err(|error| format!("打开续传文件失败: {error}"))?
-        } else {
-            tokio::fs::File::create(path)
-                .await
-                .map_err(|error| format!("创建下载文件失败: {error}"))?
+        let header = |name| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
         };
+        let resumed = match validate_response(
+            status.as_u16(),
+            existing_bytes,
+            artifact.bytes,
+            header(CONTENT_RANGE),
+            response.content_length(),
+            header(CONTENT_ENCODING),
+        ) {
+            Ok(resumed) => resumed,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(path).await;
+                return Err(error);
+            }
+        };
+        let mut downloaded = if resumed { existing_bytes } else { 0 };
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true);
+        if resumed {
+            options.append(true);
+        } else {
+            if existing_bytes > 0 {
+                tokio::fs::remove_file(path)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            } else if tokio::fs::symlink_metadata(path).await.is_ok() {
+                tokio::fs::remove_file(path)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            options.create_new(true);
+        }
+        #[cfg(unix)]
+        {
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(path)
+            .await
+            .map_err(|e| format!("Cannot stage dependency: {e}"))?;
         let started_at = Instant::now();
         let started_bytes = downloaded;
-        let mut last_emit_progress = -1.0f32;
         let mut last_emit_at = Instant::now();
+        last_error.clear();
         loop {
-            let chunk = match response.chunk().await {
-                Ok(Some(chunk)) => chunk,
-                Ok(None) => break,
-                Err(error) => {
-                    last_error = error.to_string();
+            let chunk = match tokio::time::timeout(Duration::from_secs(60), response.chunk()).await
+            {
+                Ok(Ok(Some(chunk))) => chunk,
+                Ok(Ok(None)) => break,
+                _ => {
+                    last_error = "Dependency download was interrupted or stalled".into();
                     break;
                 }
             };
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .ok_or("Dependency byte count overflow")?;
+            if downloaded > artifact.bytes {
+                drop(file);
+                let _ = tokio::fs::remove_file(path).await;
+                return Err("Dependency download exceeded its pinned size".into());
+            }
             file.write_all(&chunk)
                 .await
-                .map_err(|error| format!("写入下载文件失败: {error}"))?;
-            downloaded += chunk.len() as u64;
-            let elapsed = started_at.elapsed().as_secs_f64().max(0.001);
-            let speed = (downloaded.saturating_sub(started_bytes)) as f64 / elapsed;
-            let eta_seconds = total.and_then(|total| {
-                (speed > 0.0 && total > downloaded)
-                    .then(|| ((total - downloaded) as f64 / speed).ceil() as u64)
-            });
-            let progress = total
-                .map(|total| {
-                    (downloaded as f32 / total as f32 * progress_scale).clamp(0.0, progress_scale)
-                })
-                .unwrap_or(0.0);
-            if progress >= progress_scale
-                || progress - last_emit_progress >= 0.01
-                || last_emit_at.elapsed() >= Duration::from_secs(1)
-            {
-                last_emit_progress = progress;
+                .map_err(|e| format!("Cannot write dependency download: {e}"))?;
+            if downloaded == artifact.bytes || last_emit_at.elapsed() >= Duration::from_secs(1) {
                 last_emit_at = Instant::now();
+                let speed = (downloaded - started_bytes) as f64
+                    / started_at.elapsed().as_secs_f64().max(0.001);
                 on_update(DownloadUpdate {
-                    progress,
+                    progress: (downloaded as f32 / artifact.bytes as f32 * progress_scale)
+                        .clamp(0.0, progress_scale),
                     metrics: DownloadMetrics {
                         bytes_per_second: Some(speed),
-                        eta_seconds,
+                        eta_seconds: (speed > 0.0)
+                            .then(|| ((artifact.bytes - downloaded) as f64 / speed).ceil() as u64),
                         downloaded_bytes: Some(downloaded),
-                        total_bytes: total,
+                        total_bytes: Some(artifact.bytes),
                     },
                     attempt,
                     resumed,
                 });
             }
         }
-        file.flush()
-            .await
-            .map_err(|error| format!("刷新下载文件失败: {error}"))?;
+        file.flush().await.map_err(|e| e.to_string())?;
+        file.sync_all().await.map_err(|e| e.to_string())?;
+        drop(file);
+        if last_error.is_empty() && downloaded != artifact.bytes {
+            last_error = "Truncated dependency download".into();
+        }
         if last_error.is_empty() {
-            return Ok(());
+            let verified = trust::verify_file(path, artifact).await;
+            if verified.is_err() {
+                let _ = tokio::fs::remove_file(path).await;
+            }
+            return verified;
         }
         retry_download(attempt, &last_error, downloaded, &mut on_retry).await;
     }
     Err(format!(
-        "下载失败，已重试 {DOWNLOAD_MAX_ATTEMPTS} 次: {last_error}"
+        "Download failed after {DOWNLOAD_MAX_ATTEMPTS} attempts: {last_error}"
     ))
+}
+
+pub(super) fn validate_response(
+    status: u16,
+    existing: u64,
+    expected: u64,
+    content_range: Option<&str>,
+    length: Option<u64>,
+    encoding: Option<&str>,
+) -> Result<bool, String> {
+    if encoding.is_some_and(|value| !value.eq_ignore_ascii_case("identity")) {
+        return Err("Encoded dependency responses are not supported".into());
+    }
+    match status {
+        200 => {
+            if content_range.is_some() || length.is_some_and(|n| n != expected) {
+                return Err("Dependency response differs from its pinned size".into());
+            }
+            Ok(false) // A server ignoring Range must replace, never append.
+        }
+        206 if existing > 0 && existing < expected => {
+            let expected_range = format!("bytes {existing}-{}/{expected}", expected - 1);
+            if content_range != Some(expected_range.as_str())
+                || length.is_some_and(|n| n != expected - existing)
+            {
+                return Err("Invalid dependency Content-Range or resumed length".into());
+            }
+            Ok(true)
+        }
+        // 416 is never completion. A fully cached file is verified before HTTP.
+        _ => Err(format!("Unexpected dependency HTTP status {status}")),
+    }
 }
 
 async fn retry_download<R>(attempt: usize, error: &str, downloaded: u64, on_retry: &mut R)
@@ -216,14 +294,6 @@ where
         on_retry(next_attempt, error, downloaded);
         sleep(Duration::from_millis(700 * attempt as u64)).await;
     }
-}
-
-async fn file_len(path: &Path) -> Option<u64> {
-    tokio::fs::metadata(path)
-        .await
-        .ok()
-        .filter(|metadata| metadata.is_file())
-        .map(|metadata| metadata.len())
 }
 
 pub(super) fn download_message(label: &str, update: DownloadUpdate) -> String {
@@ -245,4 +315,12 @@ pub(super) fn download_message(label: &str, update: DownloadUpdate) -> String {
         "正在下载"
     };
     format!("{prefix} {label} {downloaded} / {total}")
+}
+
+/// Unique per-operation staging files are removed after failure or activation.
+pub(super) struct PartialFile(pub std::path::PathBuf);
+impl Drop for PartialFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }

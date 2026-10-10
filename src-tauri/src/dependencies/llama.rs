@@ -1,41 +1,22 @@
 use std::path::Path;
 
-use serde::Deserialize;
 use tauri::AppHandle;
 
-use crate::paths::{locate_binary, path_to_string, sidecars_dir};
-#[cfg(target_os = "macos")]
 use crate::paths::find_file_recursive;
+use crate::paths::{locate_binary, path_to_string, sidecars_dir};
 
 use super::{
-    download::download_dependency_archive, events::emit_dependency_install, HTTP_USER_AGENT,
+    download::{download_dependency_archive, PartialFile},
+    events::emit_dependency_install,
+    install::{activate_directory, ensure_executable, extract_zip_into_dir, StagedDirectory},
+    trust,
 };
-#[cfg(target_os = "macos")]
-use super::install::ensure_executable;
-#[cfg(not(target_os = "macos"))]
-use super::install::extract_dependency_archive;
-
-#[cfg(target_os = "macos")]
-use super::install::extract_tar_archive;
-
-const LLAMA_RELEASE_API_URL: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LlamaCppAssetSelection {
     pub binary_name: String,
     pub cudart_name: Option<String>,
     pub backend: &'static str,
-}
-
-#[derive(Deserialize)]
-struct GithubRelease {
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Clone, Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
 }
 
 pub(super) async fn install_llama_cpp(app: AppHandle) -> Result<String, String> {
@@ -104,16 +85,18 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         app,
         "llama.cpp",
         "running",
-        "正在查询 llama.cpp 官方发布包",
+        "正在准备已固定版本的 llama.cpp 官方发布包",
         0.0,
         None,
         None,
     );
-    let release = latest_llama_cpp_release().await?;
-    let asset_names = release
-        .assets
+    let artifacts = trust::catalog()?
+        .into_iter()
+        .filter(|item| item.id.starts_with("llama-"))
+        .collect::<Vec<_>>();
+    let asset_names = artifacts
         .iter()
-        .map(|asset| asset.name.as_str())
+        .map(|item| item.file_name.as_str())
         .collect::<Vec<_>>();
     let selection = select_llama_cpp_assets(
         &asset_names,
@@ -128,7 +111,9 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
             std::env::consts::ARCH
         )
     })?;
-    let binary = find_asset(&release, &selection.binary_name)
+    let binary = artifacts
+        .iter()
+        .find(|item| item.file_name == selection.binary_name)
         .ok_or_else(|| format!("未找到 llama.cpp 包 {}", selection.binary_name))?;
 
     let sidecars_dir = sidecars_dir(app)?;
@@ -136,29 +121,74 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
     tokio::fs::create_dir_all(&downloads_dir)
         .await
         .map_err(|error| format!("创建下载目录失败: {error}"))?;
-    let archive_path = downloads_dir.join(&binary.name);
-    download_dependency_archive(app, "llama.cpp", &binary.browser_download_url, &archive_path)
-        .await?;
+    let archive_path = downloads_dir.join(format!(
+        "{}.{}.part",
+        binary.file_name,
+        uuid::Uuid::new_v4()
+    ));
+    let _cleanup = PartialFile(archive_path.clone());
+    download_dependency_archive(app, "llama.cpp", binary, &archive_path).await?;
 
+    // Verify both CUDA payloads before extracting or replacing any active files.
+    let cudart = selection
+        .cudart_name
+        .as_ref()
+        .map(|name| {
+            artifacts
+                .iter()
+                .find(|item| &item.file_name == name)
+                .ok_or("Missing reviewed CUDA runtime")
+        })
+        .transpose()?;
+    let cudart_download = if let Some(cudart) = cudart {
+        let path = downloads_dir.join(format!(
+            "{}.{}.part",
+            cudart.file_name,
+            uuid::Uuid::new_v4()
+        ));
+        let cleanup = PartialFile(path.clone());
+        download_dependency_archive(app, "CUDA Runtime", cudart, &path).await?;
+        Some((cleanup, cudart.clone()))
+    } else {
+        None
+    };
     let target_dir = sidecars_dir.join("llama.cpp");
-    let path = extract_llama_archive(app, &binary.name, &archive_path, &target_dir).await?;
-
-    if let Some(cudart_name) = selection.cudart_name {
-        if let Some(cudart) = find_asset(&release, &cudart_name) {
-            let cudart_path = downloads_dir.join(&cudart.name);
-            download_dependency_archive(
-                app,
-                "CUDA Runtime",
-                &cudart.browser_download_url,
-                &cudart_path,
-            )
-            .await?;
-            extract_zip_into_existing(app, "CUDA Runtime", &cudart_path, &target_dir).await?;
-            let _ = tokio::fs::remove_file(&cudart_path).await;
+    let staging = StagedDirectory::new(&target_dir)?;
+    let stage_owner = staging.clone();
+    let source = archive_path.clone();
+    let artifact = binary.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if artifact.file_name.ends_with(".tar.gz") {
+            super::archive::extract_tar(&source, &stage_owner.0, &artifact)
+        } else {
+            extract_zip_into_dir(&source, &stage_owner.0, &artifact)
         }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if let Some((path, artifact)) = cudart_download {
+        let stage_owner = staging.clone();
+        let source = path.0.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            extract_zip_into_dir(&source, &stage_owner.0, &artifact)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
     }
-
-    let _ = tokio::fs::remove_file(&archive_path).await;
+    let executable = if cfg!(target_os = "macos") {
+        "llama-server"
+    } else {
+        "llama-server.exe"
+    };
+    let staged_exe = find_file_recursive(&staging.0, executable)
+        .ok_or("Reviewed llama.cpp archive is missing llama-server")?;
+    ensure_executable(&staged_exe).await?;
+    let relative = staged_exe
+        .strip_prefix(&staging.0)
+        .map_err(|e| e.to_string())?
+        .to_path_buf();
+    activate_directory(&staging.0, &target_dir)?;
+    let path = path_to_string(target_dir.join(relative));
     emit_dependency_install(
         app,
         "llama.cpp",
@@ -169,118 +199,6 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         None,
     );
     Ok(path)
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn extract_llama_archive(
-    app: &AppHandle,
-    _archive_name: &str,
-    archive_path: &Path,
-    target_dir: &Path,
-) -> Result<String, String> {
-    extract_dependency_archive(
-        "llama.cpp",
-        "llama-server.exe",
-        app,
-        archive_path,
-        target_dir,
-    )
-    .await
-}
-
-#[cfg(target_os = "macos")]
-async fn extract_llama_archive(
-    app: &AppHandle,
-    archive_name: &str,
-    archive_path: &Path,
-    target_dir: &Path,
-) -> Result<String, String> {
-    if std::env::consts::ARCH != "aarch64" {
-        return Err("macOS 版本仅支持 Apple Silicon (arm64)，不支持 Intel Mac".to_string());
-    }
-    if archive_name.ends_with(".zip") {
-        return Err("macOS 需要 tar.gz 格式的官方 llama.cpp 包".to_string());
-    }
-    let staging_dir = target_dir.with_extension("installing");
-    let _ = tokio::fs::remove_dir_all(&staging_dir).await;
-    tokio::fs::create_dir_all(&staging_dir)
-        .await
-        .map_err(|error| format!("创建 llama.cpp 解压目录失败: {error}"))?;
-    extract_tar_archive(app, "llama.cpp", archive_path, &staging_dir, 0.9).await?;
-    let exe_path = find_file_recursive(&staging_dir, "llama-server")
-        .ok_or_else(|| "llama.cpp 发布包里没有找到 llama-server".to_string())?;
-    ensure_executable(&exe_path).await?;
-    let relative_exe = exe_path
-        .strip_prefix(&staging_dir)
-        .map_err(|error| format!("定位 llama-server 失败: {error}"))?
-        .to_path_buf();
-    let _ = tokio::fs::remove_dir_all(target_dir).await;
-    tokio::fs::rename(&staging_dir, target_dir)
-        .await
-        .map_err(|error| format!("保存 llama.cpp 失败: {error}"))?;
-    Ok(path_to_string(target_dir.join(relative_exe)))
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn extract_zip_into_existing(
-    app: &AppHandle,
-    item: &str,
-    archive_path: &Path,
-    target_dir: &Path,
-) -> Result<(), String> {
-    use super::install::extract_zip_into_dir;
-    emit_dependency_install(
-        app,
-        item,
-        "running",
-        format!("正在解压 {item}"),
-        0.94,
-        None,
-        None,
-    );
-    let archive_path = archive_path.to_path_buf();
-    let target_dir = target_dir.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || extract_zip_into_dir(&archive_path, &target_dir))
-        .await
-        .map_err(|error| format!("解压 {item} 任务失败: {error}"))?
-        .map_err(|error| format!("解压 {item} 失败: {error}"))
-}
-
-#[cfg(target_os = "macos")]
-async fn extract_zip_into_existing(
-    _app: &AppHandle,
-    _item: &str,
-    _archive_path: &Path,
-    _target_dir: &Path,
-) -> Result<(), String> {
-    Ok(())
-}
-
-async fn latest_llama_cpp_release() -> Result<GithubRelease, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .user_agent(HTTP_USER_AGENT)
-        .build()
-        .map_err(|error| format!("创建 GitHub 客户端失败: {error}"))?;
-    let releases = client
-        .get(LLAMA_RELEASE_API_URL)
-        .query(&[("per_page", "8")])
-        .send()
-        .await
-        .map_err(|error| format!("查询 llama.cpp 发布包失败: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("查询 llama.cpp 发布包失败: {error}"))?
-        .json::<Vec<GithubRelease>>()
-        .await
-        .map_err(|error| format!("解析 llama.cpp 发布包失败: {error}"))?;
-    releases
-        .into_iter()
-        .find(|release| !release.assets.is_empty())
-        .ok_or_else(|| "未找到包含安装包的 llama.cpp 发布".to_string())
-}
-
-fn find_asset<'a>(release: &'a GithubRelease, name: &str) -> Option<&'a GithubAsset> {
-    release.assets.iter().find(|asset| asset.name == name)
 }
 
 fn current_install_os() -> &'static str {
@@ -300,21 +218,25 @@ pub(super) fn select_llama_cpp_assets(
     has_nvidia: bool,
 ) -> Option<LlamaCppAssetSelection> {
     match (os, arch) {
-        ("macos", "aarch64") => first_matching(available, macos_arm64_binary_suffixes()).map(
-            |binary_name| LlamaCppAssetSelection {
-                binary_name,
-                cudart_name: None,
-                backend: "Metal",
-            },
-        ),
+        ("macos", "aarch64") => {
+            first_matching(available, macos_arm64_binary_suffixes()).map(|binary_name| {
+                LlamaCppAssetSelection {
+                    binary_name,
+                    cudart_name: None,
+                    backend: "Metal",
+                }
+            })
+        }
         ("windows", "x86_64") => select_windows_x64_assets(available, has_nvidia),
-        ("windows", "aarch64") => first_matching(available, &["bin-win-cpu-arm64.zip"]).map(
-            |binary_name| LlamaCppAssetSelection {
-                binary_name,
-                cudart_name: None,
-                backend: "CPU",
-            },
-        ),
+        ("windows", "aarch64") => {
+            first_matching(available, &["bin-win-cpu-arm64.zip"]).map(|binary_name| {
+                LlamaCppAssetSelection {
+                    binary_name,
+                    cudart_name: None,
+                    backend: "CPU",
+                }
+            })
+        }
         _ => None,
     }
 }

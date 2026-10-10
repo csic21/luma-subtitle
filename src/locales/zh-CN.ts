@@ -293,7 +293,7 @@ export const zhCN = {
     "settings.cliUnavailable": "CLI 不可用",
     "settings.cliLoadModels": "读取模型",
     "settings.cliModelsEmpty": "未读到模型，可手动填写",
-    "settings.cliNote": "CLI 模式按分片串行调用（并发 2），每次会新建会话，开销比 API 大，建议先小分片试跑。",
+    "settings.cliNote": "OpenCode 仅支持已审查的 1.18.35 和已有内置提供方登录。文本专用模式禁止工具、MCP 与子代理，不导入全局/项目/自定义提供方配置；每个分片使用独立会话。自定义命令具有当前账号权限，请勿使用可调用工具的代理。",
     "settings.applyGlobal": "从全局导入",
     "settings.applyGlobalTitle": "从全局设置导入",
     "settings.baseUrlAppendDescription": "未开启时会请求：{endpoint}",

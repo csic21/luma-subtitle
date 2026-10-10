@@ -293,7 +293,7 @@ export const enUS = {
     "settings.cliUnavailable": "CLI unavailable",
     "settings.cliLoadModels": "Load models",
     "settings.cliModelsEmpty": "No models found; enter one manually",
-    "settings.cliNote": "CLI mode translates shard by shard (concurrency 2) and starts a new session per shard, so it costs more than API. Try a small shard first.",
+    "settings.cliNote": "OpenCode requires reviewed version 1.18.35 and an existing built-in provider login. Text-only mode blocks tools, MCP and subagents; global/project/custom provider profiles are not imported. Each shard uses a separate session. Custom commands are trusted local executables with your account’s privileges; do not use a tool-enabled agent.",
     "settings.applyGlobal": "Import global",
     "settings.applyGlobalTitle": "Import from global settings",
     "settings.baseUrlAppendDescription": "When off, requests go to: {endpoint}",

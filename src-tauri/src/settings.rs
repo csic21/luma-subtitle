@@ -191,7 +191,11 @@ pub(crate) fn save_settings(
         ),
     };
     if payload.bind_legacy_api_key {
-        if payload.api_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
+        if payload
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+        {
             return Err("请选择保存新密钥或绑定旧密钥，不能同时操作".to_string());
         }
         task_db::bind_legacy_api_key(&app, &settings.translation_provider, &settings.base_url)?;
@@ -199,8 +203,13 @@ pub(crate) fn save_settings(
     if let Some(api_key) = payload.api_key {
         let api_key = api_key.trim();
         if !api_key.is_empty() {
-            task_db::save_api_key(&app, &settings.translation_provider, &settings.base_url, api_key)
-                .map_err(|error| format!("API Key 保存失败: {error}"))?;
+            task_db::save_api_key(
+                &app,
+                &settings.translation_provider,
+                &settings.base_url,
+                api_key,
+            )
+            .map_err(|error| format!("API Key 保存失败: {error}"))?;
         }
     }
     let path = settings_path(&app)?;
@@ -299,7 +308,8 @@ impl PersistedSettings {
     fn into_response(self, app: &AppHandle) -> Result<SettingsResponse, String> {
         let api_key_scopes = task_db::api_key_scopes(app)?;
         let has_api_key = task_db::credential_scope(&self.translation_provider, &self.base_url)
-            .map(|scope| api_key_scopes.contains(&scope)).unwrap_or(false);
+            .map(|scope| api_key_scopes.contains(&scope))
+            .unwrap_or(false);
         let legacy_api_key_available = task_db::has_legacy_api_key(app)?;
         Ok(SettingsResponse {
             asr: self.asr.normalized(),

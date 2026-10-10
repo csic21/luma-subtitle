@@ -95,9 +95,14 @@ fn scoped_key(scope: &str) -> String {
 }
 
 fn read_key(conn: &rusqlite::Connection, key: &str) -> Result<Option<String>, String> {
-    conn.query_row("SELECT value FROM app_secrets WHERE key = ?1", params![key], |row| row.get::<_, String>(0))
-        .optional().map(|value| value.filter(|value| !value.trim().is_empty()))
-        .map_err(|error| error.to_string())
+    conn.query_row(
+        "SELECT value FROM app_secrets WHERE key = ?1",
+        params![key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|value| value.filter(|value| !value.trim().is_empty()))
+    .map_err(|error| error.to_string())
 }
 
 fn save_scoped_key(conn: &rusqlite::Connection, scope: &str, api_key: &str) -> Result<(), String> {
@@ -105,25 +110,41 @@ fn save_scoped_key(conn: &rusqlite::Connection, scope: &str, api_key: &str) -> R
         "INSERT INTO app_secrets(key, value, updated_at) VALUES(?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         params![scoped_key(scope), api_key.trim(), super::now_ts()],
-    ).map_err(|error| error.to_string())?;
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
-pub(crate) fn save_api_key(app: &AppHandle, provider: &str, base_url: &str, api_key: &str) -> Result<(), String> {
-    if api_key.trim().is_empty() { return Ok(()); }
+pub(crate) fn save_api_key(
+    app: &AppHandle,
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+) -> Result<(), String> {
+    if api_key.trim().is_empty() {
+        return Ok(());
+    }
     let scope = credential_scope(provider, base_url)?;
     save_scoped_key(&connection(app)?, &scope, api_key)
 }
 
-pub(crate) fn load_api_key(app: &AppHandle, provider: &str, base_url: &str) -> Result<Option<String>, String> {
-    if crate::translation::normalize_translation_provider(provider) != "api" { return Ok(None); }
+pub(crate) fn load_api_key(
+    app: &AppHandle,
+    provider: &str,
+    base_url: &str,
+) -> Result<Option<String>, String> {
+    if crate::translation::normalize_translation_provider(provider) != "api" {
+        return Ok(None);
+    }
     let scope = credential_scope(provider, base_url)?;
     let conn = connection(app)?;
     // An old unscoped key is deliberately never a fallback. An explicit user
     // choice in Settings is required before it can be associated with an origin.
     let key = read_key(&conn, &scoped_key(&scope))?;
     if key.is_none() {
-        return Err(format!("没有与 {scope} 绑定的 API Key。请在设置中为该地址保存密钥，或明确绑定旧密钥"));
+        return Err(format!(
+            "没有与 {scope} 绑定的 API Key。请在设置中为该地址保存密钥，或明确绑定旧密钥"
+        ));
     }
     Ok(key)
 }
@@ -132,8 +153,14 @@ pub(crate) fn api_key_scopes(app: &AppHandle) -> Result<Vec<String>, String> {
     let conn = connection(app)?;
     let mut statement = conn.prepare("SELECT key FROM app_secrets WHERE key LIKE 'translation_api_key_v2:%' AND length(trim(value)) > 0 ORDER BY key")
         .map_err(|error| error.to_string())?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|error| error.to_string())?;
-    rows.map(|row| row.map(|key| key[SCOPED_KEY_PREFIX.len()..].to_string()).map_err(|error| error.to_string())).collect()
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    rows.map(|row| {
+        row.map(|key| key[SCOPED_KEY_PREFIX.len()..].to_string())
+            .map_err(|error| error.to_string())
+    })
+    .collect()
 }
 
 pub(crate) fn has_legacy_api_key(app: &AppHandle) -> Result<bool, String> {
@@ -145,11 +172,17 @@ fn bind_legacy_key(conn: &rusqlite::Connection, scope: &str) -> Result<(), Strin
     // silently reused for several origins. Never replace an existing scoped key.
     let changed = conn.execute("UPDATE app_secrets SET key = ?1, updated_at = ?2 WHERE key = ?3 AND NOT EXISTS (SELECT 1 FROM app_secrets WHERE key = ?1)",
         params![scoped_key(scope), super::now_ts(), API_KEY_SETTING]).map_err(|error| error.to_string())?;
-    if changed != 1 { return Err("没有可绑定的旧密钥，或该地址已有密钥".to_string()); }
+    if changed != 1 {
+        return Err("没有可绑定的旧密钥，或该地址已有密钥".to_string());
+    }
     Ok(())
 }
 
-pub(crate) fn bind_legacy_api_key(app: &AppHandle, provider: &str, base_url: &str) -> Result<(), String> {
+pub(crate) fn bind_legacy_api_key(
+    app: &AppHandle,
+    provider: &str,
+    base_url: &str,
+) -> Result<(), String> {
     let scope = credential_scope(provider, base_url)?;
     bind_legacy_key(&connection(app)?, &scope)
 }
@@ -164,11 +197,27 @@ mod credential_tests {
     }
     #[test]
     fn origins_are_normalized_without_mixing_destinations() {
-        assert_eq!(credential_scope("API", "https://EXAMPLE.test:443/v1/").unwrap(), "api|https://example.test");
-        for other in ["https://example.test:444", "https://other.test", "http://localhost:1234"] {
-            assert_ne!(credential_scope("api", other).unwrap(), "api|https://example.test");
+        assert_eq!(
+            credential_scope("API", "https://EXAMPLE.test:443/v1/").unwrap(),
+            "api|https://example.test"
+        );
+        for other in [
+            "https://example.test:444",
+            "https://other.test",
+            "http://localhost:1234",
+        ] {
+            assert_ne!(
+                credential_scope("api", other).unwrap(),
+                "api|https://example.test"
+            );
         }
-        for invalid in ["http://example.test", "https://user:secret@example.test", "https://example.test/#x", "file:///tmp/x", "invalid"] {
+        for invalid in [
+            "http://example.test",
+            "https://user:secret@example.test",
+            "https://example.test/#x",
+            "file:///tmp/x",
+            "invalid",
+        ] {
             assert!(credential_scope("api", invalid).is_err());
         }
         assert!(credential_scope("cli", "https://example.test").is_err());
@@ -181,17 +230,30 @@ mod credential_tests {
         save_scoped_key(&conn, &current, "dummy-b").unwrap();
         assert_eq!(read_key(&conn, &scoped_key(&old)).unwrap(), None);
         save_scoped_key(&conn, &old, "dummy-a").unwrap();
-        assert_eq!(read_key(&conn, &scoped_key(&old)).unwrap().as_deref(), Some("dummy-a"));
-        assert_eq!(read_key(&conn, &scoped_key(&current)).unwrap().as_deref(), Some("dummy-b"));
+        assert_eq!(
+            read_key(&conn, &scoped_key(&old)).unwrap().as_deref(),
+            Some("dummy-a")
+        );
+        assert_eq!(
+            read_key(&conn, &scoped_key(&current)).unwrap().as_deref(),
+            Some("dummy-b")
+        );
     }
     #[test]
     fn legacy_key_needs_explicit_single_origin_binding() {
         let conn = database();
-        conn.execute("INSERT INTO app_secrets VALUES (?1, 'dummy-legacy', 1)", params![API_KEY_SETTING]).unwrap();
+        conn.execute(
+            "INSERT INTO app_secrets VALUES (?1, 'dummy-legacy', 1)",
+            params![API_KEY_SETTING],
+        )
+        .unwrap();
         let scope = credential_scope("api", "https://a.test").unwrap();
         assert!(read_key(&conn, &scoped_key(&scope)).unwrap().is_none());
         bind_legacy_key(&conn, &scope).unwrap();
-        assert_eq!(read_key(&conn, &scoped_key(&scope)).unwrap().as_deref(), Some("dummy-legacy"));
+        assert_eq!(
+            read_key(&conn, &scoped_key(&scope)).unwrap().as_deref(),
+            Some("dummy-legacy")
+        );
         assert!(read_key(&conn, API_KEY_SETTING).unwrap().is_none());
         assert!(bind_legacy_key(&conn, "api|https://b.test").is_err());
     }

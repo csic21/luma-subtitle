@@ -482,7 +482,7 @@ class ReadmeDiagnostics(unittest.TestCase):
                 self.assertEqual(m.readme_download_main(path),0)
             readme.assert_called_once();pair.assert_not_called()
             self.assertTrue(m.readme_succeeded(stdout.getvalue().encode('utf-8')))
-            self.assertLessEqual(readme.call_args.args[0]-m.time.monotonic(),30)
+            self.assertLessEqual(readme.call_args.args[0], m.time.monotonic() + 30)
             path.write_text(json.dumps({'root':str(root),'file':MODELS[0]['files'][5]}),encoding='utf-8')
             with patch.object(m,'download_readme') as readme,patch.object(m.sys,'stderr',new_callable=io.StringIO) as stderr:
                 self.assertEqual(m.readme_download_main(path),1)

@@ -249,6 +249,66 @@ mod tests {
     use crate::state::QueuedTaskOperation;
 
     #[test]
+    fn fresh_optional_settings_pass_the_real_task_snapshot_and_queue_path() {
+        use crate::jobs::{helpers::task_settings_from_video_request, CreateVideoTaskRequest};
+        use crate::task_db::TaskRecord;
+        for engine in ["whisper-accelerated", "qwen3-asr", "whisper-cpp"] {
+            let request: CreateVideoTaskRequest = serde_json::from_value(serde_json::json!({
+                "video_path":"/fixture/input.mp4", "output_dir":null, "target_language":"English",
+                "whisper_model_path":"", "whisper_language":"auto", "base_url":"https://api.openai.com",
+                "model":"gpt-4o-mini", "temperature":0.2, "asr":{"engine":engine,"python_path":"/fixture/python","model_path":"/fixture/model","aligner_path":"/fixture/aligner","device":"cpu"}
+            })).unwrap();
+            let settings = task_settings_from_video_request(&request);
+            assert!(settings.whisper_model_path.is_empty());
+            assert_eq!(settings.asr.engine, engine);
+            let mut task = TaskRecord {
+                id: "fresh".into(),
+                source_type: "video".into(),
+                video_path: Some(request.video_path),
+                audio_path: None,
+                srt_path: None,
+                file_name: "input.mp4".into(),
+                status: "idle".into(),
+                stage: "created".into(),
+                message: String::new(),
+                progress: 0.0,
+                settings,
+                source_srt_path: None,
+                translated_srt_path: None,
+                source_file_name: None,
+                translated_file_name: None,
+                output_dir: None,
+                segment_count: None,
+                exported_source_srt: None,
+                exported_translated_srt: None,
+                exported_output_dir: None,
+                translation_completed_count: None,
+                result_revision: 0,
+                run_generation: 0,
+                error: None,
+                created_at: 1,
+                updated_at: 1,
+            };
+            assert_eq!(
+                super::validate_task_operation(&task, "transcribe").is_ok(),
+                engine != "whisper-cpp"
+            );
+            if engine != "whisper-cpp" {
+                let queue = VecDeque::from([QueuedTaskOperation {
+                    task_id: task.id.clone(),
+                    operation: "transcribe".into(),
+                }]);
+                assert_eq!(
+                    next_runnable_operation_index(&queue, &HashMap::new()),
+                    Some(0)
+                );
+            }
+            task.status = "running".into();
+            assert!(super::validate_task_operation(&task, "transcribe").is_err());
+        }
+    }
+
+    #[test]
     fn limits_each_heavy_operation_to_one_running_job() {
         let mut running = HashMap::new();
         running.insert("video-1".to_string(), "transcribe".to_string());

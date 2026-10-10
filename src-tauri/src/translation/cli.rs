@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::time::Instant;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -180,6 +182,20 @@ pub(super) async fn translate_shard_via_cli(
         return Err(JobError::Cancelled);
     }
     validate_cli_config(config)?;
+    if normalize_translation_cli_tool(&config.cli_tool) == "custom" {
+        let executable = Path::new(config.cli_command.trim())
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if matches!(
+            executable.to_ascii_lowercase().as_str(),
+            "opencode" | "opencode.exe"
+        ) {
+            return Err(JobError::failed(
+                "OpenCode 必须选择内置的文本专用模式，不能通过自定义命令绕过隔离",
+            ));
+        }
+    }
     let full_prompt = build_cli_prompt(config, shard, shard_index, total_shards);
     let raw_output = if normalize_translation_cli_tool(&config.cli_tool) == "custom" {
         run_custom_cli(config, &full_prompt, cancel).await?
@@ -218,7 +234,8 @@ async fn run_opencode_cli(
     let model = config.cli_model.trim();
     let resolved = resolve_cli_path(command)
         .ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
-    let output = super::opencode_isolation::translate(&resolved, model, full_prompt, cancel).await?;
+    let output =
+        super::opencode_isolation::translate(&resolved, model, full_prompt, cancel).await?;
     if output.is_empty() {
         return Err(JobError::failed(
             "opencode CLI 没有返回可用输出（--format json 为空）",
@@ -347,13 +364,22 @@ pub(crate) fn split_cli_args(template: &str) -> Vec<String> {
 }
 
 async fn run_cli_command(cmd: std::process::Command, cancel: Arc<AtomicBool>) -> JobResult<String> {
-    let output = crate::owned_process::output(cmd, cancel, Duration::from_secs(CLI_SHARD_TIMEOUT_SECS), 8 * 1024 * 1024).await?;
+    let output = crate::owned_process::output(
+        cmd,
+        cancel,
+        Duration::from_secs(CLI_SHARD_TIMEOUT_SECS),
+        8 * 1024 * 1024,
+    )
+    .await?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         // CLI errors may contain provider tokens. Do not put subprocess output
         // in persisted task logs; users can diagnose the executable separately.
         let _ = detail;
-        return Err(JobError::failed(format!("CLI returned nonzero status {}", output.status)));
+        return Err(JobError::failed(format!(
+            "CLI returned nonzero status {}",
+            output.status
+        )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -361,7 +387,13 @@ async fn run_cli_command(cmd: std::process::Command, cancel: Arc<AtomicBool>) ->
 async fn probe(resolved: &Path, args: &[&str]) -> JobResult<std::process::Output> {
     let mut command = std::process::Command::new(resolved);
     command.args(args);
-    crate::owned_process::output(command, Arc::new(AtomicBool::new(false)), Duration::from_secs(10), 64 * 1024).await
+    crate::owned_process::output(
+        command,
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(10),
+        64 * 1024,
+    )
+    .await
 }
 
 pub(crate) fn extract_opencode_text_output(stdout: &str) -> String {
@@ -454,7 +486,12 @@ pub(crate) async fn check_translation_cli(
     }
     let tool = tool.unwrap_or_else(|| "opencode".to_string());
     let Some(resolved) = resolve_cli_path(&command) else {
-        return Ok(TranslationCliStatus { available: false, path: None, version: None, error: Some(cli_not_found_message(&command)) });
+        return Ok(TranslationCliStatus {
+            available: false,
+            path: None,
+            version: None,
+            error: Some(cli_not_found_message(&command)),
+        });
     };
     let path = Some(resolved.to_string_lossy().to_string());
     let result = probe(&resolved, &["--version"]).await;
@@ -463,16 +500,38 @@ pub(crate) async fn check_translation_cli(
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if normalize_translation_cli_tool(&tool) == "opencode" {
                 if let Err(error) = super::opencode_isolation::validate_version(&version) {
-                    return Ok(TranslationCliStatus { available: false, path, version: Some(version), error: Some(error) });
+                    return Ok(TranslationCliStatus {
+                        available: false,
+                        path,
+                        version: Some(version),
+                        error: Some(error),
+                    });
                 }
             }
-            Ok(TranslationCliStatus { available: true, path, version: Some(version), error: None })
+            Ok(TranslationCliStatus {
+                available: true,
+                path,
+                version: Some(version),
+                error: None,
+            })
         }
         Ok(_) if normalize_translation_cli_tool(&tool) == "custom" => {
-            let ready = probe(&resolved, &["--help"]).await.is_ok_and(|output| output.status.success());
-            Ok(TranslationCliStatus { available: ready, path, version: None, error: (!ready).then(|| "CLI probe failed".to_string()) })
+            let ready = probe(&resolved, &["--help"])
+                .await
+                .is_ok_and(|output| output.status.success());
+            Ok(TranslationCliStatus {
+                available: ready,
+                path,
+                version: None,
+                error: (!ready).then(|| "CLI probe failed".to_string()),
+            })
         }
-        _ => Ok(TranslationCliStatus { available: false, path, version: None, error: Some("CLI probe failed or exceeded its time/output limit".to_string()) }),
+        _ => Ok(TranslationCliStatus {
+            available: false,
+            path,
+            version: None,
+            error: Some("CLI probe failed or exceeded its time/output limit".to_string()),
+        }),
     }
 }
 
@@ -482,17 +541,40 @@ pub(crate) async fn list_translation_cli_models(command: String) -> Result<Vec<S
     let sandbox = super::opencode_isolation::Sandbox::new(None)?;
     let mut version_command = sandbox.command(&resolved);
     version_command.arg("--version");
-    let output = crate::owned_process::output(version_command, Arc::new(AtomicBool::new(false)), Duration::from_secs(10), 64 * 1024).await
-        .map_err(|_| "CLI version check failed".to_string())?;
-    if !output.status.success() { return Err("CLI version check failed".into()); }
+    let output = crate::owned_process::output(
+        version_command,
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(10),
+        64 * 1024,
+    )
+    .await
+    .map_err(|_| "CLI version check failed".to_string())?;
+    if !output.status.success() {
+        return Err("CLI version check failed".into());
+    }
     super::opencode_isolation::validate_version(String::from_utf8_lossy(&output.stdout).trim())?;
-    let mut command = sandbox.command(&resolved); command.arg("models");
-    let output = crate::owned_process::output(command, Arc::new(AtomicBool::new(false)), Duration::from_secs(15), 256 * 1024).await
-        .map_err(|_| "CLI model probe failed or exceeded its time/output limit".to_string())?;
-    if !output.status.success() { return Err("CLI model probe failed".into()); }
-    let mut models = String::from_utf8_lossy(&output.stdout).lines().map(str::trim)
-        .filter(|line| !line.is_empty()).map(str::to_string).collect::<Vec<_>>();
-    models.sort(); models.dedup(); Ok(models)
+    let mut command = sandbox.command(&resolved);
+    command.arg("models");
+    let output = crate::owned_process::output(
+        command,
+        Arc::new(AtomicBool::new(false)),
+        Duration::from_secs(15),
+        256 * 1024,
+    )
+    .await
+    .map_err(|_| "CLI model probe failed or exceeded its time/output limit".to_string())?;
+    if !output.status.success() {
+        return Err("CLI model probe failed".into());
+    }
+    let mut models = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    Ok(models)
 }
 
 #[cfg(test)]
@@ -629,7 +711,7 @@ mod process_tests {
                 trigger.store(true, Ordering::SeqCst);
             });
             let start = Instant::now();
-            let result = run_cli_command(&mut command, cancel).await;
+            let result = run_cli_command(command, cancel).await;
             assert!(matches!(result, Err(JobError::Cancelled)));
             assert!(start.elapsed() < Duration::from_secs(2));
             task.await.unwrap();
@@ -659,7 +741,7 @@ mod process_tests {
             ]);
             let result = tokio::time::timeout(
                 Duration::from_secs(3),
-                run_cli_command(&mut command, Arc::new(AtomicBool::new(false))),
+                run_cli_command(command, Arc::new(AtomicBool::new(false))),
             )
             .await
             .unwrap()
