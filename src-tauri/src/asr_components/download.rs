@@ -2,6 +2,13 @@ use super::{archive::cancelled, cancellable, catalog::{allowed_redirect, validat
 use sha2::{Digest, Sha256};
 use std::{fs::OpenOptions, io::Write, path::Path, sync::atomic::AtomicBool, time::{Duration, Instant}};
 
+pub(super) fn validate_redirect(url: &url::Url, source: Source, previous_urls: usize) -> Result<(), &'static str> {
+    // Preserve reqwest's existing history cutoff, including the original URL.
+    if previous_urls >= 8 { return Err("Too many component download redirects"); }
+    if !allowed_redirect(url, source) { return Err("Component redirect is outside the trusted HTTPS origin allowlist"); }
+    Ok(())
+}
+
 pub(super) fn verify_digest(bytes: u64, digest: &str, expected_bytes: u64, expected_digest: &str) -> Result<(), String> {
     if bytes != expected_bytes { return Err("Component download did not match its pinned byte size.".into()); }
     if !digest.eq_ignore_ascii_case(expected_digest) { return Err("Component SHA-256 mismatch. The untrusted download was discarded; the previous component is unchanged.".into()); }
@@ -35,9 +42,10 @@ pub(super) async fn fetch(url: &str, expected_bytes: u64, expected_digest: &str,
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(60 * 60 * 4))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= 8 { attempt.error("Too many component download redirects") }
-            else if allowed_redirect(attempt.url(), source) { attempt.follow() }
-            else { attempt.error("Component redirect is outside the trusted HTTPS origin allowlist") }
+            match validate_redirect(attempt.url(), source, attempt.previous().len()) {
+                Ok(()) => attempt.follow(),
+                Err(error) => attempt.error(error),
+            }
         }))
         .build().map_err(|e| format!("Cannot create component download client: {e}"))?;
     // No credentials, auth tokens, ambient cookies, or remote catalog requests.

@@ -1,5 +1,7 @@
 import ast
 import copy
+from contextlib import nullcontext
+import io
 import hashlib
 import json
 from pathlib import Path
@@ -83,6 +85,68 @@ class ProofTextEncodingTests(unittest.TestCase):
 
 
 class WindowsInstallerJobTests(unittest.TestCase):
+    def test_shipping_cpu_cannot_skip_receipt_selected_lifecycle(self):
+        with temporary_root() as root:
+            candidates=root/'candidates.json'
+            for candidate in ({'id':proof.PACK_ID,'unavailable_reason':'unexpected'},
+                              {'id':proof.PACK_ID,'recipe':{'wheels':[]}}):
+                proof.dump(candidates,{'runtimes':[candidate]})
+                with patch.object(proof,'shipping_cpu_lock',return_value={'cpu_component':{}}), \
+                     patch.object(proof,'owned',side_effect=AssertionError('must fail before child')):
+                    with self.assertRaisesRegex(ValueError,'receipt-selected native worker lifecycle'):
+                        proof.prove_native_installer(proof.PACK_ID,root/'output',root/'cache',candidates)
+            proof.dump(candidates,{'runtimes':[{'id':proof.PACK_ID,'unavailable_reason':'legacy unavailable'}]})
+            with patch.object(proof,'shipping_cpu_lock',return_value=None):
+                self.assertEqual(proof.prove_native_installer(proof.PACK_ID,root/'output',root/'cache',candidates),
+                                 {'tested':False,'reason':'legacy unavailable'})
+
+    def test_own_cpu_native_job_requires_actual_lifecycle_receipt_before_passing(self):
+        from test_own_cpu_recipe import SyntheticPublishedCpu
+        import prepare_cpu_proof as metadata
+        import real_worker_fixture
+        import windows_crt_proof
+        with temporary_root() as root:
+            cpu=SyntheticPublishedCpu(root);output=root/'output';output.mkdir()
+            python={'bytes':6,'sha256':hashlib.sha256(b'python').hexdigest()}
+            (cpu.cache/python['sha256']).write_bytes(b'python')
+            contract=root/'crt.json';proof.dump(contract,{'installer':python})
+            candidate={'id':proof.PACK_ID,'recipe':{'python':python,'wheels':[cpu.wheel],
+                       'windows_crt':windows_crt_proof.ID},'unavailable_reason':'review-only candidate'}
+            candidates=root/'candidates.json';proof.dump(candidates,{'runtimes':[candidate]})
+            cargo=root/'cargo.exe';cargo.touch();fixture={'model_revision':'pinned-tiny','audio_sha256':'c'*64}
+            def prepare(cache,directory):
+                self.assertEqual(cache,cpu.cache)
+                directory.mkdir();(directory/'results').mkdir()
+                return {'LUMA_ASR_TEST_OUTPUT':str(directory/'results'),'LUMA_ASR_TEST_MODEL':'pinned-model'},fixture
+            def native(executable,**kwargs):
+                self.assertEqual(kwargs['test_name'],'asr_components::tests::native_direct_recipe_installs_repairs_and_removes')
+                env=kwargs['env'];self.assertEqual(env['LUMA_ASR_TEST_MODEL'],'pinned-model')
+                self.assertEqual(env['LUMA_ASR_TEST_VERIFIER_SOURCE_SHA'],'b'*40)
+                runtime=json.loads(Path(env['LUMA_ASR_RECIPE_RUNTIME']).read_text(encoding='utf-8'))
+                self.assertEqual(runtime,candidate)
+                self.assertTrue((Path(env['LUMA_ASR_RECIPE_INPUTS'])/cpu.wheel['filename']).is_file())
+                lifecycle={'schema':1,'passed':True,'verifier_source_sha':'b'*40,
+                           'embedded_worker_sha256':proof.sha256(proof.ROOT.parent.parent/'src-tauri/src/asr/worker.py'),
+                           **fixture,'managed_receipt_policy_selection_tested':True,
+                           'cpu_thread_policy':'luma-cpu-seq-1:cpu_threads=1','global_managed_path_selection_tested':False,
+                           'injected_lease_retention_tested':True,'cold_warm_srt_export_tested':True,
+                           'active_cancellation_recovery_tested':True,
+                           'transitions':[{'operation':operation,'process_exited_when_lease_available':True,'script_removed':True}
+                                          for operation in ('model-replacement','release-idle','legacy-release','active-cancellation','shutdown')]}
+                proof.dump(Path(env['LUMA_ASR_TEST_OUTPUT'])/'lifecycle.json',lifecycle)
+                return {'exit_code':0,'tree_drained':True,'stdout':'','stderr':''}
+            with patch.object(metadata,'ROOT',cpu.root),patch.object(real_worker_fixture,'ROOT',cpu.root), \
+                 patch.object(real_worker_fixture,'prepare',side_effect=prepare), \
+                 patch.object(windows_crt_proof,'CONTRACT',contract),patch.object(proof.sys,'platform','win32'), \
+                 patch.object(proof.shutil,'which',return_value=str(cargo)),patch.object(job,'run_owned_cargo_test',side_effect=native), \
+                 patch.object(proof,'owned',side_effect=AssertionError('must use Windows Job')),patch('builtins.print'):
+                result=proof.prove_native_installer(proof.PACK_ID,output,cpu.cache,candidates,source_sha='b'*40)
+            self.assertTrue(result['passed'])
+            self.assertTrue(result['real_worker_lifecycle']['tested'])
+            self.assertTrue(result['real_worker_lifecycle']['managed_use_lease_tested'])
+            self.assertTrue(result['real_worker_lifecycle']['lifecycle']['managed_receipt_policy_selection_tested'])
+            self.assertEqual(list(output.iterdir()),[])
+
     def test_native_worker_lease_coverage_requires_complete_matching_lifecycle(self):
         fixture={'model_revision':'pinned','audio_sha256':'c'*64}
         lifecycle={'schema':1,'passed':True,'verifier_source_sha':'b'*40,'embedded_worker_sha256':'d'*64,
@@ -101,7 +165,7 @@ class WindowsInstallerJobTests(unittest.TestCase):
             bad=copy.deepcopy(lifecycle);bad['transitions'][0]['process_exited_when_lease_available']=False
             with self.assertRaises(ValueError):proof.validate_native_worker_lifecycle(bad,fixture,'b'*40)
 
-    def exercise(self,root,job_result,*,raises=False,with_fixture=False,prepare_failure=False):
+    def exercise(self,root,job_result,*,raises=False,with_fixture=False,prepare_failure=False,capture_print=True):
         output=root/'output';output.mkdir();cache=root/'cache';cache.mkdir()
         pin={'bytes':6,'sha256':hashlib.sha256(b'python').hexdigest()}
         (cache/pin['sha256']).write_bytes(b'python')
@@ -122,7 +186,8 @@ class WindowsInstallerJobTests(unittest.TestCase):
         with patch.object(proof.sys,'platform','win32'),patch.object(proof.shutil,'which',return_value=str(cargo)), \
              patch.object(job,'run_owned_cargo_test',side_effect=run),patch('real_worker_fixture.final_cpu_recipe',return_value=with_fixture), \
              patch('real_worker_fixture.prepare',side_effect=prepare), \
-             patch.object(proof,'owned',side_effect=AssertionError('must use Job')),patch('builtins.print'):
+             patch.object(proof,'owned',side_effect=AssertionError('must use Job')), \
+             (patch('builtins.print') if capture_print else nullcontext()):
             try:
                 result=proof.prove_native_installer('fixture',output,cache,candidates,progress=lambda value:updates.append(copy.deepcopy(value)))
                 error=None
@@ -137,6 +202,32 @@ class WindowsInstallerJobTests(unittest.TestCase):
             self.assertTrue(result['windows_owned_job']['natural_drain_completed'])
             self.assertNotIn('stdout',result['windows_owned_job']);self.assertEqual(list(output.iterdir()),[])
             self.assertTrue(updates[-1]['windows_owned_job']['tree_drained'])
+
+    def test_unicode_native_diagnostics_preserve_results_under_legacy_streams(self):
+        stdout_text='Native proof completed for 子 日本語 é 测试\n'
+        stderr_text='Native stderr for 子 日本語 é 测试\n'
+        self.assertEqual(proof.stream_diagnostic(stdout_text,io.StringIO()),stdout_text)
+        for code,drained,raises in ((0,True,False),(1,True,False),(0,False,False),(0,True,True),(0,False,True)):
+            with self.subTest(code=code,drained=drained,raises=raises),temporary_root() as root:
+                value={'exit_code':code,'tree_drained':drained,'stdout':stdout_text,'stderr':stderr_text,
+                       'diagnostic_label':'owned 子 日本語'}
+                before=copy.deepcopy(value)
+                with io.BytesIO() as out,io.BytesIO() as err, \
+                     io.TextIOWrapper(out,encoding='cp1252',errors='strict',newline='\n') as stdout, \
+                     io.TextIOWrapper(err,encoding='ascii',errors='strict',newline='\n') as stderr:
+                    with patch.object(proof.sys,'stdout',stdout),patch.object(proof.sys,'stderr',stderr):
+                        output,result,error,updates=self.exercise(root,value,raises=raises,capture_print=False)
+                    self.assertEqual(out.getvalue(),stdout_text.encode('cp1252',errors='backslashreplace'))
+                    self.assertEqual(err.getvalue(),stderr_text.encode('ascii',errors='backslashreplace'))
+                self.assertEqual(value,before)
+                self.assertEqual(updates[-1]['windows_owned_job']['diagnostic_label'],'owned 子 日本語')
+                receipt=root/'progress.json';proof.dump(receipt,updates[-1])
+                self.assertIn('owned 子 日本語'.encode('utf-8'),receipt.read_bytes())
+                self.assertEqual((output/'recipe inputs é 测试').exists(),not drained)
+                if raises:self.assertIsInstance(error,job.JobRunError)
+                elif code or not drained:self.assertIsInstance(error,RuntimeError)
+                else:self.assertIsNone(error);self.assertTrue(result['passed'])
+                if error:self.assertIsNone(result)
 
     def test_windows_job_failure_is_strict_and_cleanup_requires_confirmed_drain(self):
         for drained in (False,True):

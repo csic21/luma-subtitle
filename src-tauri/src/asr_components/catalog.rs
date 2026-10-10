@@ -199,7 +199,9 @@ pub(super) fn allowed_redirect(url: &Url, source: Source) -> bool {
         Source::Wheel => host == "files.pythonhosted.org",
         Source::CpuWheel => matches!(host, "github.com" | "release-assets.githubusercontent.com"),
         Source::MicrosoftCrt => host == "download.visualstudio.microsoft.com",
-        Source::Model => matches!(host, "huggingface.co" | "cdn-lfs.huggingface.co" | "cdn-lfs.hf.co" | "cdn-lfs-us-1.hf.co" | "cdn-lfs-eu-1.hf.co") || host.ends_with(".xethub.hf.co"),
+        // Exact additional model CDN hosts documented by Hugging Face; these
+        // remain redirect-only and do not expand immutable catalog sources.
+        Source::Model => matches!(host, "huggingface.co" | "cdn-lfs.huggingface.co" | "cdn-lfs.hf.co" | "cdn-lfs-us-1.hf.co" | "cdn-lfs-eu-1.hf.co" | "us.aws.cdn.hf.co" | "us.gcp.cdn.hf.co") || host.ends_with(".xethub.hf.co"),
     }
 }
 

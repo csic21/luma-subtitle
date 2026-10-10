@@ -2,15 +2,16 @@
 """Test extracted pack using only its private interpreter in a poisoned env."""
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from build import ROOT, ALLOWED, dump, embed_nagisa, fetch, safe_name, sha256
+from fixture_paths import temporary_root
 
 
 def diagnostic_json(value, **kwargs):
@@ -153,17 +154,86 @@ def managed_worker_runtime_probe(executable, worker, env, cwd):
     return result
 
 
+
+def prepare_cpu_smoke(manifest, root, worker, cache, destination):
+    from own_cpu_recipe import PACK_ID, cached_component, prepare_published_worker
+    if manifest['id'] != PACK_ID or manifest['platform'] != 'windows-x64' or manifest['backend'] != 'faster-whisper':
+        raise ValueError('Own CPU smoke requires the exact managed Windows pack')
+    lock = json.loads((ROOT / 'locks' / (PACK_ID + '.json')).read_text(encoding='utf-8'))
+    component = cached_component(lock, cache, root=ROOT)
+    identity = {key: value for key, value in component.items() if key != 'proof'}
+    if manifest.get('component_provenance') != identity:
+        raise ValueError('Reference runtime manifest differs from the pinned CPU component')
+    policy = prepare_published_worker(worker, root, cache, component, manifest['source_sha'], destination)
+    component['proof_path'] = Path(cache) / component['publication_proof']['sha256']
+    return component, policy
+
+
+def cpu_reference_inference(executable, worker, root, model, switch_model, audio, env, work, manifest, component):
+    """Reuse native Tiny/cleanup checks, retaining separate proof-layer identity."""
+    if model.resolve() == switch_model.resolve():
+        raise ValueError('Reference CPU model switch requires a distinct directory')
+    destination = work / 'reference-cpu-inference.json'
+    provenance = root / 'Lib/site-packages/ctranslate2-4.8.2.dist-info/LUMA_CPU_BUILD.json'
+    auditor = ROOT / 'self_test.py'
+    command = [str(executable), '-I', '-B', '-u', '-X', 'utf8', str(ROOT / 'ct2-cpu/verify_runtime.py'),
+               '--root', str(root), '--model', str(model), '--switch-model', str(switch_model),
+               '--audio', str(audio), '--worker', str(worker), '--report', str(destination),
+               '--host-auditor', str(auditor), '--host-auditor-sha256', sha256(auditor),
+               '--build-provenance', str(provenance), '--build-provenance-sha256', sha256(provenance),
+               '--source-sha', manifest['source_sha'], '--component-source-sha', component['component_source_sha'],
+               '--publication-proof', str(component['proof_path'])]
+    from windows_crt_proof import helper_process
+    from real_worker_fixture import bounded_json
+    code, out, err = helper_process(command, env, work, timeout=900, output_limit=1_000_000)
+    if code:
+        raise RuntimeError(f'Reference CPU inference/cleanup failed ({code}):\n{out[-12000:]}\n{err[-12000:]}')
+    report = bounded_json(destination, work, 4_000_000)
+    policy = report.get('cpu_thread_policy', {})
+    lifecycle = report.get('source_worker_lifecycle', {})
+    if (report.get('passed') is not True or report.get('inference', {}).get('cold_and_warm') is not True
+            or report.get('host_crt_fallback_allowed') is not False
+            or report.get('offline_audit_enabled') is not True
+            or report.get('isolated') is not True or report.get('system_python_used') is not False
+            or report.get('inherited_python_path_ignored') is not True or not report.get('loaded_modules')
+            or report.get('host_auditor', {}).get('source_sha') != manifest['source_sha']
+            or report.get('host_auditor', {}).get('sha256') != sha256(auditor)
+            or report.get('verifier', {}).get('source_sha') != manifest['source_sha']
+            or report.get('verifier', {}).get('sha256') != sha256(ROOT / 'ct2-cpu/verify_runtime.py')
+            or policy.get('source_sha') != manifest['source_sha']
+            or policy.get('component_source_sha') != component['component_source_sha']
+            or type(policy.get('cpu_threads')) is not int or policy.get('cpu_threads') != 1 or policy.get('variant') != 'luma-cpu-seq-1'
+            or policy.get('managed_receipt_selection_tested') is not False
+            or policy.get('constructor_overridden') is not False
+            or policy.get('build_provenance_sha256') != sha256(provenance)
+            or policy.get('worker_sha256') != hashlib.sha256(worker.read_text(encoding='utf-8').encode('utf-8')).hexdigest()
+            or any(lifecycle.get(key) is not True for key in ('eof_after_inference', 'model_switch_after_inference', 'explicit_unload_after_inference'))):
+        raise ValueError('Reference CPU inference evidence is incomplete or source-mismatched')
+    from own_cpu_recipe import strict_cpu_closure
+    loaded = [{'path': item['path'], 'normal': [], 'delay': []} for item in report['loaded_modules']]
+    if not strict_cpu_closure(loaded)['passed']:
+        raise ValueError('Reference CPU inference loaded a forbidden native library')
+    report.update(proof_layer='reference-runtime-source-policy', normal_process_exit=True,
+                  published_component=component['component_source_sha'],
+                  managed_receipt_selection_tested=False, global_managed_path_selection_tested=False)
+    return report
+
+
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--manifest', type=Path, required=True); p.add_argument('--worker', type=Path, required=True); p.add_argument('--cache', type=Path, required=True)
     a = p.parse_args(); manifest = json.loads(a.manifest.read_text(encoding='utf-8')); output = a.manifest.parent
     archive = output / manifest['archive']['url'].rsplit('/', 1)[-1]
     assert sha256(archive) == manifest['archive']['sha256'] and archive.stat().st_size == manifest['archive']['bytes']
-    with tempfile.TemporaryDirectory(prefix='luma-asr-clean-') as temp:
-        work = Path(temp); unpacked = work / 'first-location'; extract(archive, unpacked)
+    # Canonicalize only this newly owned root before deriving any child paths.
+    # Windows TEMP may use an 8.3 spelling; installed-member guards stay strict.
+    with temporary_root(prefix='luma-asr-clean-') as work:
+        unpacked = work / 'first-location'; extract(archive, unpacked)
         assert sum(p.stat().st_size for p in unpacked.rglob('*') if p.is_file()) == manifest['installed_bytes']
         assert len([p for p in unpacked.rglob('*') if p.is_file()]) == manifest['max_files']
         env = clean_environment(work / 'clean-home')
         nagisa = None; worker = a.worker.resolve()
+        managed_cpu = manifest['platform'] == 'windows-x64' and manifest['backend'] == 'faster-whisper'
+        cpu_component = cpu_policy = cpu_reference = None
         managed_qwen = manifest['platform'] == 'windows-x64' and manifest['backend'] == 'qwen3-asr'
         if managed_qwen:
             probe = work / 'nagisa-probe.py'
@@ -173,6 +243,9 @@ def main():
             worker.write_text(embed_nagisa(a.worker.read_text(encoding='utf-8'), managed_worker=True), encoding='utf-8')
         relocated = work / 'Relocated private runtime é 测试'; unpacked.rename(relocated)
         executable = relocated / manifest['entrypoint']
+        if managed_cpu:
+            worker = work / 'managed-cpu-worker.py'
+            cpu_component, cpu_policy = prepare_cpu_smoke(manifest, relocated, a.worker.resolve(), a.cache, worker)
         if managed_qwen:
             adapted = nagisa_probe(executable, probe, env, work, '--adapt')
             assert baseline['words'] == adapted['words'] and baseline['postags'] == adapted['postags']
@@ -190,12 +263,19 @@ def main():
                 wheel = next(item for item in lock['wheels'] if item['name'] == 'numba')
                 optional = inactive_numba_plugin(relocated, a.cache, wheel)
             native_inventory = inventory(relocated, optional)
-            print('WINDOWS_NATIVE_CLOSURE=' + json.dumps({'passed': native_inventory['passed'],
+            if managed_cpu:
+                from own_cpu_recipe import strict_cpu_closure
+                native_inventory = strict_cpu_closure(native_inventory['files'])
+                print('WINDOWS_OWN_CPU_CLOSURE=' + diagnostic_json(native_inventory), flush=True)
+                if not native_inventory['passed']:
+                    raise ValueError('Own CPU runtime contains forbidden or unresolved native dependencies')
+            else:
+                print('WINDOWS_NATIVE_CLOSURE=' + json.dumps({'passed': native_inventory['passed'],
                   'native_files': len(native_inventory['files']), 'blocked_dependencies': native_inventory['blocked_dependencies'],
                   'gpu_files': native_inventory['gpu_files'], 'inactive_optional_plugins': native_inventory['inactive_optional_plugins'],
                   'required_closure_passed': native_inventory['required_closure_passed'],
                   'full_tree_closure_passed': native_inventory['full_tree_closure_passed']}, sort_keys=True), flush=True)
-            assert native_inventory['required_closure_passed'], 'Configured Windows runtime has unresolved required native dependencies'
+                assert native_inventory['required_closure_passed'], 'Configured Windows runtime has unresolved required native dependencies'
         result = subprocess.run([str(executable), '-I', '-B', '-u', '-X', 'utf8', str(relocated / 'self_test.py')],
                                 capture_output=True, text=True, encoding='utf-8', env=env, cwd=work, timeout=240)
         if result.returncode:
@@ -205,7 +285,7 @@ def main():
         if managed_qwen:
             actual_worker_runtime = managed_worker_runtime_probe(executable, worker, env, relocated)
             print('MANAGED_QWEN_WORKER_RUNTIME=' + diagnostic_json(actual_worker_runtime), flush=True)
-        if native_inventory is not None:
+        if native_inventory is not None and not managed_cpu:
             validate_configured_closure(native_inventory, imports)
             print('WINDOWS_CONFIGURED_RUNTIME_POLICY=' + diagnostic_json({key: native_inventory[key] for key in (
                 'passed', 'required_closure_passed', 'full_tree_closure_passed', 'inactive_optional_plugins', 'configured_threading_proof')
@@ -229,21 +309,32 @@ def main():
                 shutil.copyfile(fetch(item, a.cache), target)
             audio = work / 'jfk.wav'; shutil.copyfile(fetch(fixture['audio'], a.cache), audio)
             common = {'engine': 'whisper-accelerated', 'device': 'cpu', 'model_path': str(model), 'audio_path': str(audio), 'language': 'en'}
-            frames = worker_requests(executable, worker, [dict(common, id='probe', op='probe'), dict(common, id='cold', op='transcribe'), dict(common, id='warm', op='transcribe')], env, work)
-            by_id = {f['id']: f for f in frames if f.get('event') in {'probe', 'result', 'error'}}
-            assert by_id['probe']['ready'], by_id
-            for key in ('cold', 'warm'):
-                result = by_id[key]
-                assert result['event'] == 'result' and result['device'] == 'cpu', result
-                assert 'country' in ' '.join(s['text'] for s in result['segments']).lower(), result
-                previous = 0
-                for segment in result['segments']:
-                    assert previous <= segment['start_ms'] < segment['end_ms'] <= 11001
-                    previous = segment['end_ms']
-            assert not by_id['cold']['reused'] and by_id['warm']['reused']
-            inference = {'tested': True, 'backend': 'faster-whisper', 'device': 'cpu', 'cold_and_warm': True,
-                         'segments': by_id['cold']['segments'], 'model_revision': fixture['faster_whisper_tiny']['version'],
-                         'audio_sha256': fixture['audio']['sha256']}
+            if managed_cpu:
+                switched = work / 'fixture model switch 子 日本語 é'
+                shutil.copytree(model, switched)
+                cpu_reference = cpu_reference_inference(executable, a.worker.resolve(), relocated, model, switched, audio, env, work, manifest, cpu_component)
+                frames = []
+            else:
+                frames = worker_requests(executable, worker, [dict(common, id='probe', op='probe'), dict(common, id='cold', op='transcribe'), dict(common, id='warm', op='transcribe')], env, work)
+            if managed_cpu:
+                inference = {'tested': True, 'backend': 'faster-whisper', 'device': 'cpu',
+                             **cpu_reference['inference'], 'model_revision': fixture['faster_whisper_tiny']['version'],
+                             'audio_sha256': fixture['audio']['sha256']}
+            else:
+                by_id = {f['id']: f for f in frames if f.get('event') in {'probe', 'result', 'error'}}
+                assert by_id['probe']['ready'], by_id
+                for key in ('cold', 'warm'):
+                    result = by_id[key]
+                    assert result['event'] == 'result' and result['device'] == 'cpu', result
+                    assert 'country' in ' '.join(s['text'] for s in result['segments']).lower(), result
+                    previous = 0
+                    for segment in result['segments']:
+                        assert previous <= segment['start_ms'] < segment['end_ms'] <= 11001
+                        previous = segment['end_ms']
+                assert not by_id['cold']['reused'] and by_id['warm']['reused']
+                inference = {'tested': True, 'backend': 'faster-whisper', 'device': 'cpu', 'cold_and_warm': True,
+                             'segments': by_id['cold']['segments'], 'model_revision': fixture['faster_whisper_tiny']['version'],
+                             'audio_sha256': fixture['audio']['sha256']}
         report = {'schema': 1, 'pack_id': manifest['id'], 'source_sha': manifest['source_sha'],
                   'archive_sha256': manifest['archive']['sha256'], 'relocated': True, 'isolated': True,
                   'system_python_used': False, 'system_packages_used': False, 'offline_protocol_tested': True,
@@ -251,6 +342,7 @@ def main():
                   'imports': imports, 'inference': inference,
                   'nagisa_unicode': nagisa,
                   'actual_worker_runtime': actual_worker_runtime,
+                  'own_cpu_policy': cpu_policy, 'own_cpu_reference': cpu_reference,
                   'windows_native_inventory': native_inventory,
                   'limitations': ['No CUDA validation or CUDA redistribution.', 'No Developer ID signing, notarization, Gatekeeper bypass, or clean-GUI-machine validation.']}
         dump(output / f'{manifest["id"]}.smoke.json', report)

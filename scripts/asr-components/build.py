@@ -269,6 +269,10 @@ def pe_imports(path):
 
 def prune_reviewed_files(root, pack_id):
     policy = json.loads((ROOT / 'pruning.json').read_text(encoding='utf-8'))['packs'].get(pack_id)
+    if pack_id == 'faster-whisper-cpu-windows-x64':
+        if policy:
+            raise ValueError('Own CPU wheel must never undergo native binary pruning')
+        return
     if not policy:
         return
     library = root.joinpath(*safe_name(policy['verify_pe_imports']).parts)
@@ -362,6 +366,10 @@ def build(pack_id, output, cache, source_sha, native=True, installer='wheel', wi
     lock = json.loads(lock_path.read_text(encoding='utf-8'))
     if lock['platform'] != pack['platform']:
         raise ValueError('Lock platform mismatch')
+    component = None
+    if pack_id == 'faster-whisper-cpu-windows-x64':
+        from own_cpu_recipe import cached_component
+        component = cached_component(lock, cache, root=ROOT)
     output.mkdir(parents=True, exist_ok=True); cache.mkdir(parents=True, exist_ok=True)
     root = output / 'staging' / pack_id
     if root.exists():
@@ -386,6 +394,9 @@ def build(pack_id, output, cache, source_sha, native=True, installer='wheel', wi
     else:
         raise ValueError('Unknown reviewed assembly method')
     clean(root, site)
+    if component is not None:
+        from own_cpu_recipe import verify_installed_wheel
+        verify_installed_wheel(root, component['wheel'], cache, component['proof']['provenance'])
     if windows_crt is not None:
         if not native or pack['platform'] != 'windows-x64':
             raise ValueError('Direct CRT inputs require a native Windows runtime')
@@ -419,6 +430,8 @@ def build(pack_id, output, cache, source_sha, native=True, installer='wheel', wi
               'archive': {'url': f'https://github.com/{config["repository"]}/releases/download/{config["release_tag"]}/{filename}',
                           'bytes': archive.stat().st_size, 'sha256': sha256(archive)},
               'evidence': 'See separate native smoke report. This manifest alone is not test or publication proof.'}
+    if component is not None:
+        result['component_provenance'] = {key: value for key, value in component.items() if key != 'proof'}
     dump(output / f'{pack_id}.manifest.json', result)
     shutil.copyfile(root / 'LICENSES.json', output / f'LICENSES-{pack_id}.json')
     print(json.dumps(result, indent=2))

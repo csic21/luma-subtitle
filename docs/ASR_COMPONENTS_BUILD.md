@@ -3,7 +3,7 @@
 Optional ASR setup is separate from the native whisper.cpp application release.
 The shipping design is **direct upstream download, followed by private offline
 assembly on the user's machine**. Luma does not publish assembled Python/runtime
-ZIPs. The only separate binary publication planned here is Luma's narrow
+ZIPs. The only separate binary publication is Luma's narrow
 CPU-only CTranslate2 wheel, with its exact source, notices and proof metadata.
 
 Users explicitly review the selected component's sources, sizes and applicable
@@ -14,16 +14,20 @@ ASR/forced-aligner model weights are separate, explicit downloads and are never
 part of engine assembly or public component artifacts. An upstream package's
 bundled tokenizer data, such as Nagisa's, is part of that package's locked input.
 
-**Activation status (2026-10-09):** the embedded runtime catalog still marks all
-four candidates unavailable. Review-only recipe generation does not activate
-those entries, and no CPU wheel has been published. Same-wheel diagnostics now
-establish Windows CPU cold/warm inference and normal cleanup with
-`cpu_threads=1`; default-thread cleanup hangs. The production managed-only policy
-is implemented, but a fresh source-build proof of the integrated code is still
-pending. Diagnostic artifacts are not publication candidates. Final native
-evidence, exact catalog pins and release review remain required; passing app
-builds or setup checks alone does not establish speech-model inference on every
-target. The existing stable application release remains separate and unchanged.
+**Activation status (2026-10-10):** the activation catalog enables all four
+optional experimental recipes. Luma's CPU-only CT2 wheel, sources, notices and
+proof are published at the versioned
+[`asr-ct2-cpu-4.8.2-1` release](https://github.com/csic21/luma-subtitle/releases/tag/asr-ct2-cpu-4.8.2-1)
+and their public bytes match the reviewed artifacts. The shipping lock pins every
+input by size and SHA-256; publication follows a no-overwrite policy, not a claim
+of platform-enforced release immutability. The published wheel was source-built;
+app setup downloads that pinned wheel and does not compile. All four native
+runtime jobs passed at source `401c344b6e9786ba52af280639b57b7c3ed27dbf` in
+[run 38026666599](https://github.com/csic21/luma-subtitle/actions/runs/38026666599),
+including receipt-selected Windows CPU worker lifecycle checks. The 1.2.0 app
+release is still pending. Exact-final-source native assembly, receipt/lease
+lifecycle, app checks and independent review remain gates before merge and
+application release; historical runs do not satisfy those final-source gates.
 
 ## Current component targets and size boundaries
 
@@ -32,7 +36,7 @@ not an active whole-runtime release tag.
 
 | Target | Native platform | Minimum OS | Core packages | Locked upstream wheel bytes only |
 | --- | --- | --- | --- | ---: |
-| faster-whisper-cpu-windows-x64 | Windows x64 | Windows 10 | faster-whisper 1.2.1, Luma CPU CTranslate2 4.8.2 | Pending final CPU wheel |
+| faster-whisper-cpu-windows-x64 | Windows x64 | Windows 10 | faster-whisper 1.2.1, Luma CPU CTranslate2 4.8.2 | 90,841,467 |
 | mlx-whisper-metal-macos-arm64 | Apple Silicon | macOS 14 | mlx-whisper 0.4.3, MLX/MLX Metal 0.29.3, PyTorch 2.9.1 | 198,349,117 |
 | qwen3-asr-cpu-windows-x64 | Windows x64 | Windows 10 | qwen-asr 0.0.6, PyTorch 2.9.1 CPU, Transformers 4.57.6 | 363,486,390 |
 | qwen3-asr-cpu-macos-arm64 | Apple Silicon | macOS 14 | qwen-asr 0.0.6, PyTorch 2.9.1, Transformers 4.57.6 | 293,589,133 |
@@ -43,15 +47,22 @@ staging/cache copies and installed expansion. Python adds 22,011,023 download
 bytes on Windows or 25,013,243 on macOS. The fixed direct-Microsoft package adds
 25,635,768 bytes where required. These are individual input sizes, **not** final
 installed totals, free-space measurements, compressed runtime assets or memory
-requirements. The old Windows faster-whisper total used the rejected upstream
-CT2 wheel and is not a valid total for the new CPU recipe.
+requirements. The Windows Whisper total including Python and the direct Microsoft package is
+138,488,258 bytes. The rejected vendor CT2 wheel is not a recipe input.
 
 `measure_recipe_caps.py` reads only already verified local archives; it does not
 fetch missing inputs. `recipe-caps.json` labels measured archive member counts
 separately from conservative enforced extraction/final-tree caps. The two Qwen
 candidates use a 4 GiB/100,000-file final-tree ceiling; this is not a measured
-installed footprint. Final CPU recipe sizes/caps must be recomputed from the
-approved wheel, never copied from the old upstream-CT2 candidate.
+installed footprint. The published CPU wheel was size/hash checked and measured without execution:
+43 regular members, 25,051,858 expanded bytes and two native binaries. Unchanged
+Python/21-wheel measurements are inherited from the reviewed prior caps with
+identical locked identities, not freshly measured in the activation workspace.
+The CPU archive-input aggregate is 272,310,667 bytes / 5,477 files. Its final-tree
+cap is 277,111,469 bytes / 5,909 files, including conservative assembly allowances.
+The previous aggregate replacement-RECORD allowance is retained with its surplus,
+and the new wheel adds a measured 25,498-byte RECORD allowance. The JSON records
+this provenance explicitly; final caps are not actual installed usage.
 
 Qwen CPU remains experimental and high-memory. Both ASR and aligner weights are
 loaded as FP32 on CPU; the 0.6B pair alone needs approximately 7.5 GB of weight
@@ -73,8 +84,8 @@ publisher's exact platform wheel, version, HTTPS origin, bytes and SHA-256.
 Python comes directly from Astral, wheels such as PyAV and PyTorch directly from
 their original publisher distribution, and the CRT package directly from
 Microsoft. Luma does not mirror, proxy or republish these runtime inputs. The
-exception is the separately reviewed Luma CPU CT2 wheel, whose immutable URL,
-bytes and hash must be pinned after its own guarded publication. The original
+exception is the separately reviewed Luma CPU CT2 wheel, whose versioned URL,
+bytes and hash are pinned after its own guarded publication. The original
 Windows CT2 wheel is excluded from the current managed recipe.
 
 The verified application downloader owns all artifact downloads. Compiled catalog
@@ -135,8 +146,12 @@ CI generates it twice under `RUNNER_TEMP`, compares bytes and logs its hash.
 The generator never changes the production catalog and retains an unavailable
 reason for each candidate. `engine-terms.lock.json` pins displayed engine texts
 and source-version evidence; an inventory is not a blanket license grant or a
-runtime pass. The Windows faster-whisper candidate remains excluded until the
-CPU wheel and complete app-local dependency recipe are approved.
+runtime pass. The production catalog separately incorporates the reviewed recipes; the generator
+continues to emit disabled candidates even after activation. For ownCPU generation,
+provide `--cpu-publication-proof` with the exact downloaded proof pinned in
+`cpu_component`; no live release discovery or implicit proof substitution occurs.
+Its source identity remains `370c1e3` while new app/native reports use their own
+activation-source identity.
 
 ## Licenses, notices and redistribution boundary
 
@@ -211,24 +226,30 @@ Any omission drift fails; the whole model subtree is not removed silently.
 
 ### Current Windows CPU evidence
 
-Producer [run 37953677195](https://github.com/csic21/luma-subtitle/actions/runs/37953677195),
-source `3006b955`, built two genuinely fresh wheels at the same canonical native
-path. Their complete bytes matched: **25,058,630 bytes**, SHA-256
-`4644c5eb94492ab61d9749ee122e12c612c03634495d9cb59b6c18e3404cd1c0`.
-This is a diagnostic wheel identity, not a final installed-runtime size or an
-approved download pin.
+Source proof [run 37996190880](https://github.com/csic21/luma-subtitle/actions/runs/37996190880),
+at `370c1e3145b1a052a8317d8380f60b78b498f262`, passed both native jobs and produced
+two genuinely fresh matching wheels at the same canonical path. The published
+wheel is **25,058,630 bytes**, SHA-256
+`5ce50225a796f676f812b732cc9e266d90e6ac3ef70e7de7a44e499a244bc449`.
+[Publication run 38013836100](https://github.com/csic21/luma-subtitle/actions/runs/38013836100)
+promoted the reviewed artifact without recompilation. Independent reads checked
+all four public files, every archived Luma source file and all eleven notices;
+the existing stable application release and `latest.json` stayed unchanged.
 
-Same-wheel diagnostic [replay 37970005361](https://github.com/csic21/luma-subtitle/actions/runs/37970005361)
-passed cold/warm timed-SRT inference and normal EOF, explicit unload and model
-switch with the supported `cpu_threads=1` setting; default-thread cleanup cases
-hung. Rust cold/warm transcription, export and all five exercised lifecycle
-transitions passed with a genuine Unicode model path. The overall replay still
-failed because its outer Cargo Windows Job did not drain naturally; that replay
-did not identify the surviving descendant. These results localize the ASR cleanup
-failure and supersede the earlier unknown-stage timeout account; they are not
-a clean end-to-end production proof.
-The integrated managed-only policy above still needs a new fresh source-build
-proof, including clean process ownership and shutdown, before publication review.
+The proof passed isolated native imports/closure, pinned Tiny/JFK cold/warm timed
+speech inference, Unicode relocation, model switch, explicit unload and normal
+EOF under the one-thread source-selected policy. It explicitly records
+`managed_receipt_selection_tested=false`; it does not establish app-global or
+GUI selection. Earlier default-thread cleanup failures explain the one-thread
+policy and are not converted into performance claims.
+
+The final recipe proof must retain both independent layers: source-selected
+reference assembly/smoke for this exact published wheel, and the actual Rust
+managed receipt/lease lifecycle test. The latter must verify cold/warm SRT/export,
+model replacement, release-idle, legacy release, active cancellation/recovery,
+shutdown, script removal and process exit before lease release. A synthetic
+constructor override or source-proof success cannot replace it. Final-source
+native results remain required before release.
 
 ### Native proof and repeatability scope
 
@@ -268,7 +289,7 @@ The Windows proof requires all of the following:
   The native Rust installer proof separately holds a real managed use lease and
   rechecks the same production receipt/interpreter selector on every worker spawn
   using a test-owned catalog/root. That context is absent from release builds;
-  the production embedded catalog stays disabled until publication review.
+  the production embedded catalog is enabled only by the separately reviewed activation change.
 
 This proves, if successful, fixed-path fresh-build repeatability on the recorded
 CI toolchain/host. It does **not** prove path independence, cross-machine or
@@ -287,7 +308,7 @@ It is mutually exclusive with failed diagnostic retention; ordinary, manual,
 reusable and PR routes remain metadata-only. No private runtime, Microsoft DLL,
 model or download cache is uploaded.
 
-The dormant `.github/workflows/asr-cpu-wheel-publish.yml` requires separate
+The guarded `.github/workflows/asr-cpu-wheel-publish.yml` requires separate
 maintainer approval and a request-only commit at `.github/asr-cpu-wheel-request.json`.
 Its sole parent must be the exact tested source. The request binds repository,
 feature branch, source, successful run/attempt, lock identities and expected
@@ -322,34 +343,67 @@ reviewed immutable wheel pin and complete direct-source setup recipe.
 private offline assembly on native Windows x64 and macOS arm64. Each eligible
 recipe is assembled twice and compared, relocated and import-tested, then passed
 to the actual Rust installer lifecycle test for Install, Repair, cancellation
-rollback and removal. The generated original-CT2 Windows candidate is deliberately
-unavailable; the dedicated CPU proof supplies its replacement evidence. A missing
-recipe or failed native dependency gate is not successful setup.
+rollback and removal. The generated Windows CPU candidate uses the published
+ownCPU wheel and must pass the full reference and receipt-selected lifecycle
+layers. A missing recipe or failed native dependency gate is not successful setup.
 
 The workflow uploads only `asr-offline-pip-proof-<pack-id>` JSON evidence. Private
 runtime binaries, model weights and caches stay out of artifacts. Test isolation
 checks private Python search/import paths and actually loaded native libraries.
 Python network/subprocess audit guards are defense in depth, not an OS sandbox.
 
-The latest recorded app checks at source `87a44c76`,
-[run 37981239133](https://github.com/csic21/luma-subtitle/actions/runs/37981239133),
-passed on Windows and macOS, including no-bundle builds. These app checks are
-separate from the native runtime setup and CPU-wheel proof gates.
+The recorded app checks at source `401c344b6e9786ba52af280639b57b7c3ed27dbf`,
+[run 38026666607](https://github.com/csic21/luma-subtitle/actions/runs/38026666607),
+passed on Windows and macOS. These historical checks are separate from native
+setup and CPU-wheel proofs. They do not satisfy the external exact-final-source
+approval gate in [RELEASING.md](../scripts/RELEASING.md).
 
 Keep these evidence categories separate:
 
-- At the same source, native setup [run 37981239029](https://github.com/csic21/luma-subtitle/actions/runs/37981239029)
-  passed both Apple Silicon MLX/Qwen jobs: private offline assembly repeatability,
-  relocated imports and actual Rust install/repair/cancel/remove lifecycle tests.
-  A real Metal tensor ran on the MLX host; this is not Whisper model inference.
-- The Windows Qwen job in that run passed CAB extraction and identity checks,
-  then failed in the actual Rust installer during offline pip script installation
-  with mixed extended/ordinary paths. Build helpers were reaped and the separate
-  runtime Windows Job drained normally; the installer itself still failed.
-  Windows Qwen managed installation is not established as passed.
-- The Windows CPU diagnostic evidence above establishes specific inference and
-  lifecycle results for the recorded wheel, not a final integrated source-build
-  proof or permission to publish it.
+- Native setup [run 38026666599](https://github.com/csic21/luma-subtitle/actions/runs/38026666599)
+  at source `401c344b6e9786ba52af280639b57b7c3ed27dbf` passed all four recipes:
+  private offline assembly repeatability, relocated imports and actual Rust
+  install/repair/cancel/remove lifecycle tests. Windows Qwen also passed the
+  Unicode/Japanese tokenizer and configured-workqueue checks without loading
+  ASR/aligner weights. A real Metal tensor ran on the MLX host, not Whisper
+  speech inference.
+- CPU source proof `37996190880` establishes the exact published wheel's bounded
+  inference and cleanup behavior. In run `38026666599`, Windows CPU reference
+  tests separately passed Tiny cold/warm inference, model switch, unload and
+  normal EOF. The receipt-selected Rust test passed real Tiny SRT/export, active
+  cancellation/recovery, and process/use-lease cleanup using production
+  kill-and-reap. Its managed root/catalog and shared leases were test-owned;
+  global embedded-catalog managed path selection was not tested. The Windows
+  CPU proof JSON SHA-256 is
+  `ef54cf1be41dfe03d1f498d8835a56c699df7a5d941fd73d502a0064f28a5d55`.
+  These are historical exact-source results, not a final-candidate release gate pass.
+- Bounded Windows CPU Qwen3-ASR-0.6B + ForcedAligner-0.6B proof
+  [run 38028126893](https://github.com/csic21/luma-subtitle/actions/runs/38028126893),
+  attempt 1, passed at source `401c344b6e9786ba52af280639b57b7c3ed27dbf` for
+  `qwen3-asr-cpu-windows-x64`. It repeated fresh native readiness, passed the
+  resource gate, downloaded the exact pinned 3,720,689,099-byte model pair and
+  produced three valid ordered timestamped segments from the 11-second JFK
+  fixture. Cold-worker elapsed was 36.875 seconds, including startup/model
+  loading, ASR/alignment, process completion and result checks, excluding
+  native setup/downloads. This is not pure compute time or a real-time claim.
+  Fixture-cache and private-output cleanup passed. The 2,046-byte report SHA-256
+  is `0ac94ff0c8b1394fa6b7cb43362c51ddf17507cf20b745e5c61caa7d75f3d71f`;
+  its fresh-native-proof SHA-256 is
+  `c17d1714bd8edf4bb670703344f5c8b33636d971449e4855cd45f57ba6ba5db7`.
+  Pre-download RAM/disk readings and unverified scopes are recorded in
+  [OPTIONAL_ASR.md](OPTIONAL_ASR.md#validation-boundary-2026-10-10); no general
+  memory fit, peak-memory, 1.7B/macOS, warm/cancel/export/GUI or quality/speed
+  inference follows from this single cold Windows fixture. Qwen managed
+  receipt/use-lease worker lifecycle was not exercised by this bounded invocation.
+- Earlier bounded Windows Qwen attempt [run 38024179671](https://github.com/csic21/luma-subtitle/actions/runs/38024179671)
+  at source `0875deb4430ac84de1fabc80a9f4454589e13fba` passed fresh native
+  readiness and resource gates, downloaded five metadata/tokenizer files
+  (1,736,805 bytes), then rejected the first model-weight redirect. No inference
+  ran. Owned child/cache/private-output cleanup was confirmed; the exact rejected
+  host was not recorded. The independently documented two-host CDN compatibility
+  gap was corrected in the app and fixture (see [model sources](ASR_MODEL_SOURCES.md)).
+  The later passing download does not identify the earlier rejected host. This
+  earlier attempt establishes neither Qwen inference failure nor memory fit.
 - The Linux faster-whisper Tiny/JFK functional smoke exercised the real worker,
   cold/warm transcription, timestamp/SRT validation, export, inference cancellation
   and recovery. It does not validate the new Windows CPU wheel.
@@ -393,7 +447,7 @@ Qwen inference or CRT closure.
 ### Direct Microsoft CRT prerequisite
 
 The implemented Windows Qwen candidate selects `windows_crt:msvc-14.44.35211-x64`;
-the future CPU Whisper recipe must bind its reviewed prerequisite too. This is
+the active CPU Whisper recipe binds the same reviewed prerequisite. This is
 one fixed package contract, not a generic installer. The package executable is
 never run. Bounded exact CAB extraction yields only original `msvcp140.dll`,
 `msvcp140_1.dll` and English/Chinese RTF notices. Existing PBS VCRUNTIME companions
@@ -496,7 +550,8 @@ traversal/link rejection, byte/file ceilings and deterministic-record tests rema
 useful. The historical `pruning.json` removal of one exact unused cuDNN DLL and
 its `INSTALLATION_CHANGES.json` receipt are not the current CPU build strategy
 and do not clear the upstream wheel's Intel/NVIDIA redistribution issues.
-The active CPU recipe builds from source and never fetches or prunes that wheel.
+The published CPU wheel was source-built; app setup downloads that pinned wheel
+and does not compile. The active recipe never fetches or prunes the vendor wheel.
 
 Run dependency-free source/packaging guards locally:
 
@@ -507,5 +562,6 @@ node --test scripts/asr-components/ct2-cpu/publish.node-test.cjs scripts/asr-com
 ```
 
 These unit guards do not install runtimes, run native compilation or establish
-model inference. Successful exact-source native proof and final release review
-remain required before activation or publication.
+model inference. Successful exact activation-source native proof and final release review
+remain required before merge and application release. The separate CPU component
+publication does not satisfy those application-release gates.

@@ -7,16 +7,21 @@ The managed setup design downloads pinned Python and wheels directly from their
 original upstream publishers, plus a separately reviewed Luma CPU-only
 CTranslate2 wheel for Windows Whisper. It runs its private, version-pinned pip
 entirely offline inside staging during Install or Repair, never transcription.
-There is no network dependency resolution or source build. You do not install Python, enter pip commands, or
-change the system environment. Luma does not read Hugging Face credentials or
+The published Windows CPU wheel was source-built; app setup downloads that pinned
+wheel and does not compile or resolve dependencies over the network. You do not
+install Python, enter pip commands, or change the system environment. Luma does
+not read Hugging Face credentials or
 silently switch engines. Whole Python/runtime bundles are not republished by Luma.
 
-**Availability (2026-10-09):** the current embedded catalog still marks the four
-managed runtime candidates unavailable pending final native evidence, exact pins
-and release review. The steps below describe the supported managed setup flow
-for an enabled, verified recipe; they do not make a pending component available.
-The Windows CPU wheel has no final published size or verified download yet.
-See [the build and publication boundaries](ASR_COMPONENTS_BUILD.md).
+**Availability (2026-10-10):** this catalog enables four optional, experimental
+managed recipes: Windows Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen
+CPU on Windows and Apple Silicon. The Windows Whisper recipe pins the published
+[Luma CPU-only CTranslate2 component](https://github.com/csic21/luma-subtitle/releases/tag/asr-ct2-cpu-4.8.2-1)
+by exact bytes and SHA-256. Its wheel is 25,058,630 bytes; the complete engine
+input download is 138,488,258 bytes including private Python and Microsoft CRT,
+excluding models and temporary/installed copies. These are not memory estimates.
+Final activation-source native checks and release review remain release gates;
+see [the build and publication boundaries](ASR_COMPONENTS_BUILD.md).
 
 ## One-click managed setup
 
@@ -162,17 +167,18 @@ python3.12 -m venv "$HOME/.venvs/luma-faster-whisper"
 "$HOME/.venvs/luma-faster-whisper/bin/hf" download dropbox-dash/faster-whisper-large-v3-turbo --local-dir "$HOME/Models/luma/faster-whisper-turbo"
 ```
 
-For Windows CPU, prefer Luma's managed component once its verified recipe becomes
-available. Its CPU-only CTranslate2 build excludes CUDA/cuDNN and Intel OpenMP/MKL.
+For Windows CPU, Luma's managed component is an opt-in experimental choice. Its
+CPU-only CTranslate2 build excludes CUDA/cuDNN and Intel OpenMP/MKL.
 The reviewed Windows `4.8.2/1lumacpu` recipe uses `cpu_threads=1` for reliable
 model cleanup. CPU transcription may be slower; this is not an acceleration or
 throughput promise. The policy is selected only for its active verified managed
 interpreter and exact recipe. External/manual Python runtimes, native Whisper,
 MLX and Qwen keep their existing behavior.
-Final native proof, publication and catalog activation are still required; this
-guide does not supply a ready CPU-wheel download. The general upstream Windows
-CTranslate2 wheel can include GPU libraries and additional terms even when CPU
-execution is selected; it is not the managed CPU recipe. Existing external
+The recipe downloads the published, pinned Luma CPU wheel during managed setup;
+users do not build it or install it with manual pip commands. Exact-final-source
+checks and independent review remain required before the 1.2.0 app release. The
+general upstream Windows CTranslate2 wheel can include GPU libraries and
+additional terms even when CPU execution is selected; it is not the managed CPU recipe. Existing external
 runtimes remain usable through advanced paths, but their dependencies and terms
 must be checked separately.
 
@@ -304,29 +310,59 @@ weight or detect every form of corruption.
   without fabricated percentages. Completion timing includes alignment and cue
   validation. Cancellation discards the worker and its warm model.
 
-## Validation boundary (2026-10-09)
+## Validation boundary (2026-10-10)
 
-- **Windows CPU diagnostics passed specific inference/cleanup checks; final proof is pending:**
-  [Producer run 37953677195](https://github.com/csic21/luma-subtitle/actions/runs/37953677195)
-  produced two identical 25,058,630-byte wheels from genuinely fresh builds at
-  the same canonical native path. [Same-wheel replay 37970005361](https://github.com/csic21/luma-subtitle/actions/runs/37970005361)
-  passed cold/warm timed-SRT inference and normal EOF, unload and model switch
-  with `cpu_threads=1`; default-thread cleanup hung. Rust cold/warm transcription,
-  export and five lifecycle transitions also passed under a genuine Unicode
-  model path. The overall replay failed because its outer Cargo Windows Job did
-  not drain naturally; the surviving descendant was not identified. The
-  managed-only one-thread policy is implemented, but a fresh source-build proof
-  of the integrated code remains pending. No CPU wheel is published, and the
-  diagnostic artifact is not a publication candidate.
-  [The build guide](ASR_COMPONENTS_BUILD.md) records its exact identity and proof
-  limits; these bytes are not a final installed-runtime size or approved catalog
-  pin. Fixed-path repeatability is not path-independent or cross-machine
-  reproducibility, and the Linux result below does not validate this Windows wheel.
-- **Native Apple Silicon setup proof passed:** MLX and Qwen private offline
-  installation reproduced exactly, relocated imports passed, and the actual
-  Rust installer exercised install, repair, cancellation and removal. The MLX
-  runner also executed a real Metal tensor. These checks do not perform Whisper
-  or Qwen speech-model inference and are not speed or quality benchmarks.
+- **Published Windows CPU component source proof passed:**
+  [Run 37996190880](https://github.com/csic21/luma-subtitle/actions/runs/37996190880)
+  at source `370c1e3145b1a052a8317d8380f60b78b498f262` produced two identical
+  fresh-built wheels and passed Tiny/JFK cold/warm speech inference, Unicode
+  relocation, model switch, explicit unload and normal EOF. The supported
+  `cpu_threads=1` / `num_workers=1` policy avoids the observed default-thread
+  cleanup hang and may reduce throughput. The exact wheel, sources, notices and
+  proof were published and independently checked against the reviewed bytes.
+  This source-build proof does not test managed receipt or global UI selection.
+  Fixed-path repeatability is not path-independent or cross-machine reproducibility.
+- **All four native runtime jobs passed:**
+  [Run 38026666599](https://github.com/csic21/luma-subtitle/actions/runs/38026666599)
+  at source `401c344b6e9786ba52af280639b57b7c3ed27dbf` passed private offline
+  assembly, relocation and actual Rust install, repair, cancellation and removal
+  for Windows Whisper CPU, Windows Qwen and Apple Silicon Qwen/MLX. Windows CPU
+  reference checks exercised real Tiny cold/warm inference, model switch, unload
+  and normal EOF. Separate receipt-selected Rust tests exercised SRT/export,
+  active inference cancellation/recovery and process/lease cleanup under a
+  test-owned managed root/catalog, using production kill-and-reap. Global
+  embedded-catalog managed path selection was not tested. The MLX runner executed
+  a real Metal tensor, not Whisper speech inference. Qwen setup/import/Japanese
+  tokenizer/workqueue checks did not load ASR/aligner weights. This run is
+  historical evidence; exact-final-source app checks, all four native runtime
+  jobs and independent review remain gates before merge and app release.
+- **One cold Windows CPU Qwen 0.6B speech proof passed:**
+  [Run 38028126893](https://github.com/csic21/luma-subtitle/actions/runs/38028126893),
+  attempt 1, at source `401c344b6e9786ba52af280639b57b7c3ed27dbf` used
+  `qwen3-asr-cpu-windows-x64`. Fresh native readiness and the resource gate passed;
+  the exact pinned 3,720,689,099-byte Qwen3-ASR-0.6B + ForcedAligner-0.6B pair
+  downloaded, and the 11-second JFK sample produced three ordered, positive,
+  in-duration timestamped segments. The last segment ended at 10,480 ms.
+  Cold-worker elapsed was 36.875 seconds, including process startup, model
+  loading, ASR/alignment, process completion and result checks. It excludes
+  native setup and model downloads; it is not a pure compute-time or real-time
+  performance result. Before download, the host reported 14,428,192,768 bytes
+  available RAM, 17,174,360,064 bytes total RAM and 150,426,079,232 bytes free disk.
+  These are pre-download capacity readings, not peak memory measurements or a
+  device recommendation. Fixture-cache and private-output cleanup passed.
+  This bounded worker invocation did not exercise Qwen managed receipt/use-lease
+  lifecycle or app SRT export. The 2,046-byte inference report SHA-256 is
+  `0ac94ff0c8b1394fa6b7cb43362c51ddf17507cf20b745e5c61caa7d75f3d71f`.
+- **Earlier pre-inference download rejection:** the bounded Windows attempt in
+  [run 38024179671](https://github.com/csic21/luma-subtitle/actions/runs/38024179671)
+  at source `0875deb4430ac84de1fabc80a9f4454589e13fba` passed fresh native
+  readiness and resource gates. It downloaded five metadata/tokenizer files
+  (1,736,805 bytes), then rejected the first model-weight redirect before
+  inference. Owned child/cache/private-output cleanup was confirmed. The exact
+  rejected host was not recorded. The independently documented two-host CDN
+  compatibility gap was corrected (see [model sources](ASR_MODEL_SOURCES.md)).
+  The later successful run does not identify that earlier rejected host. This
+  earlier attempt was not a Qwen inference failure or a memory-fit result.
 - **Real Linux CPU functional smoke passed:** Python 3.12.14,
   faster-whisper 1.2.1, CTranslate2 4.8.2, and the official
   `Systran/faster-whisper-tiny` snapshot
@@ -340,10 +376,13 @@ weight or detect every form of corruption.
   guard. Actual wrapper signatures, devices and alignment dataclasses were
   checked without loading model weights. Metadata-only probe fixtures do not
   prove Qwen model readiness or inference success.
-- **Not established:** Qwen inference/memory fit, Metal/CUDA inference,
-  representative transcription accuracy, speed or peak-memory comparisons,
-  and a complete native desktop UI/queue smoke. These engines remain
-  experimental and opt-in. The small Linux functional smoke is not a benchmark.
+- **Not established:** Qwen 1.7B or macOS inference, warm reuse, Qwen
+  managed-worker lifecycle/cancellation/export/GUI, general memory fit or measured
+  peak memory, MLX speech and CUDA inference/GPU performance, representative
+  transcription accuracy or speed,
+  global embedded-catalog managed path selection, and a complete native desktop
+  UI/queue smoke. These engines remain experimental and opt-in. Neither the
+  small Linux Whisper smoke nor the single Windows Qwen sample is a benchmark.
 
 The real worker test is opt-in and never installs or downloads anything. After
 preparing a trusted Python environment, local CTranslate2 model, the public WAV

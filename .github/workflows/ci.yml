@@ -48,6 +48,8 @@ jobs:
         run: |
           python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
           node --test scripts/asr-components/publish.node-test.cjs
+          python -B -c "import sys, unittest; suite = unittest.defaultTestLoader.discover('scripts/asr-components/qwen-inference', pattern='test_*.py'); assert suite.countTestCases() > 0, 'No Qwen proof tests discovered'; sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())"
+          node --test scripts/asr-components/qwen-inference/validate_request.node-test.cjs
       - name: Frontend regression tests
         run: pnpm test
       - name: Typecheck and build

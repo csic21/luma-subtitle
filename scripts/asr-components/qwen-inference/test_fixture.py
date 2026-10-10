@@ -14,7 +14,7 @@ from fixture_paths import temporary_root
 
 spec = importlib.util.spec_from_file_location('qwen_smoke_draft', Path(__file__).with_name('fixture.py'))
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-CATALOG = json.loads((Path(__file__).resolve().parents[3] / 'src-tauri/resources/asr/catalog.json').read_text())
+CATALOG = json.loads((Path(__file__).resolve().parents[3] / 'src-tauri/resources/asr/catalog.json').read_text(encoding='utf-8'))
 
 class Gates(unittest.TestCase):
     def test_redirect_hosts_remain_official_and_https(self):
@@ -47,15 +47,21 @@ class Gates(unittest.TestCase):
                         with self.assertRaises(ValueError): m.download(item, tmp/'file', m.time.monotonic()+30)
 
     def test_download_child_has_a_hard_deadline(self):
-        with patch.object(m.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps({'downloaded_files':19,'model_bytes':m.MODEL_BYTES}))) as run:
-            m.download_child(Path('/owned/request.json'), {}, '/owned')
-            self.assertEqual(run.call_args.kwargs['timeout'], 600)
-            self.assertTrue(run.call_args.kwargs['check'])
-            self.assertIn('-I', run.call_args.args[0])
+        def launch(command, **kwargs):
+            self.assertIn('-I', command)
+            self.assertEqual(kwargs['stdin'], m.subprocess.DEVNULL)
+            self.assertEqual(kwargs['env'], {})
+            kwargs['stdout'].write(json.dumps({'downloaded_files':19,'model_bytes':m.MODEL_BYTES}).encode('utf-8'))
+            return SimpleNamespace(returncode=0, poll=lambda: 0, wait=lambda **kw: 0)
+        with temporary_root() as root, patch.object(m.subprocess, 'Popen', side_effect=launch) as popen:
+            m.download_child(root/'request.json', {}, root)
+            self.assertEqual(m.DOWNLOAD_TIMEOUT_SECONDS, 600)
+            self.assertEqual(popen.call_args.kwargs['cwd'], root)
+            popen.assert_called_once()
 
     def test_failed_inference_preserves_measurement_and_removes_cache(self):
         measurement={'available_ram_bytes':13*m.GIB,'total_ram_bytes':16*m.GIB,'free_disk_bytes':20*m.GIB}
-        audio=json.loads((Path(__file__).resolve().parents[1]/'fixtures.json').read_text())['audio']
+        audio=json.loads((Path(__file__).resolve().parents[1]/'fixtures.json').read_text(encoding='utf-8'))['audio']
         report={}
         with temporary_root() as tmp, patch.object(m.subprocess,'run',return_value=SimpleNamespace(stdout=json.dumps(measurement))), patch.object(m,'download_child'):
             with self.assertRaises(RuntimeError):

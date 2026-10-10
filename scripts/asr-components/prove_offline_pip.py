@@ -10,6 +10,14 @@ import subprocess
 import sys
 from build import ROOT, build, dump, sha256
 from smoke import diagnostic_json
+from prepare_cpu_proof import PACK_ID, shipping_cpu_lock
+
+
+def stream_diagnostic(text, stream):
+    # Rendering only: preserve the original Unicode child result and JSON
+    # evidence, escaping just characters this redirected host stream cannot encode.
+    encoding = getattr(stream, 'encoding', None) or 'utf-8'
+    return text.encode(encoding, errors='backslashreplace').decode(encoding)
 
 
 def owned(command, timeout=900, env=None):
@@ -43,6 +51,10 @@ def validate_native_worker_lifecycle(lifecycle,fixture,source_sha):
 
 def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progress=None,source_sha=None):
     candidate = next(runtime for runtime in json.loads(recipe_candidates.read_text(encoding='utf-8'))['runtimes'] if runtime['id'] == pack_id)
+    from real_worker_fixture import final_cpu_recipe, prepare
+    worker_required = pack_id == PACK_ID and shipping_cpu_lock() is not None
+    if worker_required and not final_cpu_recipe(candidate):
+        raise ValueError('Published own CPU recipe requires the receipt-selected native worker lifecycle')
     recipe = candidate.get('recipe')
     if recipe is None:
         return {'tested': False, 'reason': candidate['unavailable_reason']}
@@ -66,7 +78,6 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progres
         env = {key:value for key,value in os.environ.items() if not key.upper().startswith('LUMA_ASR_TEST_')}
         env.update(LUMA_ASR_RECIPE_RUNTIME=str(runtime_path),LUMA_ASR_RECIPE_INPUTS=str(inputs))
         if source_sha is not None:env['LUMA_ASR_TEST_VERIFIER_SOURCE_SHA']=source_sha
-        from real_worker_fixture import final_cpu_recipe, prepare
         worker_fixture = None
         if final_cpu_recipe(candidate):
             if fixtures.exists(): raise ValueError('Worker fixture output must be fresh')
@@ -98,8 +109,8 @@ def prove_native_installer(pack_id, output, cache, recipe_candidates, *, progres
                     result['windows_owned_job']={key:value for key,value in job_result.items() if key not in ('stdout','stderr')}
                     # These are the same Cargo/test streams formerly inherited
                     # by this process. The supervisor has already bounded them.
-                    print(job_result.get('stdout',''),end='',flush=True)
-                    print(job_result.get('stderr',''),end='',file=sys.stderr,flush=True)
+                    print(stream_diagnostic(job_result.get('stdout',''),sys.stdout),end='',flush=True)
+                    print(stream_diagnostic(job_result.get('stderr',''),sys.stderr),end='',file=sys.stderr,flush=True)
                 if progress:progress(result)
             if not tree_drained:raise RuntimeError('Native installer Windows Job drain was not confirmed')
             if job_result['exit_code']!=0:raise RuntimeError(f"Native installer Cargo failed: {job_result['exit_code']}")

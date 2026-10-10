@@ -8,6 +8,37 @@ Only the final job writes `latest.json` and publishes the draft. A failed job le
 the draft unpublished; fix the problem and rerun, or release a new version/source.
 Never move an existing version tag to another commit.
 
+## External final-source approval gate
+
+Before merging the 1.2.0 optional-engine source or creating its application release
+request, the release owner must approve all of the following for the exact final
+candidate commit, after one-time Qwen controls are retired and documentation is
+final:
+
+- Both Windows x64 and macOS Apple Silicon app checks pass.
+- All four native jobs in `asr-components.yml` pass: Windows Whisper CPU,
+  Apple Silicon MLX Whisper, Windows Qwen CPU and Apple Silicon Qwen CPU.
+- The Windows CPU report confirms execution and success of the receipt-selected
+  Rust SRT/export, active cancellation/recovery and process/use-lease lifecycle
+  proof, in addition to reference assembly/inference and installer checks. A
+  skipped test or a reference-only smoke does not satisfy this gate.
+- Independent review confirms the final source and exact run/attempt/job/report
+  identities, including honest inference and UI limitations.
+
+Record immutable source SHAs and exact evidence; an evolving PR head, older green
+source, component publication or README-only diagnostic is not a substitute.
+Global embedded-catalog managed path selection and full desktop UI/queue testing
+remain unverified by the receipt-selected test-owned-root proof. Qwen/MLX speech
+inference, performance and memory-fit claims require their own actual evidence.
+Any subsequent source change requires checks and review for the new candidate.
+After merge, verify that the release-source tree matches that approved candidate;
+if it differs, obtain exact-source checks and review before requesting release.
+
+This is an external approval gate. `release.yml` is unchanged and does not enforce
+these four optional-runtime jobs or independent review. The application release
+request must remain a separate request-only commit after approval; publication of
+`asr-ct2-cpu-4.8.2-1` does not publish application 1.2.0 or advance its updater.
+
 ## Source-pinned request from main
 
 1. Merge the release source (including matching package.json, tauri.conf.json,

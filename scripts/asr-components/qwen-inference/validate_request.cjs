@@ -9,13 +9,20 @@ const MODEL_REVISIONS = Object.freeze({
   'qwen3-asr-0-6b':'5eb144179a02acc5e5ba31e748d22b0cf3e303b0',
   'qwen3-forced-aligner-0-6b':'c7cbfc2048c462b0d63a45797104fc9db3ad62b7'
 });
+const README_REQUEST = Object.freeze({component:'qwen3-asr-0-6b',revision:MODEL_REVISIONS['qwen3-asr-0-6b'],path:'README.md',expected_bytes:57456,expected_sha256:'5058416891bc47a2051557765997e8c42f8eb78a0e33c3e775bd17d4b0ba4d50',max_bytes:57456,deadline_seconds:30});
 function check(ok, message) { if (!ok) throw new Error(message); }
 function keys(value, expected) {
   check(value && typeof value === 'object' && !Array.isArray(value), 'Expected an object');
   check(JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...expected].sort()), 'Unexpected request fields');
 }
 function validRequest(request, event, commit, changed) {
-  keys(request,['schema','purpose','repository','feature_branch','source_sha','pack_id','prior_native_evidence','model_revisions','model_download_bytes','audio_sha256','minimum_available_ram_bytes','minimum_free_disk_bytes','inference_timeout_seconds','download_deadline_seconds','metadata_only']);
+  check(request && ['full-inference','readme-diagnostic'].includes(request.selector), 'An exact supported proof selector is required');
+  const diagnostic=request.selector==='readme-diagnostic';
+  keys(request,['selector',...(diagnostic?['diagnostic']:[]),'schema','purpose','repository','feature_branch','source_sha','pack_id','prior_native_evidence','model_revisions','model_download_bytes','audio_sha256','minimum_available_ram_bytes','minimum_free_disk_bytes','inference_timeout_seconds','download_deadline_seconds','metadata_only']);
+  if(diagnostic) {
+    keys(request.diagnostic,Object.keys(README_REQUEST));
+    for(const [key,value] of Object.entries(README_REQUEST)) check(request.diagnostic[key]===value,'README diagnostic bounds or identity changed');
+  }
   check(request.schema===1 && request.purpose==='one-time-feature-branch-qwen-inference-proof', 'Wrong proof purpose');
   check(request.repository===REPOSITORY && request.feature_branch===BRANCH, 'Wrong request repository/branch');
   check(event.repository?.full_name===REPOSITORY && event.ref==='refs/heads/'+BRANCH && event.deleted===false && event.forced===false, 'Only the reviewed feature-branch push may request this proof');
@@ -32,11 +39,11 @@ function validRequest(request, event, commit, changed) {
   check(request.model_download_bytes===3720689099 && request.audio_sha256==='59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e', 'Fixture identity changed');
   check(request.minimum_available_ram_bytes===13*1024**3 && request.minimum_free_disk_bytes===12*1024**3, 'Resource gates changed');
   check(request.inference_timeout_seconds===900 && request.download_deadline_seconds===600 && request.metadata_only===true, 'Proof bounds changed');
-  return {source_sha:request.source_sha,pack_id:request.pack_id,runner:request.pack_id.endsWith('windows-x64')?'windows-2022':'macos-15'};
+  return {source_sha:request.source_sha,pack_id:request.pack_id,selector:request.selector,runner:request.pack_id.endsWith('windows-x64')?'windows-2022':'macos-15'};
 }
 function validEvidence(request, run, job) {
   check(run.id===request.prior_native_evidence.run_id && run.run_attempt===request.prior_native_evidence.run_attempt && run.repository?.full_name===REPOSITORY && run.head_repository?.full_name===REPOSITORY, 'Wrong native run');
-  check(run.pull_requests?.some(pr=>pr.number===3), 'Native evidence must belong to the reviewed PR');
+  check(run.pull_requests?.some(pr=>pr.number===4), 'Native evidence must belong to the reviewed PR');
   check(run.head_sha===request.source_sha && run.head_branch===BRANCH && run.event==='pull_request' && run.path==='.github/workflows/asr-components.yml' && run.status==='completed', 'Native run source/workflow differs');
   // A historical nested PR head is mutable. Only these immutable run/job SHAs
   // establish source identity; never use run.pull_requests[].head.sha.
@@ -75,10 +82,11 @@ async function main() {
   const job=await publicJson('/actions/jobs/'+request.prior_native_evidence.job_id);
   validEvidence(request,run,job);
   // The report digest is independently reviewed before creating the request.
-  // This control verifies immutable public job metadata and reruns the complete
-  // native proof before weights; it does not claim to download that old report.
+  // This control verifies immutable public job metadata. Full inference reruns
+  // native proof before weights; README-only mode cannot enter that path. Neither
+  // selector claims to download the old report.
   fs.appendFileSync(process.env.GITHUB_OUTPUT,Object.entries(output).map(([k,v])=>k+'='+v+'\n').join(''));
   console.log(JSON.stringify({request_sha:sha,...output,prior_native_job_verified:true,prior_report_digest_reviewed:request.prior_native_evidence.proof_json_sha256,metadata_only:true}));
 }
-module.exports={REQUEST,REPOSITORY,BRANCH,MODEL_REVISIONS,validRequest,validEvidence};
+module.exports={REQUEST,REPOSITORY,BRANCH,MODEL_REVISIONS,README_REQUEST,validRequest,validEvidence};
 if(require.main===module)main().catch(error=>{console.error(error.message);process.exitCode=1;});

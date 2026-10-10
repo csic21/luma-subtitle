@@ -111,19 +111,25 @@
     {
       "name": "ctranslate2",
       "version": "4.8.2",
-      "filename": "ctranslate2-4.8.2-cp312-cp312-win_amd64.whl",
-      "url": "https://files.pythonhosted.org/packages/4e/23/e3b5322ff7368fcbed181ea4c209149416e7940b5b04971d5ee4084afe1a/ctranslate2-4.8.2-cp312-cp312-win_amd64.whl",
-      "bytes": 19222069,
-      "sha256": "d94421d565d0de61c032998f737a18942b0f2bef40c0424b1846ec6f67300105",
-      "license": "MIT",
+      "filename": "ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl",
+      "url": "https://github.com/csic21/luma-subtitle/releases/download/asr-ct2-cpu-4.8.2-1/ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl",
+      "bytes": 25058630,
+      "sha256": "5ce50225a796f676f812b732cc9e266d90e6ac3ef70e7de7a44e499a244bc449",
+      "license": "MIT; native closure also includes Apache-2.0, BSD and Zlib notices",
       "project_urls": {
-        "Documentation": "https://opennmt.net/CTranslate2",
-        "Forum": "https://forum.opennmt.net",
-        "Gitter": "https://gitter.im/OpenNMT/CTranslate2",
-        "Homepage": "https://opennmt.net",
-        "Source": "https://github.com/OpenNMT/CTranslate2"
+        "Source": "https://github.com/OpenNMT/CTranslate2/tree/d44d2d069eb88c7b7804da864c10c201501cb4a9",
+        "CPU component release": "https://github.com/csic21/luma-subtitle/releases/tag/asr-ct2-cpu-4.8.2-1"
       },
-      "sources": []
+      "sources": [
+        {
+          "filename": "luma-ct2-cpu-4.8.2-1-sources.zip",
+          "url": "https://github.com/csic21/luma-subtitle/releases/download/asr-ct2-cpu-4.8.2-1/luma-ct2-cpu-4.8.2-1-sources.zip",
+          "size": 14010340,
+          "digests": {
+            "sha256": "d6a8c3e6651d468b9761da1a0b21a08411363ac9d3eeec4f269cb1bf34366b51"
+          }
+        }
+      ]
     },
     {
       "name": "faster-whisper",
@@ -539,5 +545,13 @@
         }
       ]
     }
-  ]
+  ],
+  "cpu_component": {
+    "source_sha": "370c1e3145b1a052a8317d8380f60b78b498f262",
+    "proof": {
+      "url": "https://github.com/csic21/luma-subtitle/releases/download/asr-ct2-cpu-4.8.2-1/publication-proof.json",
+      "bytes": 17306,
+      "sha256": "efc724fc71808afc6617811cbc07042dfddfdd6056a746765a8b03cbca24d09f"
+    }
+  }
 }

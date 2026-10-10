@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "repository": "csic21/luma-subtitle",
+  "branch": "feat/optional-asr-engines",
+  "source_sha": "370c1e3145b1a052a8317d8380f60b78b498f262",
+  "tag": "asr-ct2-cpu-4.8.2-1",
+  "proof": {
+    "run_id": 37996190880,
+    "run_attempt": 1,
+    "job_id": 114043023224,
+    "artifact": {
+      "id": 11648612983,
+      "name": "ct2-cpu-candidate-370c1e3145b1a052a8317d8380f60b78b498f262-37996190880-1",
+      "bytes": 15498745,
+      "sha256": "4b3b787c35e1142e64813f0b90e0c0a2a798759b95da786288385d0b1481d89f"
+    },
+    "summary": {
+      "name": "publication-proof.json",
+      "bytes": 17306,
+      "sha256": "efc724fc71808afc6617811cbc07042dfddfdd6056a746765a8b03cbca24d09f"
+    }
+  },
+  "assets": [
+    {
+      "bytes": 25058630,
+      "name": "ctranslate2-4.8.2-1lumacpu-cp312-cp312-win_amd64.whl",
+      "sha256": "5ce50225a796f676f812b732cc9e266d90e6ac3ef70e7de7a44e499a244bc449"
+    },
+    {
+      "bytes": 84941,
+      "name": "luma-ct2-cpu-4.8.2-1-notices.zip",
+      "sha256": "c83b79f9e7c858f49fbbf873154ac3ec9b9a300fe371befbb1a4dfb33f135435"
+    },
+    {
+      "bytes": 14010340,
+      "name": "luma-ct2-cpu-4.8.2-1-sources.zip",
+      "sha256": "d6a8c3e6651d468b9761da1a0b21a08411363ac9d3eeec4f269cb1bf34366b51"
+    }
+  ],
+  "locks": {
+    "notices": {
+      "bytes": 5032,
+      "name": "notices.lock.json",
+      "sha256": "279174be64cee17d6dbe3f2ad61c8c732cd6ba4c54ed9a15cd7369c9ec23edbe"
+    },
+    "sources": {
+      "bytes": 6695,
+      "name": "sources.lock.json",
+      "sha256": "690408055f3ed6aae143b00198bf5bde0d1f32fa5f218957d96353690eb65e98"
+    }
+  },
+  "review": {
+    "scope": "cpu-wheel-source-notices-only",
+    "approved": true
+  }
+}

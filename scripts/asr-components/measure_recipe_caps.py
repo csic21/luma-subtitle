@@ -20,12 +20,12 @@ import email
 import json
 from pathlib import Path
 import posixpath
-import stat
 import tarfile
 import urllib.parse
 import zipfile
 
 from build import ROOT, safe_name, sha256
+from own_cpu_recipe import PACK_ID, own_wheel, cached_component, reviewed_wheel_members
 
 PIP_VERSION = '26.2.1'
 ASSEMBLY_BASE_BYTES = 2 * 1024 * 1024
@@ -41,24 +41,27 @@ UNMEASURED_FINAL_FILES = 100_000
 U64_MAX = 2**64 - 1
 
 
-def validate_source(item, kind):
+def validate_source(item, kind, component=None):
     parsed = urllib.parse.urlparse(item['url'])
     if parsed.scheme != 'https' or parsed.username or parsed.password or parsed.port not in (None, 443):
         raise ValueError('Unsafe upstream URL')
     if kind == 'runtime':
         if parsed.hostname != 'github.com' or not parsed.path.startswith('/astral-sh/python-build-standalone/releases/download/'):
             raise ValueError('Runtime must come from the pinned Astral release')
+    elif own_wheel(item):
+        if component is None or any(item.get(key) != value for key, value in component['wheel'].items()):
+            raise ValueError('Own CPU wheel requires matching pinned publication proof')
     elif parsed.hostname != 'files.pythonhosted.org' or not parsed.path.startswith('/packages/'):
         raise ValueError('Wheel must come from the pinned official PyPI file host')
     digest = item['sha256']
     if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
         raise ValueError('Invalid locked SHA-256')
-    if not isinstance(item['bytes'], int) or not 0 < item['bytes'] <= U64_MAX:
+    if type(item['bytes']) is not int or not 0 < item['bytes'] <= U64_MAX:
         raise ValueError('Invalid locked byte count')
 
 
-def verified_input(item, cache, kind):
-    validate_source(item, kind)
+def verified_input(item, cache, kind, component=None):
+    validate_source(item, kind, component)
     digest = item['sha256']
     path = cache / digest
     if path.is_symlink() or not path.is_file():
@@ -114,21 +117,14 @@ def runtime_measurements(archive, entrypoint, site_packages):
 
 def wheel_measurements(archive):
     with zipfile.ZipFile(archive) as source:
-        seen = set()
         total = count = record_bytes = 0
-        for member in source.infolist():
-            name = member.filename.rstrip('/') if member.is_dir() else member.filename
-            safe_name(name)
-            if name in seen:
-                raise ValueError(f'Duplicate wheel archive member: {name}')
-            seen.add(name)
+        members = reviewed_wheel_members(source, max_files=UNMEASURED_FINAL_FILES,
+                                         max_member_bytes=UNMEASURED_FINAL_BYTES,
+                                         max_total_bytes=UNMEASURED_FINAL_BYTES)
+        for member in members:
+            name = member.filename
             if member.is_dir():
                 continue
-            kind = stat.S_IFMT(member.external_attr >> 16)
-            if kind not in (0, stat.S_IFREG):
-                raise ValueError(f'Wheel member is not a regular file: {name}')
-            if member.flag_bits & 1:
-                raise ValueError('Encrypted wheel member')
             total += member.file_size
             count += 1
             # Add an entire replacement RECORD rather than estimating its delta.
@@ -148,6 +144,11 @@ def measure(cache, allow_unmeasured=False):
         lock = json.loads((ROOT / 'locks' / (pack['id'] + '.json')).read_text(encoding='utf-8'))
         if lock['platform'] != platform or lock['python'] != '3.12':
             raise ValueError('Wheel lock target differs from the runtime')
+        component = None
+        if any(own_wheel(wheel) for wheel in lock['wheels']):
+            if pack['id'] != PACK_ID:
+                raise ValueError('Own CPU wheel is not allowed in another engine recipe')
+            component = cached_component(lock, cache, root=ROOT)
         pinned_runtime = config['runtime'][platform]
         site = 'Lib/site-packages' if platform == 'windows-x64' else 'lib/python3.12/site-packages'
         runtime_key = (pinned_runtime['sha256'], pinned_runtime['entrypoint'], site)
@@ -162,10 +163,10 @@ def measure(cache, allow_unmeasured=False):
         missing = []
         record_bytes = 0
         for pinned_wheel in lock['wheels']:
-            validate_source(pinned_wheel, 'wheel')
+            validate_source(pinned_wheel, 'wheel', component)
             digest = pinned_wheel['sha256']
             if digest not in wheel_cache:
-                if allow_unmeasured and not (cache / digest).exists() and not (cache / digest).is_symlink():
+                if allow_unmeasured and not own_wheel(pinned_wheel) and not (cache / digest).exists() and not (cache / digest).is_symlink():
                     byte_cap = max(UNMEASURED_MIN_BYTES, pinned_wheel['bytes'] * UNMEASURED_EXPANSION_FACTOR)
                     if byte_cap > U64_MAX:
                         raise ValueError('Conservative extraction cap overflows u64')
@@ -176,7 +177,7 @@ def measure(cache, allow_unmeasured=False):
                         'count_kind': 'conservative_cap',
                     }
                 else:
-                    archive = verified_input(pinned_wheel, cache, 'wheel')
+                    archive = verified_input(pinned_wheel, cache, 'wheel', component)
                     wheel_cache[digest] = {**wheel_measurements(archive), 'count_kind': 'measured'}
             measured_wheel = wheel_cache[digest]
             wheel = {key: pinned_wheel[key] for key in ('name', 'version', 'filename', 'url', 'bytes', 'sha256')}

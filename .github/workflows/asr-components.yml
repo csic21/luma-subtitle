@@ -73,6 +73,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - uses: dtolnay/rust-toolchain@stable
       - name: Validate source and component request
         shell: bash
@@ -89,12 +92,21 @@ jobs:
           assert any(p['id'] == os.environ['PACK_ID'] for p in cfg['packs'])
           PY
       - name: Test deterministic packaging and license locks
-        run: python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+        shell: bash
+        run: |
+          python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+          python -B -c "import sys, unittest; suite = unittest.defaultTestLoader.discover('scripts/asr-components/qwen-inference', pattern='test_*.py'); assert suite.countTestCases() > 0, 'No Qwen proof tests discovered'; sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())"
+          node --test scripts/asr-components/qwen-inference/validate_request.node-test.cjs
       - name: Reproduce review-only recipes from exact pinned sources
         shell: bash
         run: |
-          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates.json"
-          python -B scripts/asr-components/generate_recipes.py --output "$RUNNER_TEMP/asr-recipe-candidates-second.json"
+          CPU_PUBLICATION_PROOF="$(python -B scripts/asr-components/prepare_cpu_proof.py --cache "$RUNNER_TEMP/asr-downloads")"
+          proof_args=()
+          if [[ -n "$CPU_PUBLICATION_PROOF" ]]; then
+            proof_args=(--cpu-publication-proof "$CPU_PUBLICATION_PROOF")
+          fi
+          python -B scripts/asr-components/generate_recipes.py "${proof_args[@]}" --output "$RUNNER_TEMP/asr-recipe-candidates.json"
+          python -B scripts/asr-components/generate_recipes.py "${proof_args[@]}" --output "$RUNNER_TEMP/asr-recipe-candidates-second.json"
           python - <<'PY'
           import hashlib, os
           from pathlib import Path
