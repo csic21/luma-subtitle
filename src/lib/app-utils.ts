@@ -1,3 +1,4 @@
+import { credentialScope } from "./credential-scope";
 import { asrConfigurationIssues, normalizeAsrConfig, type AsrConfigurationIssue } from "@/lib/asr-config";
 import type { Locale } from "@/i18n";
 import type { DependencyInstallEvent, ModelDownloadEvent, TaskOperation, TaskRecord, TFunction } from "@/types";
@@ -23,6 +24,7 @@ export type OperationReadinessContext = {
   environmentReady: boolean;
   ffmpegReady?: boolean;
   hasApiCredential: boolean;
+  apiKeyScopes?: string[];
   llamaReady: boolean;
 };
 
@@ -199,7 +201,11 @@ export function operationRequirementIssues(
     }
     if (!hasConfiguredText(task.settings.base_url)) issues.push("missingBaseUrl");
     if (!hasConfiguredText(task.settings.model)) issues.push("missingTranslationModel");
-    if (!context.hasApiCredential) issues.push("missingApiKey");
+    const scope = credentialScope(provider, task.settings.base_url);
+    const hasCredential = context.apiKeyScopes !== undefined
+      ? scope !== null && context.apiKeyScopes.includes(scope)
+      : context.hasApiCredential;
+    if (!hasCredential) issues.push("missingApiKey");
     return issues;
   }
 

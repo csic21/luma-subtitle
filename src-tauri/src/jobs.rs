@@ -3,7 +3,7 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::{
-    job_events::{publish_job_event, JobEventDraft, StoredSubtitleResult},
+    job_events::{publish_job_event, JobEventDraft},
     paths::path_to_string,
     settings,
     state::AppState,
@@ -96,7 +96,6 @@ pub(crate) async fn save_source_subtitles(
         let _mutation = state.task_mutations.lock();
         ensure_task_is_not_busy(&state, &task_id)?;
         let task = task_db::save_source_subtitles(&app, &task_id, &original_source_srt, edits)?;
-        state.subtitle_results.lock().remove(&task_id);
         Ok(task)
     })
     .await
@@ -122,7 +121,6 @@ pub(crate) async fn save_translated_subtitles(
             &original_translated_srt,
             edits,
         )?;
-        state.subtitle_results.lock().remove(&task_id);
         Ok(task)
     })
     .await
@@ -157,7 +155,6 @@ pub(crate) fn apply_current_settings_to_task(
     let settings = settings::task_settings_from_current(&app, task.settings.output_dir.clone())?;
     let saved = task_db::update_task_settings(&app, &task_id, settings)?;
     if saved.result_revision != task.result_revision {
-        state.subtitle_results.lock().remove(&task_id);
         if let Ok(work_dir) = task_db::task_work_dir(&app, &task_id) {
             let _ = crate::translation::checkpoint::clear_checkpoint(
                 &crate::translation::checkpoint::checkpoint_path(&work_dir),
@@ -187,7 +184,6 @@ pub(crate) fn update_task_settings(
     let settings = updated;
     let saved = task_db::update_task_settings(&app, &task_id, settings)?;
     if saved.result_revision != task.result_revision {
-        state.subtitle_results.lock().remove(&task_id);
         if let Ok(work_dir) = task_db::task_work_dir(&app, &task_id) {
             let _ = crate::translation::checkpoint::clear_checkpoint(
                 &crate::translation::checkpoint::checkpoint_path(&work_dir),
@@ -294,7 +290,6 @@ fn create_media_task(
 #[tauri::command]
 pub(crate) async fn create_srt_task(
     app: AppHandle,
-    state: State<'_, AppState>,
     request: CreateSrtTaskRequest,
 ) -> Result<TaskRecord, String> {
     let srt_path = PathBuf::from(request.srt_path.trim());
@@ -316,17 +311,6 @@ pub(crate) async fn create_srt_task(
             .parent()
             .map(|path| path_to_string(path.to_path_buf()))
     });
-    state.subtitle_results.lock().insert(
-        id.clone(),
-        StoredSubtitleResult {
-            source_srt,
-            translated_srt: None,
-            segments: segments.clone(),
-            output_dir: output_dir.clone().unwrap_or_else(|| ".".to_string()),
-            source_file_name: source_file_name.clone(),
-            translated_file_name: None,
-        },
-    );
     let now = task_db::now_ts();
     let record = TaskRecord {
         id,
@@ -372,7 +356,6 @@ pub(crate) async fn delete_task(app: AppHandle, task_id: String) -> Result<(), S
             return Err("任务正在运行，已请求取消，请停止后再删除".to_string());
         }
         let deleted_task = task_db::delete_task(&delete_app, &delete_task_id)?;
-        state.subtitle_results.lock().remove(&delete_task_id);
         Ok(deleted_task)
     })
     .await

@@ -129,7 +129,7 @@ fn validate_task_operation(task: &TaskRecord, operation: &str) -> Result<(), Str
             if !matches!(task.source_type.as_str(), "video" | "audio") {
                 return Err("只有视频或音频任务需要转写".to_string());
             }
-            if task.settings.whisper_model_path.trim().is_empty() {
+            if task.settings.asr.is_legacy() && task.settings.whisper_model_path.trim().is_empty() {
                 return Err("请先在设置页选择 Whisper 模型".to_string());
             }
         }

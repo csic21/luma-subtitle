@@ -16,6 +16,7 @@ pub(crate) mod cli;
 mod client;
 pub(crate) mod local;
 mod parser;
+mod opencode_isolation;
 mod prompt;
 mod runtime;
 
@@ -180,6 +181,8 @@ pub(crate) async fn translate_with_single_request(
         .filter(|key| !key.is_empty())
         .ok_or_else(|| JobError::failed("请先保存 OpenAI 兼容接口的 API Key"))?;
     let client = reqwest::Client::builder()
+        // Never forward subtitle text or credentials to a redirected origin.
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(240))
         .build()
         .map_err(|error| JobError::failed(format!("创建 HTTP 客户端失败: {error}")))?;

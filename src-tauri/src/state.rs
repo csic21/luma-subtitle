@@ -7,21 +7,17 @@ use std::{
     },
 };
 
-use crate::{
-    dependencies::{DependencyInstallEvent, ModelDownloadEvent},
-    job_events::StoredSubtitleResult,
-};
+use crate::dependencies::{DependencyInstallEvent, ModelDownloadEvent};
 
 #[derive(Default)]
 pub(crate) struct AppState {
-    // Lock before task/queue/cache locks when saving, enqueueing, deleting, or dispatching.
+    // Lock before task/queue locks when saving, enqueueing, deleting, or dispatching.
     pub(crate) task_mutations: Mutex<()>,
     pub(crate) tasks: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub(crate) queued_operations: Mutex<VecDeque<QueuedTaskOperation>>,
     pub(crate) running_operations: Mutex<HashMap<String, String>>,
     pub(crate) model_download: Mutex<Option<ModelDownloadEvent>>,
     pub(crate) dependency_install: Mutex<Option<DependencyInstallEvent>>,
-    pub(crate) subtitle_results: Mutex<HashMap<String, StoredSubtitleResult>>,
 }
 
 #[derive(Clone)]

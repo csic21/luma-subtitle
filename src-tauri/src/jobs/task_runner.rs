@@ -116,14 +116,8 @@ async fn run_transcribe_task(
         JobEventDraft::running(task_id, "transcribe", "转写已开始", 0.0),
     );
 
-    let outputs = run_job(app.clone(), task_id.to_string(), request, cancel.clone()).await?;
-    let stored = app
-        .state::<AppState>()
-        .subtitle_results
-        .lock()
-        .get(task_id)
-        .cloned()
-        .ok_or_else(|| JobError::failed("转写结果未写入内存"))?;
+    // The in-flight result stays owned by this operation, never in a global cache.
+    let (stored, outputs) = run_job(app.clone(), task_id.to_string(), request, cancel.clone()).await?;
     let work_dir = task_db::task_work_dir(&app, task_id).map_err(JobError::failed)?;
     let source_srt_path = work_dir.join(format!("source-{}.srt", uuid::Uuid::new_v4()));
     write_srt_text(&source_srt_path, &stored.source_srt).await?;
@@ -207,7 +201,7 @@ async fn run_translate_task(
         translation_local_model_path: Some(task.settings.translation_local_model_path.clone()),
     };
     validate_translate_request(&request).map_err(JobError::failed)?;
-    let api_key = task_db::load_api_key(&app).map_err(JobError::failed)?;
+    let api_key = task_db::load_api_key(&app, &task.settings.translation_provider, &task.settings.base_url).map_err(JobError::failed)?;
     let work_dir = task_db::task_work_dir(&app, task_id).map_err(JobError::failed)?;
     let checkpoint_file = checkpoint_path(&work_dir);
     let fingerprint = source_fingerprint(&segments);
@@ -300,10 +294,6 @@ async fn run_translate_task(
         let _ = std::fs::remove_file(&translated_srt_path);
         return Err(error);
     }
-    app.state::<AppState>()
-        .subtitle_results
-        .lock()
-        .insert(task_id.to_string(), stored);
 
     let _ = clear_checkpoint(&checkpoint_file);
     publish_job_event(

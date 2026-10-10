@@ -8,14 +8,8 @@ use std::{
 };
 
 use serde::Serialize;
-use tokio::{
-    io::AsyncReadExt,
-    task::JoinSet,
-    time::{timeout_at, Instant},
-};
 
 use crate::{
-    process_utils::hide_tokio_command_window,
     state::{JobError, JobResult},
     subtitles::{SubtitleSegment, TranslatedSegment},
 };
@@ -24,7 +18,6 @@ use super::{
     normalize_translation_cli_tool,
     parser::parse_translation_content,
     prompt::{shard_translation_prompt, translation_system_prompt},
-    runtime::cancellable,
     TranslationConfig,
 };
 
@@ -225,17 +218,7 @@ async fn run_opencode_cli(
     let model = config.cli_model.trim();
     let resolved = resolve_cli_path(command)
         .ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
-    let mut cmd = tokio::process::Command::new(resolved);
-    hide_tokio_command_window(&mut cmd);
-    cmd.args(["run", "-m", model, "--format", "json", full_prompt]);
-    let output = run_cli_command(&mut cmd, cancel)
-        .await
-        .map_err(|error| match error {
-            JobError::Cancelled => JobError::Cancelled,
-            JobError::Failed(message) => {
-                JobError::failed(format!("opencode CLI 调用失败: {message}"))
-            }
-        })?;
+    let output = super::opencode_isolation::translate(&resolved, model, full_prompt, cancel).await?;
     if output.is_empty() {
         return Err(JobError::failed(
             "opencode CLI 没有返回可用输出（--format json 为空）",
@@ -261,10 +244,9 @@ async fn run_custom_cli(
     let args = build_custom_args(config, full_prompt);
     let resolved = resolve_cli_path(command)
         .ok_or_else(|| JobError::failed(cli_not_found_message(command)))?;
-    let mut cmd = tokio::process::Command::new(resolved);
-    hide_tokio_command_window(&mut cmd);
+    let mut cmd = std::process::Command::new(resolved);
     cmd.args(&args);
-    let output = run_cli_command(&mut cmd, cancel)
+    let output = run_cli_command(cmd, cancel)
         .await
         .map_err(|error| match error {
             JobError::Cancelled => JobError::Cancelled,
@@ -364,102 +346,22 @@ pub(crate) fn split_cli_args(template: &str) -> Vec<String> {
     args
 }
 
-async fn run_cli_command(
-    cmd: &mut tokio::process::Command,
-    cancel: Arc<AtomicBool>,
-) -> JobResult<String> {
-    crate::state::ensure_not_cancelled(&cancel)?;
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| JobError::failed(format!("启动 CLI 失败: {error}")))?;
-    let mut readers = JoinSet::new();
-    if let Some(stdout) = child.stdout.take() {
-        readers.spawn(async move { (true, read_cli_pipe(stdout).await) });
-    }
-    if let Some(stderr) = child.stderr.take() {
-        readers.spawn(async move { (false, read_cli_pipe(stderr).await) });
-    }
-    let deadline = Instant::now() + Duration::from_secs(CLI_SHARD_TIMEOUT_SECS);
-    let result = cancellable(&cancel, async {
-        timeout_at(deadline, async {
-            let status = child
-                .wait()
-                .await
-                .map_err(|error| JobError::failed(format!("等待 CLI 结束失败: {error}")))?;
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            while let Some(reader) = readers.join_next().await {
-                let (is_stdout, bytes) = reader
-                    .map_err(|error| JobError::failed(format!("读取 CLI 输出失败: {error}")))?;
-                let bytes = bytes?;
-                if is_stdout {
-                    stdout = bytes;
-                } else {
-                    stderr = bytes;
-                }
-            }
-            Ok(std::process::Output {
-                status,
-                stdout,
-                stderr,
-            })
-        })
-        .await
-        .map_err(|_| JobError::failed(format!("CLI 调用超时（{CLI_SHARD_TIMEOUT_SECS}s）")))?
-    })
-    .await;
-    if result.is_err() {
-        let _ = child.kill().await;
-    }
-    readers.shutdown().await;
-    let output = result?;
+async fn run_cli_command(cmd: std::process::Command, cancel: Arc<AtomicBool>) -> JobResult<String> {
+    let output = crate::owned_process::output(cmd, cancel, Duration::from_secs(CLI_SHARD_TIMEOUT_SECS), 8 * 1024 * 1024).await?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = if !stderr.trim().is_empty() {
-            stderr.trim().to_string()
-        } else if !stdout.trim().is_empty() {
-            stdout.trim().to_string()
-        } else {
-            format!("exit {}", output.status)
-        };
-        return Err(JobError::failed(format!(
-            "CLI 返回非零状态 {}: {}",
-            output.status,
-            preview_cli_output(&detail),
-        )));
+        let detail = String::from_utf8_lossy(&output.stderr);
+        // CLI errors may contain provider tokens. Do not put subprocess output
+        // in persisted task logs; users can diagnose the executable separately.
+        let _ = detail;
+        return Err(JobError::failed(format!("CLI returned nonzero status {}", output.status)));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-async fn read_cli_pipe(mut pipe: impl tokio::io::AsyncRead + Unpin) -> JobResult<Vec<u8>> {
-    // Continue draining even on excessive output, but never retain unbounded
-    // subprocess output or silently parse a truncated translation.
-    const MAX_BYTES: usize = 8 * 1024 * 1024;
-    let mut bytes = Vec::new();
-    let mut chunk = [0; 8192];
-    let mut overflow = false;
-    loop {
-        let count = pipe
-            .read(&mut chunk)
-            .await
-            .map_err(|error| JobError::failed(format!("读取 CLI 输出失败: {error}")))?;
-        if count == 0 {
-            break;
-        }
-        let keep = count.min(MAX_BYTES.saturating_sub(bytes.len()));
-        bytes.extend_from_slice(&chunk[..keep]);
-        overflow |= keep != count;
-    }
-    if overflow {
-        Err(JobError::failed("CLI 输出超过 8 MiB 限制"))
-    } else {
-        Ok(bytes)
-    }
+async fn probe(resolved: &Path, args: &[&str]) -> JobResult<std::process::Output> {
+    let mut command = std::process::Command::new(resolved);
+    command.args(args);
+    crate::owned_process::output(command, Arc::new(AtomicBool::new(false)), Duration::from_secs(10), 64 * 1024).await
 }
 
 pub(crate) fn extract_opencode_text_output(stdout: &str) -> String {
@@ -551,125 +453,46 @@ pub(crate) async fn check_translation_cli(
         });
     }
     let tool = tool.unwrap_or_else(|| "opencode".to_string());
-    tauri::async_runtime::spawn_blocking(move || check_cli_blocking(&command, &tool))
-        .await
-        .map_err(|error| format!("检测 CLI 失败: {error}"))?
-}
-
-fn check_cli_blocking(command: &str, tool: &str) -> Result<TranslationCliStatus, String> {
-    let Some(resolved) = resolve_cli_path(command) else {
-        return Ok(TranslationCliStatus {
-            available: false,
-            path: None,
-            version: None,
-            error: Some(cli_not_found_message(command)),
-        });
+    let Some(resolved) = resolve_cli_path(&command) else {
+        return Ok(TranslationCliStatus { available: false, path: None, version: None, error: Some(cli_not_found_message(&command)) });
     };
     let path = Some(resolved.to_string_lossy().to_string());
-    let version_args: Vec<&str> = if normalize_translation_cli_tool(tool) == "custom" {
-        vec!["--version"]
-    } else {
-        vec!["--version"]
-    };
-    let mut cmd = std::process::Command::new(&resolved);
-    #[cfg(not(target_os = "macos"))]
-    crate::process_utils::hide_std_command_window(&mut cmd);
-    let output = cmd.args(&version_args).output();
-    match output {
+    let result = probe(&resolved, &["--version"]).await;
+    match result {
         Ok(output) if output.status.success() => {
-            let version = format!(
-                "{} {}",
-                String::from_utf8_lossy(&output.stdout).trim(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            )
-            .trim()
-            .to_string();
-            Ok(TranslationCliStatus {
-                available: true,
-                path,
-                version: if version.is_empty() {
-                    None
-                } else {
-                    Some(version)
-                },
-                error: None,
-            })
-        }
-        Ok(output) => {
-            // Custom CLIs may not support --version; fall back to --help.
-            let mut help_cmd = std::process::Command::new(&resolved);
-            #[cfg(not(target_os = "macos"))]
-            crate::process_utils::hide_std_command_window(&mut help_cmd);
-            let help = help_cmd.arg("--help").output();
-            if help.map(|o| o.status.success()).unwrap_or(false) {
-                return Ok(TranslationCliStatus {
-                    available: true,
-                    path,
-                    version: None,
-                    error: None,
-                });
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if normalize_translation_cli_tool(&tool) == "opencode" {
+                if let Err(error) = super::opencode_isolation::validate_version(&version) {
+                    return Ok(TranslationCliStatus { available: false, path, version: Some(version), error: Some(error) });
+                }
             }
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            Ok(TranslationCliStatus {
-                available: false,
-                path,
-                version: None,
-                error: Some(if stderr.is_empty() {
-                    format!("CLI 返回非零状态: {}", output.status)
-                } else {
-                    stderr.chars().take(500).collect::<String>()
-                }),
-            })
+            Ok(TranslationCliStatus { available: true, path, version: Some(version), error: None })
         }
-        Err(error) => Ok(TranslationCliStatus {
-            available: false,
-            path,
-            version: None,
-            error: Some(format!("启动 CLI 失败: {error}")),
-        }),
+        Ok(_) if normalize_translation_cli_tool(&tool) == "custom" => {
+            let ready = probe(&resolved, &["--help"]).await.is_ok_and(|output| output.status.success());
+            Ok(TranslationCliStatus { available: ready, path, version: None, error: (!ready).then(|| "CLI probe failed".to_string()) })
+        }
+        _ => Ok(TranslationCliStatus { available: false, path, version: None, error: Some("CLI probe failed or exceeded its time/output limit".to_string()) }),
     }
 }
 
 #[tauri::command]
 pub(crate) async fn list_translation_cli_models(command: String) -> Result<Vec<String>, String> {
-    let command = command.trim().to_string();
-    if command.is_empty() {
-        return Err("请先填写 CLI 命令".to_string());
-    }
-    tauri::async_runtime::spawn_blocking(move || list_opencode_models_blocking(&command))
-        .await
-        .map_err(|error| format!("读取 CLI 模型失败: {error}"))?
-}
-
-fn list_opencode_models_blocking(command: &str) -> Result<Vec<String>, String> {
-    let Some(resolved) = resolve_cli_path(command) else {
-        return Err(cli_not_found_message(command));
-    };
-    let mut cmd = std::process::Command::new(&resolved);
-    #[cfg(not(target_os = "macos"))]
-    crate::process_utils::hide_std_command_window(&mut cmd);
-    let output = cmd
-        .arg("models")
-        .output()
-        .map_err(|error| format!("启动 CLI 失败: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            format!("CLI 返回非零状态: {}", output.status)
-        } else {
-            stderr.chars().take(1000).collect::<String>()
-        });
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut models = stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    models.sort();
-    models.dedup();
-    Ok(models)
+    let resolved = resolve_cli_path(&command).ok_or_else(|| cli_not_found_message(&command))?;
+    let sandbox = super::opencode_isolation::Sandbox::new(None)?;
+    let mut version_command = sandbox.command(&resolved);
+    version_command.arg("--version");
+    let output = crate::owned_process::output(version_command, Arc::new(AtomicBool::new(false)), Duration::from_secs(10), 64 * 1024).await
+        .map_err(|_| "CLI version check failed".to_string())?;
+    if !output.status.success() { return Err("CLI version check failed".into()); }
+    super::opencode_isolation::validate_version(String::from_utf8_lossy(&output.stdout).trim())?;
+    let mut command = sandbox.command(&resolved); command.arg("models");
+    let output = crate::owned_process::output(command, Arc::new(AtomicBool::new(false)), Duration::from_secs(15), 256 * 1024).await
+        .map_err(|_| "CLI model probe failed or exceeded its time/output limit".to_string())?;
+    if !output.status.success() { return Err("CLI model probe failed".into()); }
+    let mut models = String::from_utf8_lossy(&output.stdout).lines().map(str::trim)
+        .filter(|line| !line.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    models.sort(); models.dedup(); Ok(models)
 }
 
 #[cfg(test)]
@@ -796,7 +619,7 @@ mod process_tests {
             let cancel = Arc::new(AtomicBool::new(false));
             let marker =
                 std::env::temp_dir().join(format!("luma-cli-cancel-{}", uuid::Uuid::new_v4()));
-            let mut command = tokio::process::Command::new("sh");
+            let mut command = std::process::Command::new("sh");
             command
                 .args(["-c", "echo $$ > \"$1\"; exec sleep 30", "sh"])
                 .arg(&marker);
@@ -829,7 +652,7 @@ mod process_tests {
     #[test]
     fn drains_both_cli_pipes_while_waiting_for_exit() {
         tauri::async_runtime::block_on(async {
-            let mut command = tokio::process::Command::new("sh");
+            let mut command = std::process::Command::new("sh");
             command.args([
                 "-c",
                 "head -c 262144 /dev/zero; head -c 262144 /dev/zero >&2",
