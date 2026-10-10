@@ -92,7 +92,11 @@ jobs:
           assert any(p['id'] == os.environ['PACK_ID'] for p in cfg['packs'])
           PY
       - name: Test deterministic packaging and license locks
-        run: python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+        shell: bash
+        run: |
+          python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
+          python -B -c "import sys, unittest; suite = unittest.defaultTestLoader.discover('scripts/asr-components/qwen-inference', pattern='test_*.py'); assert suite.countTestCases() > 0, 'No Qwen proof tests discovered'; sys.exit(not unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful())"
+          node --test scripts/asr-components/qwen-inference/validate_request.node-test.cjs
       - name: Reproduce review-only recipes from exact pinned sources
         shell: bash
         run: |
