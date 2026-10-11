@@ -318,14 +318,14 @@ mod tests {
     const SAMPLE_ASSETS: &[&str] = &[
         "cudart-llama-bin-win-cuda-12.4-x64.zip",
         "cudart-llama-bin-win-cuda-13.3-x64.zip",
-        "llama-b11243-bin-macos-arm64.tar.gz",
-        "llama-b11243-bin-macos-arm64-kleidiai.tar.gz",
-        "llama-b11243-bin-macos-x64.tar.gz",
-        "llama-b11243-bin-win-cpu-arm64.zip",
-        "llama-b11243-bin-win-cpu-x64.zip",
-        "llama-b11243-bin-win-cuda-12.4-x64.zip",
-        "llama-b11243-bin-win-cuda-13.3-x64.zip",
-        "llama-b11243-bin-win-vulkan-x64.zip",
+        "llama-b11552-bin-macos-arm64.tar.gz",
+        "llama-b11552-bin-macos-arm64-kleidiai.tar.gz",
+        "llama-b11552-bin-macos-x64.tar.gz",
+        "llama-b11552-bin-win-cpu-arm64.zip",
+        "llama-b11552-bin-win-cpu-x64.zip",
+        "llama-b11552-bin-win-cuda-12.4-x64.zip",
+        "llama-b11552-bin-win-cuda-13.3-x64.zip",
+        "llama-b11552-bin-win-vulkan-x64.zip",
     ];
 
     #[test]
@@ -335,7 +335,7 @@ mod tests {
         assert_eq!(selected.backend, "CUDA");
         assert_eq!(
             selected.binary_name,
-            "llama-b11243-bin-win-cuda-12.4-x64.zip"
+            "llama-b11552-bin-win-cuda-12.4-x64.zip"
         );
         assert_eq!(
             selected.cudart_name.as_deref(),
@@ -348,7 +348,7 @@ mod tests {
         let selected = select_llama_cpp_assets(SAMPLE_ASSETS, "windows", "x86_64", false)
             .expect("windows vulkan asset");
         assert_eq!(selected.backend, "Vulkan");
-        assert_eq!(selected.binary_name, "llama-b11243-bin-win-vulkan-x64.zip");
+        assert_eq!(selected.binary_name, "llama-b11552-bin-win-vulkan-x64.zip");
         assert!(selected.cudart_name.is_none());
     }
 
@@ -366,7 +366,7 @@ mod tests {
         let selected = select_llama_cpp_assets(SAMPLE_ASSETS, "macos", "aarch64", false)
             .expect("macos metal asset");
         assert_eq!(selected.backend, "Metal");
-        assert_eq!(selected.binary_name, "llama-b11243-bin-macos-arm64.tar.gz");
+        assert_eq!(selected.binary_name, "llama-b11552-bin-macos-arm64.tar.gz");
         assert!(selected.cudart_name.is_none());
     }
 

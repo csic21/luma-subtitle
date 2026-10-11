@@ -8,7 +8,8 @@ unverified fallback. Changing a pin requires a reviewed app update.
 
 ## Reviewed versions and provenance
 
-Pins were reviewed on 2026-10-10. The catalog records every artifact's exact
+Pins were reviewed on 2026-10-10; the llama.cpp pins were updated to b11552 and
+re-verified on 2026-10-11. The catalog records every artifact's exact
 HTTPS URL, byte size, SHA-256, archive expansion limit and entry limit.
 
 - Windows FFmpeg: Gyan's **8.1.1 essentials** ZIP, from the publisher's
@@ -24,10 +25,14 @@ HTTPS URL, byte size, SHA-256, archive expansion limit and entry limit.
   resolved from that release tag. The complete commit-addressed codeload tar.gz
   was downloaded and hashed to `089b898aa83b24a8321e0fd554eeb0967fb03dd687e27f6374c72d3363b5b429`
   (7,901,615 bytes).
-- llama.cpp: official [b11243 release](https://github.com/ggml-org/llama.cpp/releases/tag/b11243),
+- llama.cpp: official [b11552 release](https://github.com/ggml-org/llama.cpp/releases/tag/b11552),
   preserving Windows CUDA 12.4 plus its matching CUDA runtime, Vulkan and CPU,
   and Apple Silicon Metal. Hashes and sizes are the versioned release assets'
   GitHub `digest` and `size`. The downloaded Metal tarball was also rehashed.
+  The previous b11243 pin was replaced because the fixed build could break local
+  translation on systems where the upstream builds used by earlier releases
+  worked; the CUDA runtime asset is byte-identical between the two builds and
+  keeps its original digest.
 - Whisper models: repository revision
   [`5359861c739e955e79d9a303bcbc70fb988958b1`](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1).
 - Silero VAD 6.2.0: repository revision

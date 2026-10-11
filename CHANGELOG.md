@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.2 — 2026-10-11
+
+### Local translation engine
+- Update the reviewed llama.cpp pins from b11243 to the current upstream b11552 build for macOS arm64 and Windows x64 (CUDA 12.4, Vulkan, CPU and CPU arm64). The previous pin could break local translation on some systems after 1.2.1 changed the installer from an upstream “latest release” download to a fixed, reviewed build.
+- Re-verify every executable pin against the upstream release metadata: exact byte sizes and SHA-256 digests were re-downloaded and confirmed for all five llama.cpp payloads and the byte-identical CUDA runtime package.
+- Re-validate the extraction bounds against the new payloads: the reviewed CUDA/Vulkan/CPU zips and the macOS tar were fully extracted under the production limits, and the reviewed Metal tar bound now accounts for the materialized dylib links.
+- The CUDA runtime (`cudart-llama-bin-win-cuda-12.4-x64.zip`) is byte-identical between builds; the pin now points at the current release while preserving the same digest.
+
+### Validation boundary
+- Rust regression tests pass on the new pins. The new Metal tar extraction test runs the reviewed tar against the real b11552 archive; it is skipped when the local validation fixture is absent.
+- The prior 1.2.1 review boundary is unchanged: no new inference, performance or physical-hardware claims. Windows engine compatibility was not re-tested on native Windows hardware in this environment; the platform matrix in the Release workflow remains the native build gate.
+
 ## 1.2.1 — 2026-10-10
 
 ### Security and reliability

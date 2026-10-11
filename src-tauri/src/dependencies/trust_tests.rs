@@ -408,3 +408,34 @@ fn pinned_catalog_preserves_native_backend_selection() {
         }
     }
 }
+
+#[test]
+fn real_b11552_metal_tar_extracts_under_reviewed_bounds() {
+    const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/dependencies/.b11552-metal-fixture.tar.gz");
+    let path = Path::new(FIXTURE);
+    if !path.exists() {
+        eprintln!("skipped: fixture not present");
+        return;
+    }
+    let temp = Temp::new();
+    let item = trust::artifact("llama-metal").unwrap();
+    archive::extract_tar(path, &temp.0, &item).expect("real reviewed metal tar must extract");
+    let mut count = 0usize;
+    let mut bytes = 0u64;
+    let mut stack = vec![temp.0.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            let meta = entry.metadata().unwrap();
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                count += 1;
+                bytes += meta.len();
+            }
+        }
+    }
+    assert!(count >= 42 && bytes > 30_000_000, "count={count} bytes={bytes}");
+    let server = crate::paths::find_file_recursive(&temp.0, "llama-server").expect("llama-server present");
+    assert!(server.exists());
+}

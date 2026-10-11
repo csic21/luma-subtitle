@@ -26,3 +26,4 @@ id_rsa
 id_ed25519
 
 docs/**
+src-tauri/src/dependencies/.b11552-metal-fixture.tar.gz
