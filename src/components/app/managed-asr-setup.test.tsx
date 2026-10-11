@@ -1,8 +1,11 @@
 import { useState, type ReactNode } from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog } from "@/components/ui/dialog";
+import { createAsrSetupPlan } from "@/lib/asr-setup-plan";
+import { AsrSetupDialog } from "./asr-setup-dialog";
+import type { useAsrSetupQueue } from "@/hooks/use-asr-setup-queue";
 import { runtimeAcknowledgement } from "@/lib/asr-components";
 import { ManagedAsrSetup } from "./managed-asr-setup";
 import { defaultAsrConfig } from "@/config";
@@ -12,8 +15,9 @@ import type { useAsrComponents } from "@/hooks/use-asr-components";
 import type { AsrComponentCatalog, AsrComponentStatus } from "@/lib/asr-components";
 import type { AsrConfig, TFunction } from "@/types";
 
-const mocks = vi.hoisted(() => ({ manager: {} as ReturnType<typeof useAsrComponents>, change: vi.fn() }));
+const mocks = vi.hoisted(() => ({ manager: {} as ReturnType<typeof useAsrComponents>, queue: {} as ReturnType<typeof useAsrSetupQueue>, change: vi.fn() }));
 vi.mock("@/hooks/use-asr-components", () => ({ useAsrComponents: () => mocks.manager }));
+vi.mock("@/hooks/use-asr-setup-queue", () => ({ useAsrSetupQueue: () => mocks.queue }));
 vi.mock("@/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: ReactNode }) => open ? <div role="dialog">{children}</div> : null,
   DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -65,7 +69,7 @@ function mount(config = old, disabled = false) { act(() => { renderer = create(<
 function buttons(key: string) { return renderer!.root.findAllByType("button").filter((button) => button.children.includes(t(key))); }
 function click(key: string, index = 0) { act(() => buttons(key)[index].props.onClick()); }
 function text() { return JSON.stringify(renderer!.toJSON()); }
-beforeEach(() => { vi.clearAllMocks(); mocks.manager = { epoch: 0, catalog: fixture(), components: [], consents: [], loading: false, verified: true, busy: false, refresh: vi.fn(), perform: vi.fn(), cancel: vi.fn() }; });
+beforeEach(() => { vi.clearAllMocks(); mocks.queue = { generation: 0, status: "idle", currentIndex: 0, completedIds: [], cancelling: false, finishingCurrent: false, busy: false, start: vi.fn(), cancel: vi.fn() }; mocks.manager = { epoch: 0, catalog: fixture(), components: [], consents: [], loading: false, verified: true, busy: false, refresh: vi.fn(), perform: vi.fn(), cancel: vi.fn() }; });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; });
 
 describe("managed ASR setup UI", () => {
@@ -73,7 +77,7 @@ describe("managed ASR setup UI", () => {
     mount(); expect(text()).toContain("Windows CPU pack"); expect(text()).not.toContain("Mac MLX pack"); expect(text()).not.toContain("MLX-only model");
     expect(text()).toContain("Download: 1.0 MB · Installed: 2.0 MB"); expect(text()).toContain("https://example.test/runtime.zip"); expect(text()).toContain("https://example.test/LICENSE");
     expect(renderer!.root.findAllByType("input")).toHaveLength(0); expect(mocks.change).not.toHaveBeenCalled(); expect(mocks.manager.perform).not.toHaveBeenCalled();
-    expect(buttons("asr.managed.use")[0].props.disabled).toBe(true);
+    expect(buttons("asr.managed.use")).toHaveLength(0); expect(buttons("asr.setup.install")[0].props.disabled).toBe(false);
     click("asr.managed.install"); expect(mocks.manager.perform).toHaveBeenCalledWith("install", "runtime");
     click("asr.managed.install", 1); expect(mocks.manager.perform).toHaveBeenCalledWith("install", "model");
   });
@@ -84,7 +88,7 @@ describe("managed ASR setup UI", () => {
   });
   it("requires a separate Qwen aligner installation before use", () => {
     mocks.manager.catalog = fixture("qwen3-asr"); mocks.manager.components = [installed("runtime"), installed("model")]; mount({ ...old, engine: "qwen3-asr" });
-    expect(text()).toContain("Required aligner"); expect(buttons("asr.managed.use")[0].props.disabled).toBe(true);
+    expect(text()).toContain("Required aligner"); expect(buttons("asr.managed.use")).toHaveLength(0); expect(buttons("asr.setup.install")[0].props.disabled).toBe(false);
     click("asr.managed.install"); expect(mocks.manager.perform).toHaveBeenCalledWith("install", "aligner");
     mocks.manager.components = [...mocks.manager.components, installed("aligner")]; act(() => renderer!.update(<Harness config={{ ...old, engine: "qwen3-asr" }} />));
     click("asr.managed.use"); expect(mocks.change.mock.calls[0][0].aligner_path).toBe("/private/aligner");
@@ -207,7 +211,367 @@ describe("managed ASR setup UI", () => {
     click("asr.managed.install"); expect(mocks.manager.perform).toHaveBeenCalledWith("install", "model"); expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
   });
   it("provides both language strings for every managed setup label", () => {
-    const keys = Object.keys(enUS).filter((key) => key.startsWith("asr.managed.") || key.startsWith("asr.terms.")); expect(keys.length).toBeGreaterThan(30);
+    const keys = Object.keys(enUS).filter((key) => key.startsWith("asr.managed.") || key.startsWith("asr.terms.") || key.startsWith("asr.setup.")); expect(keys.length).toBeGreaterThan(30);
     keys.forEach((key) => expect(zhCN[key as keyof typeof zhCN]).toBeTruthy());
   });
+});
+
+function nodeText(node: ReactTestInstance | string): string {
+  return typeof node === "string" ? node : node.children.map(nodeText).join("");
+}
+function setupCard() {
+  return renderer!.root.findAll((node) => node.type === "div" && node.props["data-testid"] === "asr-setup-card")[0];
+}
+function setupPlan() {
+  const catalog = mocks.manager.catalog!;
+  return createAsrSetupPlan({ engine: catalog.runtimes[0].engine, runtime: catalog.runtimes[0],
+    model: catalog.models.find((item) => item.role === "model" && item.backend === catalog.runtimes[0].backend),
+    aligner: catalog.models.find((item) => item.role === "aligner" && item.backend === catalog.runtimes[0].backend),
+    components: mocks.manager.components, consents: mocks.manager.consents, verified: mocks.manager.verified })!;
+}
+function rerender(config = old, disabled = false) {
+  act(() => renderer!.update(<Harness config={config} disabled={disabled} />));
+}
+function select(index: number, value: string) {
+  act(() => renderer!.root.findAllByType("select")[index].props.onChange({ target: { value } }));
+}
+
+describe("one-click ASR setup", () => {
+  it("keeps the default card compact and advanced management collapsed", () => {
+    mount();
+    const card = setupCard();
+    expect(nodeText(card)).toContain(t("asr.setup.whisperTitle"));
+    expect(nodeText(card)).toContain("Windows · CPU");
+    expect(nodeText(card)).toContain(t("asr.setup.experimental"));
+    expect(nodeText(card)).toContain("2 components to download · 3.0 MB");
+    expect(nodeText(card)).not.toContain("Installed:");
+    expect(nodeText(card)).not.toContain("https://");
+    expect(card.findAllByType("select")).toHaveLength(0);
+    expect(card.findAllByType("button")).toHaveLength(1);
+    expect(nodeText(card.findByType("button"))).toBe(t("asr.setup.install"));
+    const advanced = renderer!.root.findAllByType("details").find((node) =>
+      node.findAllByType("summary").some((summary) => nodeText(summary) === t("asr.setup.advanced")))!;
+    expect(advanced.props.open).toBeFalsy();
+    expect(advanced.findAllByType("select")).toHaveLength(2);
+    expect(renderer!.root.findAllByType("details").every((node) => !node.props.open)).toBe(true);
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it("excludes the installed runtime from the 3.72 GB Qwen download summary", () => {
+    mocks.manager.catalog = fixture("qwen3-asr");
+    const catalog = mocks.manager.catalog;
+    catalog.runtimes[0] = { ...catalog.runtimes[0], archive: { ...catalog.runtimes[0].archive!, bytes: 411_133_181 } };
+    const model = catalog.models.find((item) => item.id === "model")!;
+    model.files = [{ ...model.files[0], bytes: 1_880_618_159 }];
+    const aligner = catalog.models.find((item) => item.id === "aligner")!;
+    aligner.files = [{ ...aligner.files[0], bytes: 1_840_070_940 }];
+    mocks.manager.components = [{ ...installed("runtime"), installed_bytes: 411_133_181 }];
+    mount({ ...old, engine: "qwen3-asr" });
+    const summary = nodeText(setupCard());
+    expect(summary).toContain("2 components to download · 3.72 GB");
+    expect(summary).toContain("RuntimeReady");
+    expect(summary).not.toContain("4.13 GB");
+    expect(summary).not.toContain("411.1 MB");
+    expect(summary).toContain(t("asr.setup.qwenHint"));
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    click("asr.setup.install");
+    expect(nodeText(renderer!.root.findByProps({ role: "dialog" }))).toContain("Automatically install 2 components · 3.72 GB.");
+    expect(renderer!.root.findByType(AsrSetupDialog).props.plan.steps.map((step: { component: { id: string } }) => step.component.id)).toEqual(["model", "aligner"]);
+    expect(renderer!.root.findAllByType(Checkbox)).toHaveLength(0);
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+  });
+
+  it("reviews one frozen download plan with exact runtime terms and model licenses before starting once", () => {
+    const runtime = useRecipe();
+    mocks.manager.catalog!.models[0] = { ...mocks.manager.catalog!.models[0], license: "Apache-2.0", license_url: "https://example.test/model-LICENSE" };
+    mount();
+    click("asr.setup.install");
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
+    expect(mocks.manager.perform).not.toHaveBeenCalled();
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    const dialog = renderer!.root.findByProps({ role: "dialog" });
+    const plan = renderer!.root.findByType(AsrSetupDialog).props.plan;
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(plan.steps.map((step: { component: { id: string } }) => step.component.id)).toEqual(["runtime", "model"]);
+    expect(nodeText(dialog)).toContain("Automatically install 2 components · 3.3 MB.");
+    expect(nodeText(dialog)).toContain("Apache-2.0");
+    expect(dialog.findAllByType("a").map((link) => link.props.href)).toContain("https://example.test/model-LICENSE");
+    expect(dialog.findAllByType("pre").map(nodeText)).toEqual(runtime.recipe!.terms.map((term) => term.text));
+    for (const term of runtime.recipe!.terms) {
+      expect(nodeText(dialog)).toContain(term.id);
+      expect(nodeText(dialog)).toContain(term.version);
+      expect(nodeText(dialog)).toContain(term.sha256);
+      expect(dialog.findAllByType("a").map((link) => link.props.href)).toContain(term.url);
+    }
+    expect(dialog.findAllByType("details").every((node) => !node.props.open)).toBe(true);
+    expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
+    expect(buttons("asr.setup.start")[0].props.disabled).toBe(true);
+    click("asr.setup.start");
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange("indeterminate"));
+    expect(buttons("asr.setup.start")[0].props.disabled).toBe(true);
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange(true));
+    const accept = buttons("asr.setup.start")[0].props.onClick;
+    act(() => { accept(); accept(); });
+    expect(mocks.queue.start).toHaveBeenCalledTimes(1);
+    expect(mocks.queue.start).toHaveBeenCalledWith(plan, { runtime: runtimeAcknowledgement(runtime) }, 0);
+    expect(mocks.manager.perform).not.toHaveBeenCalled();
+    expect(mocks.change).not.toHaveBeenCalled();
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+  });
+
+  it("starts model-only setup without fabricating runtime consent", () => {
+    useRecipe();
+    mocks.manager.components = [installed("runtime")];
+    mount(); click("asr.setup.install");
+    expect(renderer!.root.findAllByType(Checkbox)).toHaveLength(0);
+    expect(renderer!.root.findAllByType("pre")).toHaveLength(0);
+    expect(buttons("asr.setup.start")[0].props.disabled).toBe(false);
+    const plan = renderer!.root.findByType(AsrSetupDialog).props.plan;
+    click("asr.setup.start");
+    expect(mocks.queue.start).toHaveBeenCalledWith(plan, {}, 0);
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it("blocks the primary setup action when exact runtime acknowledgement is incomplete", () => {
+    const runtime = useRecipe();
+    mocks.manager.catalog!.runtimes[0] = { ...runtime, plan_sha256: null };
+    mount();
+    expect(nodeText(setupCard())).toContain(t("asr.setup.unavailable"));
+    expect(buttons("asr.setup.install")[0].props.disabled).toBe(true);
+    click("asr.setup.install");
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    expect(mocks.manager.perform).not.toHaveBeenCalled();
+  });
+
+  it("discloses optional Windows certificate checks and Microsoft downloads in the combined confirmation", () => {
+    const runtime = useRecipe();
+    mocks.manager.catalog!.runtimes[0] = { ...runtime, recipe: { ...runtime.recipe!, windows_crt: "msvc-14.44.35211-x64" } };
+    mount(); click("asr.setup.install");
+    const dialog = renderer!.root.findByProps({ role: "dialog" });
+    expect(nodeText(dialog)).toContain(t("asr.setup.windowsTrust"));
+    expect(dialog.findAllByType("a").some((link) => new URL(link.props.href).hostname === "download.visualstudio.microsoft.com")).toBe(true);
+    expect(nodeText(dialog)).toContain("26,935,768 bytes");
+    expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+  });
+
+  it.each(["back", "dismiss"])("discards assent on %s and starts every reopened confirmation unchecked", (closeMethod) => {
+    useRecipe(); mount(); click("asr.setup.install");
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange(true));
+    const staleAccept = buttons("asr.setup.start")[0].props.onClick;
+    if (closeMethod === "back") click("asr.setup.back");
+    else act(() => renderer!.root.findByType(Dialog).props.onOpenChange(false));
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+    act(() => staleAccept());
+    click("asr.setup.install");
+    expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
+    expect(buttons("asr.setup.start")[0].props.disabled).toBe(true);
+    act(() => staleAccept());
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    expect(mocks.manager.perform).not.toHaveBeenCalled();
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale confirmation callbacks after model A to B to A selection changes", () => {
+    const runtime = useRecipe();
+    const model = mocks.manager.catalog!.models[0];
+    mocks.manager.catalog!.models.push({ ...model, id: "model-b", label: "Second compatible model" });
+    mount(); click("asr.setup.install");
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange(true));
+    const staleAccept = buttons("asr.setup.start")[0].props.onClick;
+    const staleParentAccept = renderer!.root.findByType(AsrSetupDialog).props.onAccept;
+    select(1, "model-b"); select(1, "model");
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+    act(() => { staleAccept(); staleParentAccept({ runtime: runtimeAcknowledgement(runtime) }); });
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    click("asr.setup.install");
+    expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
+    act(() => staleParentAccept({ runtime: runtimeAcknowledgement(runtime) }));
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+  });
+
+  it("rejects pending consent when exact terms change under the same runtime ID", () => {
+    const runtime = useRecipe(); mount(); click("asr.setup.install");
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange(true));
+    const staleAccept = renderer!.root.findByType(AsrSetupDialog).props.onAccept;
+    mocks.manager.catalog!.runtimes[0] = { ...runtime, recipe: { ...runtime.recipe!, terms: [{ ...runtime.recipe!.terms[0], text: "Replacement exact agreement.", version: "2026-02", sha256: "f".repeat(64) }] } };
+    rerender();
+    act(() => staleAccept({ runtime: runtimeAcknowledgement(runtime) }));
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+    click("asr.setup.install");
+    expect(renderer!.root.findByType(Checkbox).props.checked).toBe(false);
+    expect(renderer!.root.findAllByType("pre").map(nodeText)).toEqual(["Replacement exact agreement."]);
+    expect(nodeText(renderer!.root.findByProps({ role: "dialog" }))).not.toContain("Exact third-party terms requiring acceptance.");
+  });
+
+  it.each(["engine", "unmount"])("invalidates pending one-click consent on %s", (change) => {
+    const runtime = useRecipe();
+    act(() => { renderer = create(<ManagedAsrSetup config={old} onChange={mocks.change} disabled={false} t={t} />); });
+    click("asr.setup.install");
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange(true));
+    const staleAccept = buttons("asr.setup.start")[0].props.onClick;
+    const staleParentAccept = renderer!.root.findByType(AsrSetupDialog).props.onAccept;
+    if (change === "unmount") act(() => renderer!.unmount());
+    else {
+      mocks.manager.catalog = fixture("qwen3-asr");
+      act(() => renderer!.update(<ManagedAsrSetup config={{ ...old, engine: "qwen3-asr" }} onChange={mocks.change} disabled={false} t={t} />));
+    }
+    act(() => { staleAccept(); staleParentAccept({ runtime: runtimeAcknowledgement(runtime) }); });
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it("disables confirmation after settings are locked, including a previously captured callback", () => {
+    const runtime = useRecipe(); mount(); click("asr.setup.install");
+    act(() => renderer!.root.findByType(Checkbox).props.onCheckedChange(true));
+    const staleAccept = buttons("asr.setup.start")[0].props.onClick;
+    const staleParentAccept = renderer!.root.findByType(AsrSetupDialog).props.onAccept;
+    rerender(old, true);
+    expect(renderer!.root.findByType(Checkbox).props.disabled).toBe(true);
+    expect(buttons("asr.setup.start")[0].props.disabled).toBe(true);
+    act(() => { staleAccept(); staleParentAccept({ runtime: runtimeAcknowledgement(runtime) }); });
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps selectors and per-component operations locked across the whole queue", () => {
+    const plan = setupPlan();
+    mocks.queue = { ...mocks.queue, status: "running", busy: true, plan, currentIndex: 1, completedIds: ["runtime"] };
+    mocks.manager.components = [installed("runtime")];
+    mocks.manager.operation = { request_id: "model-request", component_id: "model", phase: "downloading", downloaded_bytes: 500_000, total_bytes: 2_000_000, message: "Downloading model" };
+    mount();
+    expect(nodeText(setupCard())).toContain("Step 2 of 2");
+    expect(nodeText(setupCard())).toContain("1.5 MB / 3.0 MB");
+    expect(renderer!.root.findByProps({ role: "progressbar" }).props["aria-valuenow"]).toBe(50);
+    expect(renderer!.root.findAllByType("select").every((node) => node.props.disabled)).toBe(true);
+    for (const key of ["asr.managed.install", "asr.managed.repair", "asr.managed.remove", "asr.managed.refresh"]) {
+      expect(buttons(key).length).toBeGreaterThan(0);
+      expect(buttons(key).every((node) => node.props.disabled)).toBe(true);
+    }
+    expect(buttons("asr.setup.install")).toHaveLength(0);
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    expect(buttons("asr.managed.cancel")).toHaveLength(1);
+    click("asr.managed.cancel");
+    expect(mocks.queue.cancel).toHaveBeenCalledTimes(1);
+    expect(mocks.manager.cancel).not.toHaveBeenCalled();
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it("keeps a cancelling activation visible while preventing another cancellation", () => {
+    mocks.queue = { ...mocks.queue, status: "running", busy: true, cancelling: true, finishingCurrent: true, plan: setupPlan() };
+    mocks.manager.operation = { request_id: "request", component_id: "runtime", phase: "activating", downloaded_bytes: 1_000_000, total_bytes: 1_000_000, message: "Activating" };
+    mount();
+    expect(nodeText(setupCard())).toContain(t("asr.setup.stopping"));
+    expect(nodeText(setupCard())).toContain(t("asr.setup.finishingCurrent"));
+    expect(buttons("asr.managed.cancelling")[0].props.disabled).toBe(true);
+    expect(renderer!.root.findAllByType("select").every((node) => node.props.disabled)).toBe(true);
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it.each(["cancelled", "error", "stale"] as const)("shows %s and previews only missing work on retry", (status) => {
+    const originalPlan = setupPlan();
+    mocks.manager.components = [installed("runtime")];
+    mocks.queue = { ...mocks.queue, status, plan: originalPlan, completedIds: ["runtime"], ...(status === "error" ? { error: "Checksum mismatch: model.bin" } : {}) };
+    mount();
+    expect(nodeText(setupCard())).toContain(t(`asr.setup.${status}`));
+    expect(nodeText(setupCard())).toContain("1 components to download · 2.0 MB");
+    expect(buttons("asr.setup.retry")[0].props.disabled).toBe(false);
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    if (status === "error") expect(text()).toContain("Checksum mismatch: model.bin");
+    click("asr.setup.retry");
+    expect(renderer!.root.findByType(AsrSetupDialog).props.plan.steps.map((step: { component: { id: string } }) => step.component.id)).toEqual(["model"]);
+    expect(mocks.queue.start).not.toHaveBeenCalled();
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it("shows a short actionable error on the card while retaining full diagnostics in advanced details", () => {
+    const firstLine = "Checksum mismatch: " + "x".repeat(260);
+    const detail = "Detailed verification diagnostics for model.bin";
+    mocks.queue = { ...mocks.queue, status: "error", plan: setupPlan(), error: `${firstLine}\n${detail}` };
+    mount();
+    expect(nodeText(setupCard())).toContain(firstLine.slice(0, 240));
+    expect(nodeText(setupCard())).not.toContain(firstLine);
+    expect(nodeText(setupCard())).not.toContain(detail);
+    expect(nodeText(renderer!.root)).toContain(`${firstLine}\n${detail}`);
+    expect(buttons("asr.setup.retry")[0].props.disabled).toBe(false);
+  });
+
+  it("never applies after queue success until a complete verified selection exists", () => {
+    mocks.queue = { ...mocks.queue, status: "success", plan: setupPlan(), completedIds: ["runtime", "model"] };
+    mocks.manager.components = [installed("runtime"), installed("model")];
+    mocks.manager.verified = false;
+    mount();
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    expect(buttons("asr.setup.install")[0].props.disabled).toBe(true);
+    expect(mocks.change).not.toHaveBeenCalled();
+    mocks.manager.verified = true;
+    mocks.manager.components[1] = { ...installed("model"), path: "relative/model" };
+    rerender();
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    expect(nodeText(setupCard())).not.toContain("Speech modelReady");
+    expect(mocks.change).not.toHaveBeenCalled();
+    mocks.manager.components[1] = installed("model");
+    rerender();
+    expect(nodeText(setupCard())).toContain(t("asr.setup.allReady"));
+    expect(buttons("asr.managed.use")[0].props.disabled).toBe(false);
+    expect(mocks.change).not.toHaveBeenCalled();
+    click("asr.managed.use");
+    expect(mocks.change).toHaveBeenCalledTimes(1);
+    expect(mocks.change).toHaveBeenCalledWith({ ...old, python_path: "/private/runtime/python", model_path: "/private/model", aligner_path: "", device: "cpu" });
+    expect(buttons("asr.managed.selected")[0].props.disabled).toBe(true);
+    expect(nodeText(setupCard())).toContain(t("asr.managed.saveHint"));
+  });
+
+  it("does not expose Apply for mismatched versions or missing Qwen aligner paths", () => {
+    mocks.manager.catalog = fixture("qwen3-asr");
+    mocks.manager.components = [installed("runtime"), { ...installed("model"), version: "old" }, installed("aligner")];
+    mount({ ...old, engine: "qwen3-asr" });
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    mocks.manager.components[1] = installed("model");
+    mocks.manager.components[2] = { ...installed("aligner"), path: null };
+    rerender({ ...old, engine: "qwen3-asr" });
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["runtime", "Runtime"], ["model", "Speech model"], ["aligner", "Timing model"],
+  ])("requires repair instead of showing Ready or Apply when installed %s has an error", (id, label) => {
+    mocks.manager.catalog = fixture("qwen3-asr");
+    mocks.manager.components = [installed("runtime"), installed("model"), installed("aligner")]
+      .map((status) => status.id === id ? { ...status, error: "Verification failed" } : status);
+    mount({ ...old, engine: "qwen3-asr" });
+    expect(nodeText(setupCard())).not.toContain(`${label}Ready`);
+    expect(nodeText(setupCard())).not.toContain(t("asr.setup.allReady"));
+    expect(buttons("asr.managed.use")).toHaveLength(0);
+    click("asr.setup.install");
+    const plan = renderer!.root.findByType(AsrSetupDialog).props.plan;
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0]).toMatchObject({ action: "repair", component: { id } });
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+  it("shows cancellation IPC failure on the running card and keeps Cancel available", () => {
+    mocks.queue = { ...mocks.queue, status: "running", busy: true, plan: setupPlan(), error: "Cancellation request failed" };
+    mount();
+    expect(nodeText(setupCard())).toContain("Cancellation request failed");
+    expect(buttons("asr.managed.cancel")[0].props.disabled).toBe(false);
+    click("asr.managed.cancel");
+    expect(mocks.queue.cancel).toHaveBeenCalledTimes(1);
+    expect(mocks.change).not.toHaveBeenCalled();
+  });
+
+  it.each(["install", "apply"] as const)("rejects a captured %s action after model A → B → A", (action) => {
+    mocks.manager.catalog!.models.push({ ...mocks.manager.catalog!.models[0], id: "other-model", label: "Other model" });
+    if (action === "apply") mocks.manager.components = [installed("runtime"), installed("model"), installed("other-model")];
+    mount();
+    const stale = buttons(action === "apply" ? "asr.managed.use" : "asr.setup.install")[0].props.onClick;
+    act(() => renderer!.root.findAllByType("select")[1].props.onChange({ target: { value: "other-model" } }));
+    act(() => renderer!.root.findAllByType("select")[1].props.onChange({ target: { value: "model" } }));
+    act(() => stale());
+    expect(mocks.change).not.toHaveBeenCalled();
+    expect(renderer!.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+  });
+
 });

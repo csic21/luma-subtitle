@@ -35,20 +35,39 @@ describe("managed ASR component controller", () => {
     expect(listen).toHaveBeenCalledWith("asr-component-progress", expect.any(Function));
     expect(installAsrComponent).not.toHaveBeenCalled(); expect(repairAsrComponent).not.toHaveBeenCalled(); expect(removeAsrComponent).not.toHaveBeenCalled();
   });
+  it("returns explicit success, error, busy and cancellation outcomes to sequential callers", async () => {
+    const pending = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValueOnce(pending.promise); await mount();
+    let request!: ReturnType<typeof state.perform>;
+    act(() => { request = state.perform("install", "runtime"); });
+    expect(await state.perform("install", "other")).toEqual({ status: "busy" });
+    await act(async () => { pending.resolve(installed); expect(await request).toEqual({ status: "success", component: installed }); });
+    vi.mocked(repairAsrComponent).mockRejectedValueOnce(new Error("repair failed"));
+    await act(async () => { expect(await state.perform("repair", "runtime")).toEqual({ status: "error", error: "repair failed" }); });
+    const cancelled = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValueOnce(cancelled.promise);
+    act(() => { request = state.perform("install", "runtime"); }); emit(progress("request-3", "cancelled"));
+    await act(async () => { cancelled.reject(new Error("cancelled")); expect(await request).toEqual({ status: "cancelled" }); });
+  });
+  it("reports a too-late cancellation without treating the component as cancelled", async () => {
+    const pending = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValueOnce(pending.promise); vi.mocked(cancelAsrComponent).mockResolvedValueOnce(false); await mount();
+    let request!: ReturnType<typeof state.perform>; act(() => { request = state.perform("install", "runtime"); });
+    await act(async () => { expect(await state.cancel()).toEqual({ status: "too_late" }); });
+    expect(state.notice).toBe("asr.managed.cancelTooLate"); expect(state.busy).toBe(true);
+    await act(async () => { pending.resolve(installed); expect(await request).toEqual({ status: "success", component: installed }); });
+  });
   it("forwards explicit exact consent and only caches the receipt confirmed by status", async () => {
     const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "terms", version: "1", sha256: "b".repeat(64) }] };
     const receipt = { component_id: "runtime", plan_sha256: consent.plan_sha256, terms: consent.acknowledged_terms };
     vi.mocked(installAsrComponent).mockResolvedValue(installed);
     vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockResolvedValueOnce({ components: [installed], operation: null, consents: [receipt] });
     await mount(); expect(state.consents).toEqual([]);
-    await act(async () => state.perform("install", "runtime", consent));
+    await act(async () => { await state.perform("install", "runtime", consent); });
     expect(installAsrComponent).toHaveBeenCalledWith("runtime", "request-1", consent); expect(state.consents).toEqual([receipt]);
   });
   it("does not infer recorded assent from an installed runtime when receipt verification fails", async () => {
     const consent = { plan_sha256: "a".repeat(64), acknowledged_terms: [{ id: "terms", version: "1", sha256: "b".repeat(64) }] };
     vi.mocked(installAsrComponent).mockResolvedValue(installed);
     vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockRejectedValueOnce(new Error("receipt unavailable"));
-    await mount(); await act(async () => state.perform("install", "runtime", consent));
+    await mount(); await act(async () => { await state.perform("install", "runtime", consent); });
     expect(state.components).toEqual([installed]); expect(state.consents).toEqual([]); expect(state.busy).toBe(false);
   });
   it("rejects a stale consent receipt that arrives after changing engines", async () => {
@@ -57,13 +76,13 @@ describe("managed ASR component controller", () => {
     const late = deferred<AsrComponentsSnapshot>();
     vi.mocked(installAsrComponent).mockResolvedValue(installed);
     vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockReturnValueOnce(late.promise).mockResolvedValueOnce(empty);
-    await mount(); let operation!: Promise<void>; await act(async () => { operation = state.perform("install", "runtime", consent); });
+    await mount(); let operation!: ReturnType<typeof state.perform>; await act(async () => { operation = state.perform("install", "runtime", consent); });
     await change("qwen3-asr"); await act(async () => { late.resolve({ components: [installed], operation: null, consents: [receipt] }); await operation; });
     expect(state.consents).toEqual([]); expect(state.components).toEqual([]);
   });
   it("coalesces duplicate clicks, filters request and component IDs, and uses the returned paths", async () => {
     const pending = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValue(pending.promise); await mount();
-    let first!: Promise<void>; act(() => { first = state.perform("install", "runtime"); void state.perform("install", "runtime"); });
+    let first!: ReturnType<typeof state.perform>; act(() => { first = state.perform("install", "runtime"); void state.perform("install", "runtime"); });
     expect(installAsrComponent).toHaveBeenCalledTimes(1); expect(installAsrComponent).toHaveBeenCalledWith("runtime", "request-1"); expect(state.busy).toBe(true);
     emit(progress("stale")); expect(state.operation?.phase).toBe("preparing");
     emit(progress("request-1", "downloading", "other")); expect(state.operation?.phase).toBe("preparing");
@@ -75,7 +94,7 @@ describe("managed ASR component controller", () => {
   });
   it("waits for terminal cancellation and prevents repeated cancellation clicks", async () => {
     const pending = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValue(pending.promise); await mount();
-    let first!: Promise<void>; act(() => { first = state.perform("install", "runtime"); });
+    let first!: ReturnType<typeof state.perform>; act(() => { first = state.perform("install", "runtime"); });
     await act(async () => { await state.cancel(); await state.cancel(); });
     expect(cancelAsrComponent).toHaveBeenCalledTimes(1); expect(cancelAsrComponent).toHaveBeenCalledWith("request-1"); expect(state.busy).toBe(true); expect(state.cancelling).toBe(true);
     emit(progress("request-1", "cancelled"));
@@ -84,40 +103,40 @@ describe("managed ASR component controller", () => {
   });
   it("keeps real cancellation errors retryable", async () => {
     vi.mocked(installAsrComponent).mockReturnValue(new Promise(() => {})); vi.mocked(cancelAsrComponent).mockRejectedValueOnce(new Error("cancel failed")); await mount();
-    act(() => { void state.perform("install", "runtime"); }); await act(async () => state.cancel());
+    act(() => { void state.perform("install", "runtime"); }); await act(async () => { await state.cancel(); });
     expect(state.error).toBe("cancel failed"); expect(state.cancelling).toBe(false); expect(state.busy).toBe(true);
-    await act(async () => state.cancel()); expect(cancelAsrComponent).toHaveBeenCalledTimes(2);
+    await act(async () => { await state.cancel(); }); expect(cancelAsrComponent).toHaveBeenCalledTimes(2);
   });
   it("recovers a failed repair and allows a fresh retry", async () => {
     vi.mocked(repairAsrComponent).mockRejectedValueOnce(new Error("checksum mismatch")).mockResolvedValueOnce(installed);
     vi.mocked(asrComponentStatus).mockResolvedValueOnce(empty).mockResolvedValueOnce({ components: [{ ...installed, state: "damaged" }], operation: null });
-    await mount(); await act(async () => state.perform("repair", "runtime"));
+    await mount(); await act(async () => { await state.perform("repair", "runtime"); });
     expect(state.error).toBe("checksum mismatch"); expect(state.components[0].state).toBe("damaged"); expect(state.busy).toBe(false);
-    await act(async () => state.perform("repair", "runtime")); expect(state.components[0].state).toBe("installed"); expect(state.error).toBeUndefined();
+    await act(async () => { await state.perform("repair", "runtime"); }); expect(state.components[0].state).toBe("installed"); expect(state.error).toBeUndefined();
   });
   it("does not enable selection from stale integrity results after failed repair and failed refresh", async () => {
     vi.mocked(asrComponentStatus).mockResolvedValueOnce({ components: [installed], operation: null }).mockRejectedValueOnce(new Error("integrity check unavailable"));
     vi.mocked(repairAsrComponent).mockRejectedValueOnce(new Error("repair failed")); await mount(); expect(state.verified).toBe(true);
-    await act(async () => state.perform("repair", "runtime")); expect(state.verified).toBe(false); expect(state.error).toBe("repair failed");
-    vi.mocked(asrComponentStatus).mockResolvedValueOnce({ components: [installed], operation: null }); await act(async () => state.refresh()); expect(state.verified).toBe(true);
+    await act(async () => { await state.perform("repair", "runtime"); }); expect(state.verified).toBe(false); expect(state.error).toBe("repair failed");
+    vi.mocked(asrComponentStatus).mockResolvedValueOnce({ components: [installed], operation: null }); await act(async () => { await state.refresh(); }); expect(state.verified).toBe(true);
   });
   it("removes only the requested managed component", async () => {
     vi.mocked(removeAsrComponent).mockResolvedValue({ ...installed, state: "not_installed", path: null, python_path: null }); await mount();
-    await act(async () => state.perform("remove", "runtime"));
+    await act(async () => { await state.perform("remove", "runtime"); });
     expect(removeAsrComponent).toHaveBeenCalledWith("runtime", "request-1"); expect(state.components[0].state).toBe("not_installed");
   });
   it("cancels on engine switching and rejects old events and completions through A → B → A", async () => {
     const old = deferred<AsrComponentStatus>(); const next = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
-    await mount(); let first!: Promise<void>; act(() => { first = state.perform("install", "runtime"); });
+    await mount(); let first!: ReturnType<typeof state.perform>; act(() => { first = state.perform("install", "runtime"); });
     await change("qwen3-asr"); expect(cancelAsrComponent).toHaveBeenCalledWith("request-1"); await change("whisper-accelerated");
-    let second!: Promise<void>; act(() => { second = state.perform("install", "runtime"); });
+    let second!: ReturnType<typeof state.perform>; act(() => { second = state.perform("install", "runtime"); });
     emit(progress("request-1", "error"), 0); await act(async () => { old.resolve(installed); await first; });
     expect(state.busy).toBe(true); expect(state.components).toEqual([]); expect(state.error).toBeUndefined(); expect(state.operation?.request_id).toBe("request-2");
     await act(async () => { next.resolve(installed); await second; }); expect(state.components).toEqual([installed]);
   });
   it("unsubscribes and cancels an owned install on unmount without publishing late failure", async () => {
     const pending = deferred<AsrComponentStatus>(); vi.mocked(installAsrComponent).mockReturnValue(pending.promise); await mount();
-    let first!: Promise<void>; act(() => { first = state.perform("install", "runtime"); }); act(() => renderer!.unmount()); renderer = undefined;
+    let first!: ReturnType<typeof state.perform>; act(() => { first = state.perform("install", "runtime"); }); act(() => renderer!.unmount()); renderer = undefined;
     expect(unlisten).toHaveBeenCalledTimes(1); expect(cancelAsrComponent).toHaveBeenCalledWith("request-1");
     await act(async () => { pending.reject(new Error("late failure")); await first; }); expect(state.error).toBeUndefined();
   });
@@ -132,7 +151,7 @@ describe("managed ASR component controller", () => {
   });
   it("observes a pending operation after remount and refreshes on its terminal event", async () => {
     vi.mocked(asrComponentStatus).mockResolvedValueOnce({ components: [], operation: progress("recovered") }).mockResolvedValueOnce({ components: [installed], operation: null }); await mount();
-    expect(state.busy).toBe(true); await act(async () => state.perform("install", "other")); expect(installAsrComponent).not.toHaveBeenCalled();
+    expect(state.busy).toBe(true); await act(async () => { await state.perform("install", "other"); }); expect(installAsrComponent).not.toHaveBeenCalled();
     await act(async () => emit(progress("recovered", "complete"))); expect(state.busy).toBe(false); expect(state.components).toEqual([installed]);
     expect(cancelAsrComponent).not.toHaveBeenCalled();
   });
@@ -153,10 +172,10 @@ describe("managed ASR component controller", () => {
   });
   it("supports refreshing after initial status or listener failure", async () => {
     vi.mocked(listen).mockRejectedValueOnce(new Error("event bridge unavailable")); await mount(); expect(state.error).toContain("event bridge unavailable");
-    await act(async () => state.refresh()); expect(state.loading).toBe(false); expect(state.error).toBeUndefined(); expect(state.catalog).toEqual(catalog);
+    await act(async () => { await state.refresh(); }); expect(state.loading).toBe(false); expect(state.error).toBeUndefined(); expect(state.catalog).toEqual(catalog);
   });
   it("shows desktop requirements without installation attempts in a preview", async () => {
     vi.stubGlobal("window", {}); await mount(); expect(state.error).toBe("notice.requireTauriConfig"); expect(listen).not.toHaveBeenCalled(); expect(asrComponentCatalog).not.toHaveBeenCalled();
-    await act(async () => state.perform("install", "runtime")); expect(installAsrComponent).not.toHaveBeenCalled();
+    await act(async () => { await state.perform("install", "runtime"); }); expect(installAsrComponent).not.toHaveBeenCalled();
   });
 });

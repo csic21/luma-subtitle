@@ -8,6 +8,18 @@ import {
 import { isTerminalComponentPhase, type AsrComponentAction, type AsrComponentCatalog, type AsrComponentProgress, type AsrComponentStatus, type AsrInstallConsent, type AsrRecordedConsent } from "@/lib/asr-components";
 import type { TFunction } from "@/types";
 
+export type AsrComponentResult =
+  | { status: "success"; component: AsrComponentStatus }
+  | { status: "cancelled" | "busy" }
+  | { status: "error"; error: string };
+export type AsrComponentCancelResult =
+  | { status: "accepted" | "too_late" | "idle" }
+  | { status: "error"; error: string };
+export type AsrComponentsRefreshResult =
+  | { status: "success"; catalog: AsrComponentCatalog; components: AsrComponentStatus[]; consents: AsrRecordedConsent[]; operation?: AsrComponentProgress }
+  | { status: "cancelled" | "busy" }
+  | { status: "error"; error: string };
+
 type State = {
   epoch: number;
   loading: boolean;
@@ -43,11 +55,12 @@ export function useAsrComponents(engine: string, t: TFunction) {
     if (current()) setState((previous) => ({ ...previous, ...patch, epoch }));
   };
 
-  const refresh = async () => {
-    if (!current() || loadingRef.current || active.current?.own) return;
+  const refresh = async (): Promise<AsrComponentsRefreshResult> => {
+    if (!current()) return { status: "cancelled" };
+    if (loadingRef.current || active.current?.own) return { status: "busy" };
     if (!hasTauriRuntime()) {
       publish({ loading: false, error: t("notice.requireTauriConfig") });
-      return;
+      return { status: "error", error: t("notice.requireTauriConfig") };
     }
     const version = ++loadVersion.current;
     const lifecycle = lifecycleVersion.current;
@@ -70,11 +83,11 @@ export function useAsrComponents(engine: string, t: TFunction) {
             void refresh();
           }
         });
-        if (!current() || lifecycleVersion.current !== lifecycle) { unlisten(); return; }
+        if (!current() || lifecycleVersion.current !== lifecycle) { unlisten(); return { status: "cancelled" }; }
         listener.current = unlisten;
       }
       const [catalog, initialSnapshot] = await Promise.all([asrComponentCatalog(), asrComponentStatus()]);
-      if (!current() || loadVersion.current !== version) return;
+      if (!current() || loadVersion.current !== version) return { status: "cancelled" };
       // A terminal event can arrive while a status response is in flight. Reconcile
       // that response before adopting a recovered operation, or it could stay busy forever.
       let snapshot = initialSnapshot;
@@ -83,7 +96,7 @@ export function useAsrComponents(engine: string, t: TFunction) {
       while ([...eventsDuringLoad.current.values()].some((event) => isTerminalComponentPhase(event.phase))) {
         eventsDuringLoad.current.clear();
         snapshot = await asrComponentStatus();
-        if (!current() || loadVersion.current !== version) return;
+        if (!current() || loadVersion.current !== version) return { status: "cancelled" };
       }
       const latestSeen = [...eventsDuringLoad.current.values()].pop();
       const recovered = snapshot.operation
@@ -93,8 +106,11 @@ export function useAsrComponents(engine: string, t: TFunction) {
       eventsDuringLoad.current.clear();
       active.current = operation ? { id: operation.request_id, componentId: operation.component_id, own: false, cancelling: false } : undefined;
       publish({ catalog, components: snapshot.components, consents: snapshot.consents ?? [], operation, loading: false, verified: true, cancelling: false });
+      return { status: "success", catalog, components: snapshot.components, consents: snapshot.consents ?? [], operation };
     } catch (error) {
-      if (current() && loadVersion.current === version) publish({ loading: false, error: errorText(error) });
+      if (!current() || loadVersion.current !== version) return { status: "cancelled" };
+      publish({ loading: false, error: errorText(error) });
+      return { status: "error", error: errorText(error) };
     } finally {
       if (current() && loadVersion.current === version) loadingRef.current = false;
     }
@@ -123,15 +139,18 @@ export function useAsrComponents(engine: string, t: TFunction) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine]);
 
-  const perform = async (action: AsrComponentAction, componentId: string, consent?: AsrInstallConsent) => {
-    if (!current() || active.current || loadingRef.current || !listener.current) return;
+  const perform = async (action: AsrComponentAction, componentId: string, consent?: AsrInstallConsent): Promise<AsrComponentResult> => {
+    if (!current()) return { status: "cancelled" };
+    if (active.current || loadingRef.current || !listener.current) return { status: "busy" };
     const requestId = crypto.randomUUID();
+    const lifecycle = lifecycleVersion.current;
+    const ownsRequest = () => current() && lifecycleVersion.current === lifecycle && active.current?.id === requestId;
     active.current = { id: requestId, componentId, own: true, cancelling: false };
     lastProgress.current = undefined;
     publish({ error: undefined, notice: undefined, cancelling: false, operation: { request_id: requestId, component_id: componentId, phase: action === "remove" ? "removing" : "preparing", downloaded_bytes: 0, total_bytes: 0, message: "" } });
     try {
       const installed = await (consent ? actions[action](componentId, requestId, consent) : actions[action](componentId, requestId));
-      if (!current() || active.current?.id !== requestId) return;
+      if (!ownsRequest()) return { status: "cancelled" };
       setState((previous) => ({ ...previous, components: [...previous.components.filter((item) => item.id !== installed.id), installed] }));
       publish({ notice: t(action === "remove" ? "asr.managed.removed" : "asr.managed.installedNotice") });
       if (consent) {
@@ -139,13 +158,15 @@ export function useAsrComponents(engine: string, t: TFunction) {
         publish({ loading: true });
         try {
           const snapshot = await asrComponentStatus();
-          if (current() && active.current?.id === requestId) publish({ consents: snapshot.consents ?? [] });
+          if (ownsRequest()) publish({ consents: snapshot.consents ?? [] });
         } catch {
-          if (current() && active.current?.id === requestId) publish({ consents: [] });
+          if (ownsRequest()) publish({ consents: [] });
         }
       }
+      if (!ownsRequest()) return { status: "cancelled" };
+      return { status: "success", component: installed };
     } catch (error) {
-      if (!current() || active.current?.id !== requestId) return;
+      if (!ownsRequest()) return { status: "cancelled" };
       const progress = lastProgress.current as AsrComponentProgress | undefined;
       if (progress?.request_id === requestId && progress.phase === "cancelled") {
         publish({ notice: t("asr.managed.phase.cancelled") });
@@ -156,21 +177,24 @@ export function useAsrComponents(engine: string, t: TFunction) {
       publish({ loading: true });
       try {
         const snapshot = await asrComponentStatus();
-        if (current() && active.current?.id === requestId) publish({ components: snapshot.components, consents: snapshot.consents ?? [], verified: true });
+        if (ownsRequest()) publish({ components: snapshot.components, consents: snapshot.consents ?? [], verified: true });
       } catch {
-        if (current() && active.current?.id === requestId) publish({ verified: false });
+        if (ownsRequest()) publish({ verified: false });
       }
+      if (!ownsRequest()) return { status: "cancelled" };
+      return progress?.request_id === requestId && progress.phase === "cancelled"
+        ? { status: "cancelled" } : { status: "error", error: errorText(error) };
     } finally {
-      if (current() && active.current?.id === requestId) {
+      if (ownsRequest()) {
         active.current = undefined;
         publish({ operation: undefined, cancelling: false, loading: false });
       }
     }
   };
 
-  const cancel = async () => {
+  const cancel = async (): Promise<AsrComponentCancelResult> => {
     const request = active.current;
-    if (!current() || !request || request.cancelling || (lastProgress.current && isTerminalComponentPhase(lastProgress.current.phase))) return;
+    if (!current() || !request || request.cancelling || (lastProgress.current && isTerminalComponentPhase(lastProgress.current.phase))) return { status: "idle" };
     request.cancelling = true;
     publish({ cancelling: true, error: undefined });
     try {
@@ -178,11 +202,13 @@ export function useAsrComponents(engine: string, t: TFunction) {
       if (current() && active.current?.id === request.id && !accepted) {
         publish({ notice: t("asr.managed.cancelTooLate") });
       }
+      return { status: accepted ? "accepted" : "too_late" };
     } catch (error) {
       if (current() && active.current?.id === request.id) {
         request.cancelling = false;
         publish({ cancelling: false, error: errorText(error) });
       }
+      return { status: "error", error: errorText(error) };
     }
   };
 
