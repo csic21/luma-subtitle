@@ -21,6 +21,12 @@ mod tests;
 
 use state::AppState;
 
+#[cfg(feature = "native-install-regression")]
+fn main() {
+    dependencies::native_regression::run();
+}
+
+#[cfg(not(feature = "native-install-regression"))]
 fn main() {
     #[cfg(windows)]
     if let Some(code) = asr_components::signature_helper_from_args() { std::process::exit(code); }

@@ -2,14 +2,16 @@ use std::path::Path;
 
 use tauri::AppHandle;
 
-use crate::paths::find_file_recursive;
-use crate::paths::{locate_binary, path_to_string, sidecars_dir};
+use crate::paths::{path_to_string, sidecars_dir};
 
 use super::{
     download::{download_dependency_archive, PartialFile},
     events::emit_dependency_install,
-    install::{activate_directory, ensure_executable, extract_zip_into_dir, StagedDirectory},
-    trust,
+    install::{
+        activate_directory_preserving_previous, ensure_executable, extract_zip_into_dir,
+        StagedDirectory,
+    },
+    llama_receipt, trust,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,20 +22,6 @@ pub(super) struct LlamaCppAssetSelection {
 }
 
 pub(super) async fn install_llama_cpp(app: AppHandle) -> Result<String, String> {
-    if let Some(path) = locate_binary(&app, "llama-server") {
-        let path = path_to_string(path);
-        emit_dependency_install(
-            &app,
-            "llama.cpp",
-            "completed",
-            "llama.cpp 已可用",
-            1.0,
-            Some(path.clone()),
-            None,
-        );
-        return Ok(path);
-    }
-
     let result = install_llama_cpp_inner(&app).await;
     if let Err(message) = &result {
         emit_dependency_install(
@@ -94,6 +82,36 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         .into_iter()
         .filter(|item| item.id.starts_with("llama-"))
         .collect::<Vec<_>>();
+    let sidecars_dir = sidecars_dir(app)?;
+    let target_dir = sidecars_dir.join("llama.cpp");
+    let cached_root = target_dir.clone();
+    let cached_catalog = artifacts.clone();
+    let cached = tauri::async_runtime::spawn_blocking(move || {
+        llama_receipt::validate_installed(
+            &cached_root,
+            &cached_catalog,
+            current_install_os(),
+            std::env::consts::ARCH,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    if let Ok(bundle) = cached {
+        let path = path_to_string(bundle.executable);
+        emit_dependency_install(
+            app,
+            "llama.cpp",
+            "completed",
+            format!("llama.cpp 已校验（{}）", bundle.backend),
+            1.0,
+            Some(path.clone()),
+            None,
+        );
+        return Ok(path);
+    }
+    super::ensure_llama_repair_preserves_selected_paths(app, &target_dir).await?;
+    // Only our current, fully verified managed bundle can satisfy installation.
+    // A PATH/system engine or an old unreceipted install must not skip repair.
     let asset_names = artifacts
         .iter()
         .map(|item| item.file_name.as_str())
@@ -102,7 +120,7 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         &asset_names,
         current_install_os(),
         std::env::consts::ARCH,
-        super::has_nvidia_gpu_hint(),
+        super::has_nvidia_gpu_hint().await,
     )
     .ok_or_else(|| {
         format!(
@@ -116,7 +134,6 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         .find(|item| item.file_name == selection.binary_name)
         .ok_or_else(|| format!("未找到 llama.cpp 包 {}", selection.binary_name))?;
 
-    let sidecars_dir = sidecars_dir(app)?;
     let downloads_dir = sidecars_dir.join("downloads");
     tokio::fs::create_dir_all(&downloads_dir)
         .await
@@ -152,12 +169,16 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
     } else {
         None
     };
-    let target_dir = sidecars_dir.join("llama.cpp");
     let staging = StagedDirectory::new(&target_dir)?;
     let stage_owner = staging.clone();
     let source = archive_path.clone();
     let artifact = binary.clone();
+    #[cfg(feature = "native-install-regression")]
+    super::native_regression::stage("llama-extract");
     tauri::async_runtime::spawn_blocking(move || {
+        // Move the whole guard: Rust 2021 can otherwise capture only .0 and
+        // drop the cleanup Arc when the awaiting installer is cancelled.
+        let stage_owner = stage_owner;
         if artifact.file_name.ends_with(".tar.gz") {
             super::archive::extract_tar(&source, &stage_owner.0, &artifact)
         } else {
@@ -170,24 +191,45 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         let stage_owner = staging.clone();
         let source = path.0.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            let stage_owner = stage_owner;
             extract_zip_into_dir(&source, &stage_owner.0, &artifact)
         })
         .await
         .map_err(|e| e.to_string())??;
     }
-    let executable = if cfg!(target_os = "macos") {
-        "llama-server"
-    } else {
-        "llama-server.exe"
-    };
-    let staged_exe = find_file_recursive(&staging.0, executable)
-        .ok_or("Reviewed llama.cpp archive is missing llama-server")?;
-    ensure_executable(&staged_exe).await?;
-    let relative = staged_exe
+    let mut installed_artifacts = vec![binary.clone()];
+    if let Some(cudart) = cudart {
+        installed_artifacts.push(cudart.clone());
+    }
+    let stage_owner = staging.clone();
+    let bundle = tauri::async_runtime::spawn_blocking(move || {
+        let stage_owner = stage_owner;
+        llama_receipt::write_verified_receipt(
+            &stage_owner.0,
+            &installed_artifacts,
+            current_install_os(),
+            std::env::consts::ARCH,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    ensure_executable(&bundle.executable).await?;
+    let relative = bundle
+        .executable
         .strip_prefix(&staging.0)
         .map_err(|e| e.to_string())?
         .to_path_buf();
-    activate_directory(&staging.0, &target_dir)?;
+    super::ensure_llama_repair_preserves_selected_paths(app, &target_dir).await?;
+    let destination = target_dir.clone();
+    let stage_owner = staging.clone();
+    #[cfg(feature = "native-install-regression")]
+    super::native_regression::stage("llama-activate");
+    tauri::async_runtime::spawn_blocking(move || {
+        let stage_owner = stage_owner;
+        activate_directory_preserving_previous(&stage_owner.0, &destination)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     let path = path_to_string(target_dir.join(relative));
     emit_dependency_install(
         app,
@@ -199,6 +241,14 @@ async fn install_llama_cpp_inner(app: &AppHandle) -> Result<String, String> {
         None,
     );
     Ok(path)
+}
+
+#[cfg(feature = "native-install-regression")]
+pub(super) fn observe_inner_future(app: &AppHandle) {
+    super::native_regression::observe_future(
+        "install_llama_cpp_inner",
+        &install_llama_cpp_inner(app),
+    );
 }
 
 fn current_install_os() -> &'static str {
@@ -246,22 +296,20 @@ fn select_windows_x64_assets(
     has_nvidia: bool,
 ) -> Option<LlamaCppAssetSelection> {
     if has_nvidia {
-        if let Some(binary_name) = first_matching(available, windows_cuda_binary_suffixes()) {
-            let cudart_name = matching_cudart(available, &binary_name);
-            return Some(LlamaCppAssetSelection {
-                binary_name,
-                cudart_name,
-                backend: "CUDA",
-            });
+        for suffix in windows_cuda_binary_suffixes() {
+            if let Some(binary_name) = first_matching(available, &[*suffix]) {
+                if let Some(cudart_name) = matching_cudart(available, &binary_name) {
+                    return Some(LlamaCppAssetSelection {
+                        binary_name,
+                        cudart_name: Some(cudart_name),
+                        backend: "CUDA",
+                    });
+                }
+            }
         }
     }
-    if let Some(binary_name) = first_matching(available, &["bin-win-vulkan-x64.zip"]) {
-        return Some(LlamaCppAssetSelection {
-            binary_name,
-            cudart_name: None,
-            backend: "Vulkan",
-        });
-    }
+    // Hardware presence alone does not establish a usable Vulkan driver. Use
+    // the portable CPU bundle unless the paired NVIDIA CUDA bundle is selected.
     first_matching(available, &["bin-win-cpu-x64.zip"]).map(|binary_name| LlamaCppAssetSelection {
         binary_name,
         cudart_name: None,
@@ -299,7 +347,7 @@ fn is_llama_binary_asset(name: &str, suffix: &str) -> bool {
         && !lower.contains("kleidi")
 }
 
-fn matching_cudart(available: &[&str], binary_name: &str) -> Option<String> {
+pub(super) fn matching_cudart(available: &[&str], binary_name: &str) -> Option<String> {
     let marker = binary_name
         .split("bin-win-")
         .nth(1)
@@ -344,11 +392,11 @@ mod tests {
     }
 
     #[test]
-    fn selects_vulkan_then_cpu_when_windows_has_no_nvidia() {
+    fn selects_cpu_when_windows_has_no_nvidia_even_with_vulkan_available() {
         let selected = select_llama_cpp_assets(SAMPLE_ASSETS, "windows", "x86_64", false)
-            .expect("windows vulkan asset");
-        assert_eq!(selected.backend, "Vulkan");
-        assert_eq!(selected.binary_name, "llama-b11552-bin-win-vulkan-x64.zip");
+            .expect("windows cpu asset");
+        assert_eq!(selected.backend, "CPU");
+        assert_eq!(selected.binary_name, "llama-b11552-bin-win-cpu-x64.zip");
         assert!(selected.cudart_name.is_none());
     }
 
@@ -359,6 +407,39 @@ mod tests {
             select_llama_cpp_assets(&assets, "windows", "x86_64", true).expect("cpu fallback");
         assert_eq!(selected.backend, "CPU");
         assert_eq!(selected.binary_name, "llama-b1-bin-win-cpu-x64.zip");
+    }
+
+    #[test]
+    fn cuda_without_matching_runtime_falls_back_to_cpu() {
+        let assets = [
+            "llama-b1-bin-win-cuda-12.4-x64.zip",
+            "cudart-llama-bin-win-cuda-13.3-x64.zip",
+            "llama-b1-bin-win-cpu-x64.zip",
+        ];
+        let selected = select_llama_cpp_assets(&assets, "windows", "x86_64", true).unwrap();
+        assert_eq!(selected.backend, "CPU");
+        assert!(selected.cudart_name.is_none());
+    }
+
+    #[test]
+    fn selects_next_cuda_variant_only_when_its_runtime_is_present() {
+        let assets = [
+            "llama-b1-bin-win-cuda-12.4-x64.zip",
+            "llama-b1-bin-win-cuda-13.3-x64.zip",
+            "cudart-llama-bin-win-cuda-13.3-x64.zip",
+            "llama-b1-bin-win-cpu-x64.zip",
+        ];
+        let selected = select_llama_cpp_assets(&assets, "windows", "x86_64", true).unwrap();
+        assert_eq!(selected.backend, "CUDA");
+        assert_eq!(selected.binary_name, "llama-b1-bin-win-cuda-13.3-x64.zip");
+        assert_eq!(selected.cudart_name.as_deref(), Some("cudart-llama-bin-win-cuda-13.3-x64.zip"));
+    }
+
+    #[test]
+    fn unverified_vulkan_is_not_an_automatic_fallback() {
+        let assets = ["llama-b1-bin-win-vulkan-x64.zip"];
+        assert!(select_llama_cpp_assets(&assets, "windows", "x86_64", false).is_none());
+        assert!(select_llama_cpp_assets(&assets, "windows", "x86_64", true).is_none());
     }
 
     #[test]

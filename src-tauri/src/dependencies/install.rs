@@ -49,9 +49,28 @@ impl Drop for StagingCleanup {
 /// Preserve a previous install on all pre-activation failures and roll back if
 /// the final rename fails. Callers serialize installers and finish all payloads first.
 pub(super) fn activate_directory(staged: &Path, target: &Path) -> Result<(), String> {
+    activate_directory_inner(staged, target, false)
+}
+
+/// Repairs retain the previous tree, including any user-added data. The backup
+/// is outside engine lookup and can be inspected/recovered manually.
+pub(super) fn activate_directory_preserving_previous(staged: &Path, target: &Path) -> Result<(), String> {
+    activate_directory_inner(staged, target, true)
+}
+
+fn activate_directory_inner(staged: &Path, target: &Path, preserve_previous: bool) -> Result<(), String> {
     let backup = target.with_extension(format!("{}.previous", uuid::Uuid::new_v4()));
     let existed = match fs::symlink_metadata(target) {
-        Ok(m) if m.is_dir() && !m.file_type().is_symlink() => true,
+        Ok(m) if m.is_dir() && !m.file_type().is_symlink() => {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if m.file_attributes() & 0x400 != 0 {
+                    return Err("Refusing a Windows reparse-point dependency target".into());
+                }
+            }
+            true
+        },
         Ok(_) => return Err("Refusing a non-directory dependency target".into()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
         Err(e) => return Err(e.to_string()),
@@ -72,7 +91,7 @@ pub(super) fn activate_directory(staged: &Path, target: &Path) -> Result<(), Str
             "Dependency activation failed; previous install preserved: {error}"
         ));
     }
-    if existed {
+    if existed && !preserve_previous {
         let _ = fs::remove_dir_all(backup);
     }
     Ok(())
@@ -104,6 +123,8 @@ pub(super) async fn extract_dependency_archive(
     let archive_path = archive_path.to_path_buf();
     let staging_for_extract = staging.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // Move the whole guard, not just its PathBuf through precise capture.
+        let staging_for_extract = staging_for_extract;
         extract_zip_into_dir(&archive_path, &staging_for_extract.0, &artifact)
     })
     .await

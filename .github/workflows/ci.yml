@@ -39,6 +39,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+      - name: Native regression controller tests
+        run: python -B -m unittest discover -s scripts/native-install-regression -p 'test_*.py' -v
       - name: Release guard regression tests
         run: node --test scripts/prepare-release.test.cjs scripts/publish-release.test.cjs scripts/recover-release.node-test.cjs
       - name: Optional ASR adapter tests (no ML packages or models)
@@ -56,7 +58,28 @@ jobs:
         run: pnpm build
       - name: Rust regression tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Native IPC fixture controller tests
+        run: python -B -m unittest discover -s scripts/native-install-regression -p 'test_*.py' -v
+      - name: Native release installation IPC regressions and candidate buffer A/B (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/native-install-regression/run.py --ab
+      - name: Native release installation IPC regressions (macOS)
+        if: runner.os == 'macOS'
+        run: python scripts/native-install-regression/run.py
       - name: Pinned OpenCode adversarial isolation proof (loopback dummy model only)
         run: python scripts/test_opencode_isolation.py
       - name: Native application build without distributable packaging
         run: pnpm tauri build --no-bundle
+      - name: Verify normal application excludes fixture code (Windows)
+        if: runner.os == 'Windows'
+        run: python scripts/native-install-regression/run.py --verify-production src-tauri/target/release/luma-subtitle.exe
+      - name: Verify normal application excludes fixture code (macOS)
+        if: runner.os == 'macOS'
+        run: python scripts/native-install-regression/run.py --verify-production src-tauri/target/release/luma-subtitle
+      - name: Upload native installation IPC evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-install-regression-${{ matrix.os }}
+          path: native-install-regression-results/
+          if-no-files-found: warn

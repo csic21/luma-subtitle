@@ -1,8 +1,6 @@
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-#[cfg(not(target_os = "macos"))]
-use crate::process_utils::hide_std_command_window;
 use crate::{
     dependencies::{
         downloaded_translation_model_files, downloaded_whisper_model_files, llama_backend_label,
@@ -28,13 +26,16 @@ pub(crate) struct EnvironmentResponse {
 
 #[tauri::command]
 pub(crate) async fn check_environment(app: AppHandle) -> Result<EnvironmentResponse, String> {
-    tauri::async_runtime::spawn_blocking(move || check_environment_inner(app))
+    let gpu = gpu_info().await;
+    tauri::async_runtime::spawn_blocking(move || check_environment_inner(app, gpu))
         .await
         .map_err(|error| format!("检查环境任务失败: {error}"))
 }
 
-fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
-    let (gpu_name, cuda_driver) = gpu_info();
+fn check_environment_inner(
+    app: AppHandle,
+    (gpu_name, cuda_driver): (Option<String>, Option<String>),
+) -> EnvironmentResponse {
     let llama_path = locate_binary(&app, "llama-server");
     let llama_backend = llama_path
         .as_ref()
@@ -68,48 +69,33 @@ fn check_environment_inner(app: AppHandle) -> EnvironmentResponse {
 }
 
 #[cfg(target_os = "macos")]
-fn gpu_info() -> (Option<String>, Option<String>) {
+async fn gpu_info() -> (Option<String>, Option<String>) {
     if std::env::consts::ARCH != "aarch64" {
         return (Some("Intel Mac".to_string()), None);
     }
-    let chip = std::process::Command::new("sysctl")
-        .args(["-n", "machdep.cpu.brand_string"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Apple Silicon".to_string());
+    let mut command = std::process::Command::new("sysctl");
+    command.args(["-n", "machdep.cpu.brand_string"]);
+    let chip = crate::owned_process::output(
+        command,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        std::time::Duration::from_secs(3),
+        16 * 1024,
+    )
+    .await
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| "Apple Silicon".to_string());
     // A chip name is not evidence that the selected whisper binary uses Metal.
     // Actual backend selection is reported from each transcription process.
     (Some(chip), None)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn gpu_info() -> (Option<String>, Option<String>) {
-    let mut command = std::process::Command::new("nvidia-smi");
-    hide_std_command_window(&mut command);
-    let output = command
-        .args([
-            "--query-gpu=name,driver_version",
-            "--format=csv,noheader,nounits",
-        ])
-        .output();
-    let Ok(output) = output else {
-        return (None, None);
-    };
-    if !output.status.success() {
-        return (None, None);
+async fn gpu_info() -> (Option<String>, Option<String>) {
+    match crate::process_utils::probe_nvidia_gpu().await {
+        Some(gpu) => (Some(gpu.name), gpu.driver_version),
+        None => (None, None),
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut fields = stdout.lines().next().unwrap_or_default().split(',');
-    let name = fields
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let driver = fields
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    (name.map(str::to_string), driver.map(str::to_string))
 }

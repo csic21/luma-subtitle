@@ -5,3 +5,6 @@ scripts/asr-components/licenses/** -text -whitespace
 # Exact reviewed license presentation and CPU-build notice hashes.
 src-tauri/resources/asr/terms/** -text -whitespace
 scripts/asr-components/ct2-cpu/licenses/** -text -whitespace
+
+# Exact fixed native installer regression fixture bytes on every checkout.
+src-tauri/native-install-regression/fixtures/** -text -whitespace

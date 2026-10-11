@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.3 — 2026-10-11
+
+### Local translation installation reliability
+- Move the 64 KiB asynchronous SHA-256 read buffer to the heap, reducing stack pressure through the installation IPC futures while retaining exact sizes, SHA-256 pins, redirect restrictions and extraction limits.
+- Bound GPU detection by time and output on an owned worker. A missing or unresponsive NVIDIA driver no longer blocks an async executor indefinitely.
+- Report model activation/rename failures as terminal failures in backend download status. Guard settings polls against newer progress events and keep the entire local install/download/save operation locked against repeated clicks.
+- Validate managed llama.cpp installations against the current reviewed artifact identities and a complete bounded file-integrity receipt. Missing DLLs, corrupt files and stale installs trigger staged repair. Preserve the previous directory and its incidental user-added files in a recoverable backup, leave external binaries and the standard model directory untouched, and prefer the newly installed managed bundle over legacy copies. Repair is refused when a currently selected model/runtime lives inside the engine tree; historical/custom paths within a repaired tree may need reselection from its backup.
+- Prefer the reviewed CPU package for new Windows installs without an NVIDIA hint. Absence of NVIDIA is no longer treated as proof of Vulkan support; CPU translation can be slower. Previously verified current managed backend choices are retained. NVIDIA selection is still a hint, not a guarantee of CUDA compatibility.
+- Retain a bounded, sanitized llama-server startup diagnostic tail and process exit status, including Windows hexadecimal status. Successful startup stops diagnostic retention; no automatic retry of generated translation output is added.
+
+### Validation boundary
+- Add native release-mode installation IPC regression checks with a real webview, generated Tauri command wrappers, fixed small fixture data, isolated temporary directories and a separate subprocess per case. Shipping app builds keep the fixture features disabled.
+- The inline-buffer comparison isolates the old versus heap buffer representation in the candidate command path. It is not a full v1.2.2 reproduction. The reported Windows application exit has not been reproduced on the user's machine, and this release does not claim a confirmed stack-overflow root cause.
+- Native fixture checks establish installation/error-state behavior, not real model inference, GPU compatibility, performance, or user-hardware coverage. Existing credential storage and optional/default transcription-engine behavior are unchanged.
+
 ## 1.2.2 — 2026-10-11
 
 ### Local translation engine

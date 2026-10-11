@@ -1,12 +1,18 @@
 [package]
 name = "luma-subtitle"
-version = "1.2.2"
+version = "1.2.3"
 description = "Local video transcription, translation, and SRT export."
 authors = ["Luma Subtitle"]
 license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.80"
 build = "build.rs"
+
+[features]
+# Diagnostic application only: a separate, non-distributable IPC fixture runner.
+# Never enable this feature when packaging or publishing the application.
+native-install-regression = ["tauri/custom-protocol"]
+native-install-regression-inline-buffer = ["native-install-regression"]
 
 [build-dependencies]
 tauri-build = { version = "=2.6.2", features = [] }

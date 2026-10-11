@@ -160,7 +160,13 @@ pub(crate) fn find_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf
     find_expected_managed_binary(root, exe_name)
 }
 fn find_expected_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf> {
-    let mut candidates = vec![root.join(exe_name), root.join("bin").join(exe_name)];
+    // A repaired managed llama bundle must win over a stale legacy root/bin
+    // copy. Leave those older files untouched as a compatibility fallback.
+    let prefer_package = matches!(exe_name.to_ascii_lowercase().as_str(), "llama-server" | "llama-server.exe");
+    let mut candidates = Vec::new();
+    if !prefer_package {
+        candidates.extend([root.join(exe_name), root.join("bin").join(exe_name)]);
+    }
     for package_dir in managed_package_dirs(root, exe_name) {
         candidates.push(package_dir.join(exe_name));
         candidates.push(package_dir.join("bin").join(exe_name));
@@ -180,7 +186,10 @@ fn find_expected_managed_binary(root: &Path, exe_name: &str) -> Option<PathBuf> 
             candidates.push(child.join("bin").join(exe_name));
         }
     }
-    candidates.into_iter().find(|path| path.exists())
+    if prefer_package {
+        candidates.extend([root.join(exe_name), root.join("bin").join(exe_name)]);
+    }
+    candidates.into_iter().find(|path| is_existing_file(path))
 }
 fn managed_package_dirs(root: &Path, exe_name: &str) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -231,6 +240,12 @@ pub(crate) fn whisper_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
     managed_dir(app, "models")
 }
 pub(crate) fn managed_dir(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    #[cfg(feature = "native-install-regression")]
+    let base = {
+        let _ = app;
+        crate::dependencies::native_regression::app_data_root()
+    };
+    #[cfg(not(feature = "native-install-regression"))]
     let base = app
         .path()
         .app_data_dir()
@@ -295,6 +310,23 @@ mod tests {
 
         assert_eq!(find_managed_binary(&root, "ffmpeg.exe"), Some(expected));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repaired_llama_bundle_wins_without_removing_legacy_files() {
+        let root = temp_test_dir("managed-llama-repair");
+        let managed = root.join("llama.cpp").join("bin");
+        fs::create_dir_all(&managed).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("llama-server.exe"), b"old root").unwrap();
+        fs::write(root.join("bin/llama-server.exe"), b"old bin").unwrap();
+        let expected = managed.join("llama-server.exe");
+        fs::write(&expected, b"new bundle").unwrap();
+        assert_eq!(find_managed_binary(&root, "llama-server.exe"), Some(expected.clone()));
+        assert_eq!(fs::read(root.join("llama-server.exe")).unwrap(), b"old root");
+        fs::remove_file(expected).unwrap();
+        assert_eq!(find_managed_binary(&root, "llama-server.exe"), Some(root.join("llama-server.exe")));
         let _ = fs::remove_dir_all(root);
     }
 

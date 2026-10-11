@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Luma Native Install Regression (NOT FOR DISTRIBUTION)",
+  "version": "0.0.0",
+  "identifier": "com.luma.subtitle.native-install-regression",
+  "build": { "frontendDist": "." },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'none'; script-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self'; base-uri 'none'; form-action 'none'",
+      "capabilities": [{ "identifier": "native-regression", "windows": ["native-regression"], "permissions": ["core:event:allow-listen"] }]
+    }
+  },
+  "bundle": { "active": false, "icon": ["../icons/icon.ico", "../icons/icon.png"] }
+}
