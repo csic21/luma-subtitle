@@ -1,0 +1,14 @@
+@import "../../src/styles.css";
+@source "../../src";
+/* This file styles only the developer harness, never the component under test. */
+.fixture-label { padding: 8px 20px; font-size: 11px; color: var(--muted-foreground); border-bottom: 1px solid var(--border); }
+.fixture-surface { padding: 24px; max-width: 960px; margin: 0 auto; }
+.fixture-title { font-size: 20px; font-weight: 600; margin: 0 0 20px; }
+.fixture-controls { margin: 24px; padding: 12px; border: 1px dashed var(--border); display: flex; flex-direction: column; gap: 8px; color: var(--muted-foreground); font-size: 11px; overflow-wrap: anywhere; }
+.fixture-controls button { padding: 6px 8px; margin: 0 8px 4px 0; border: 1px solid var(--border); border-radius: 4px; }
+.fixture-controls button:disabled { opacity: .35; }
+.fixture-controls output { white-space: pre-wrap; }
+.fixture-harness { padding: 12px; }
+.fixture-nav { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; padding: 4px 0 12px; }
+.fixture-nav a { text-decoration: underline; }
+#fixture-frame { display: block; border: 0; }

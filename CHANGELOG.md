@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.4 — 2026-10-11
+
+### One-click local subtitle setup
+- Replace the optional-engine component wall with a compact setup card: ready components, remaining download size and one primary action. Move model choices, versions, sources, repair/removal and detailed environment guidance into advanced sections.
+- Confirm the missing runtime, recognition model and required Qwen timing model together, then install them sequentially through the existing verified installer. Exact runtime plan and third-party terms acceptance remain required; model licenses are disclosed separately.
+- Stop on failure or cancellation and keep completed components. Retry rechecks installed files and skips exact, verified matches. Leaving the setup page stops the owned queue; cancellation after activation may finish the current component but never starts another. Model downloads do not gain byte-level pause/resume.
+- Enable the explicit configuration action only when all required managed components are verified. Filling the configuration still requires the existing Settings or task Save action.
+
+### Validation boundary
+- Add planner, queue and UI regression coverage for duplicate clicks, interrupted steps, stale selections and terms, cancellation, consent reuse, fresh retries and validated configuration use. The developer-only browser preview uses deterministic data and cannot download or install real components.
+- Retain native Windows/macOS installation IPC gates, production fixture isolation and the existing optional-ASR compatibility gates. Default Whisper behavior, local translation, credential storage and installer trust checks are unchanged. This UI change makes no new inference, speed, GPU or memory-fit claims.
+
 ## 1.2.3 — 2026-10-11
 
 ### Local translation installation reliability

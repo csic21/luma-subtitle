@@ -59,6 +59,9 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
       </Field>
       {isLegacy ? children : knownEngine ? (
         <>
+          <ManagedAsrSetup key={config.engine} config={config} onChange={onChange} disabled={disabled || busy} t={t} />
+          <details>
+            <summary className="cursor-pointer">{t("asr.managed.advanced")}</summary>
           <Alert>
             <AlertCircle />
             <AlertTitle>{t("asr.optionalSetup")}</AlertTitle>
@@ -70,9 +73,6 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
               <p>{t("asr.noBenchmark")}</p>
             </AlertDescription>
           </Alert>
-          <ManagedAsrSetup key={config.engine} config={config} onChange={onChange} disabled={disabled || busy} t={t} />
-          <details>
-            <summary className="cursor-pointer">{t("asr.managed.advanced")}</summary>
             <FieldDescription>{t("asr.managed.advancedHint")}</FieldDescription>
             <FieldGroup className="mt-4">
           {pathFields.map(({ name, label, hint }) => {
@@ -136,6 +136,7 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
               <pre className="whitespace-pre-wrap break-words p-3 text-sm">{optionalAsrGuide}</pre>
             </ScrollArea>
           </details>
+            {issues.length > 0 && <FieldDescription role="alert">{issues.map((issue) => t(`requirement.${issue}`)).join(t("requirement.separator"))}</FieldDescription>}
             </FieldGroup>
           </details>
           <div className="flex flex-wrap gap-2">
@@ -144,7 +145,6 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
               {t(checking ? "asr.checking" : "asr.check")}
             </Button>
           </div>
-          {issues.length > 0 && <FieldDescription role="alert">{issues.map((issue) => t(`requirement.${issue}`)).join(t("requirement.separator"))}</FieldDescription>}
           <div aria-live="polite">
             {result && (
               <Alert variant={result.ready ? "default" : "destructive"}>
