@@ -108,10 +108,20 @@ jobs:
         run: |
           python -B -m unittest discover -s scripts/asr-components -p 'test_*.py' -v
           node --test scripts/asr-components/publish.node-test.cjs
+      - name: Native regression controller tests
+        run: python -B -m unittest discover -s scripts/native-install-regression -p 'test_*.py' -v
       - name: Frontend regression tests
         run: pnpm test
       - name: Rust regression tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Native IPC fixture controller tests
+        run: python -B -m unittest discover -s scripts/native-install-regression -p 'test_*.py' -v
+      - name: Gate pinned Windows source on native release IPC and candidate buffer A/B
+        if: runner.os == 'Windows'
+        run: python scripts/native-install-regression/run.py --ab
+      - name: Gate pinned macOS source on native release IPC
+        if: runner.os == 'macOS'
+        run: python scripts/native-install-regression/run.py
       - name: Build and upload to the private draft
         uses: tauri-apps/tauri-action@v0
         env:
@@ -129,6 +139,19 @@ jobs:
           assetNamePattern: Luma-Subtitle_[version]_[platform]_[arch][setup][ext]
           # Only publish writes the complete, signature-verified updater manifest.
           includeUpdaterJson: false
+      - name: Verify packaged Windows source build excludes fixture code
+        if: runner.os == 'Windows'
+        run: python scripts/native-install-regression/run.py --verify-production src-tauri/target/x86_64-pc-windows-msvc/release/luma-subtitle.exe
+      - name: Verify packaged macOS source build excludes fixture code
+        if: runner.os == 'macOS'
+        run: python scripts/native-install-regression/run.py --verify-production src-tauri/target/aarch64-apple-darwin/release/luma-subtitle
+      - name: Upload native installation gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-install-regression-release-${{ matrix.rust-target }}
+          path: native-install-regression-results/
+          if-no-files-found: warn
 
   publish:
     name: Verify all assets and publish once

@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     net::TcpListener,
     path::{Path, PathBuf},
     process::Stdio,
@@ -9,7 +10,7 @@ use std::{
 use serde::Deserialize;
 use serde_json::json;
 use tauri::AppHandle;
-use tokio::{process::Child, task::JoinSet, time::sleep};
+use tokio::{io::AsyncReadExt, process::Child, task::JoinSet, time::sleep};
 
 use crate::{
     job_events::{publish_job_event, JobEventDraft},
@@ -27,38 +28,284 @@ use super::{
 const LOCAL_CUE_DELIMITER: &str = "<<<CUE>>>";
 const SERVER_START_TIMEOUT_SECS: u64 = 120;
 const SHARD_TIMEOUT_SECS: u64 = 600;
+const STARTUP_STDERR_BYTES: usize = 16 * 1024;
+const STARTUP_STDERR_LINE_BYTES: usize = 4096;
+const STARTUP_DIAGNOSTIC_BYTES: usize = 4096;
+
+/// Keep only complete, sanitized startup lines. Oversized lines are discarded
+/// whole, so clipping cannot turn a secret into an unrecognizable suffix.
+struct StartupStderr {
+    lines: VecDeque<String>,
+    retained_bytes: usize,
+    pending: Vec<u8>,
+    oversized_line: bool,
+    capturing: bool,
+    model_strings: Vec<String>,
+}
+
+impl StartupStderr {
+    fn new(model_path: &Path) -> Self {
+        let model = model_path.to_string_lossy().into_owned();
+        let mut model_strings = vec![
+            model.clone(),
+            model.replace('\\', "\\\\"),
+            model.replace('\\', "/"),
+        ];
+        if let Some(name) = model.rsplit(['/', '\\']).next() {
+            model_strings.push(name.to_string());
+        }
+        model_strings.retain(|value| !value.is_empty());
+        // Replace full paths before their file names.
+        model_strings.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        model_strings.dedup();
+        Self {
+            lines: VecDeque::new(),
+            retained_bytes: 0,
+            pending: Vec::new(),
+            oversized_line: false,
+            capturing: true,
+            model_strings,
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        if !self.capturing {
+            return;
+        }
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.finish_line();
+            } else if !self.oversized_line {
+                if self.pending.len() == STARTUP_STDERR_LINE_BYTES {
+                    self.pending.clear();
+                    self.oversized_line = true;
+                } else {
+                    self.pending.push(byte);
+                }
+            }
+        }
+    }
+
+    fn finish_line(&mut self) {
+        let line = if self.oversized_line {
+            "[oversized stderr line omitted]".to_string()
+        } else {
+            sanitize_startup_line(&String::from_utf8_lossy(&self.pending), &self.model_strings)
+        };
+        self.pending.clear();
+        self.oversized_line = false;
+        if line.is_empty() || !self.capturing {
+            return;
+        }
+        // UTF-8 replacement characters can expand invalid input. Bound the
+        // sanitized representation as well as the raw input.
+        let line = if line.len() > STARTUP_STDERR_LINE_BYTES {
+            "[oversized stderr line omitted]".to_string()
+        } else {
+            line
+        };
+        let line = format!("{line}\n");
+        while self.retained_bytes + line.len() > STARTUP_STDERR_BYTES {
+            if let Some(oldest) = self.lines.pop_front() {
+                self.retained_bytes -= oldest.len();
+            } else {
+                break;
+            }
+        }
+        self.retained_bytes += line.len();
+        self.lines.push_back(line);
+    }
+
+    fn diagnostic(&mut self) -> String {
+        self.finish_line();
+        let text = self.lines.iter().map(String::as_str).collect::<String>();
+        if text.len() <= STARTUP_DIAGNOSTIC_BYTES {
+            return text.trim().to_string();
+        }
+        let minimum = text.len() - (STARTUP_DIAGNOSTIC_BYTES - 3);
+        let start = text
+            .char_indices()
+            .find(|(index, _)| *index >= minimum)
+            .map(|(index, _)| index)
+            .unwrap_or(text.len());
+        format!("...{}", text[start..].trim())
+    }
+
+    fn stop_capture(&mut self) {
+        self.capturing = false;
+        self.lines.clear();
+        self.retained_bytes = 0;
+        self.pending.clear();
+        self.model_strings.clear();
+    }
+}
+
+fn strip_diagnostic_controls(text: &str) -> String {
+    let mut output = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        let escape = if ch == '\u{1b}' { chars.next() } else { Some(ch) };
+        match escape {
+            Some('[') if ch == '\u{1b}' => {
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) { break; }
+                }
+            }
+            Some('\u{9b}') => {
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) { break; }
+                }
+            }
+            Some(']' | 'P' | 'X' | '^' | '_') if ch == '\u{1b}' => {
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' || (next == '\u{1b}' && chars.next() == Some('\\')) {
+                        break;
+                    }
+                }
+            }
+            Some('\u{9d}' | '\u{90}' | '\u{98}' | '\u{9e}' | '\u{9f}') => {
+                while let Some(next) = chars.next() {
+                    if next == '\u{7}' || next == '\u{9c}'
+                        || (next == '\u{1b}' && chars.next() == Some('\\')) {
+                        break;
+                    }
+                }
+            }
+            _ if ch == '\u{1b}' => {}
+            Some('\t') => output.push(' '),
+            Some(value) if !value.is_control()
+                && !matches!(value, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
+                    | '\u{2060}'..='\u{206f}' | '\u{feff}') => output.push(value),
+            _ => {}
+        }
+    }
+    output
+}
+
+fn sanitize_startup_line(line: &str, model_strings: &[String]) -> String {
+    let mut line = strip_diagnostic_controls(line);
+    let lower = line.to_ascii_lowercase();
+    // Model metadata and templates are arbitrary user-controlled text, and
+    // URLs can carry signed query parameters. They are not startup diagnostics.
+    if ["://", "www.", "general.", "tokenizer.", "chat_template", "chat template",
+        "metadata", " - kv ", " - type ", " str ="]
+        .iter().any(|marker| lower.contains(*marker))
+    {
+        return String::new();
+    }
+    let compact = lower.chars().filter(|ch| ch.is_ascii_alphanumeric()).collect::<String>();
+    if ["authorization", "apikey", "accesstoken", "refreshtoken", "password", "bearer", "secret"]
+        .iter().any(|marker| compact.contains(*marker))
+        || ["sk-", "hf_", "token=", "token:", "token\"", "token'", "_token", "-token"]
+            .iter().any(|marker| lower.contains(*marker))
+        || lower.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|word| word == "token")
+    {
+        return "[credential-related stderr omitted]".to_string();
+    }
+    for model in model_strings {
+        line = line.replace(model.as_str(), "[model]");
+    }
+    // Unrecognized paths may contain personal directory names. Known model
+    // paths above keep the useful error text; omit other path-bearing lines.
+    let contains_path = line.split(|ch: char| {
+        ch.is_whitespace() || matches!(ch, '\'' | '"' | '(' | ')' | '=' | '[' | ']' | ',' | ';')
+    }).any(|word| {
+        let bytes = word.as_bytes();
+        word.starts_with('/') || word.starts_with('\\')
+            || word.to_ascii_lowercase().contains(".gguf")
+            || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\'))
+    });
+    if contains_path {
+        "[path-related stderr omitted]".to_string()
+    } else {
+        // Keep known failure/backend categories, not the startup inventory or
+        // unstructured template continuation text. Never retain model prompts.
+        let structured = ["ggml_", "llama_", "common_", "load_", "main:", "srv ",
+            "error", "warning", "failed to", "loading ", "cuda", "vulkan", "insufficient"]
+            .iter().any(|prefix| lower.trim_start().starts_with(*prefix));
+        let failure = ["error", "failed", "failure", "cannot", "could not", "unable",
+            "invalid", "unsupported", "not found", "missing", "out of memory", "insufficient",
+            "allocation", "allocating"]
+            .iter().any(|marker| lower.contains(*marker));
+        if structured && failure {
+            line.trim().to_string()
+        } else {
+            String::new()
+        }
+    }
+}
+
+fn diagnostic_exit_status(status: std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("exit code {code} (0x{:08X})", code as u32),
+        None => status.to_string(),
+    }
+}
 
 struct LocalLlamaServer {
     child: Child,
     base_url: String,
     readers: JoinSet<()>,
+    stderr: Arc<parking_lot::Mutex<StartupStderr>>,
 }
 
 impl LocalLlamaServer {
-    fn new(mut child: Child, base_url: String) -> Self {
+    fn new(mut child: Child, base_url: String, model_path: &Path) -> Self {
         let mut readers = JoinSet::new();
+        let diagnostics = Arc::new(parking_lot::Mutex::new(StartupStderr::new(model_path)));
         if let Some(mut stdout) = child.stdout.take() {
             readers.spawn(async move {
                 let _ = tokio::io::copy(&mut stdout, &mut tokio::io::sink()).await;
             });
         }
         if let Some(mut stderr) = child.stderr.take() {
+            let diagnostics = diagnostics.clone();
             readers.spawn(async move {
-                let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+                let mut chunk = [0u8; 2048];
+                loop {
+                    match stderr.read(&mut chunk).await {
+                        Ok(0) | Err(_) => {
+                            diagnostics.lock().finish_line();
+                            break;
+                        }
+                        Ok(count) => diagnostics.lock().append(&chunk[..count]),
+                    }
+                }
             });
         }
         Self {
             child,
             base_url,
             readers,
+            stderr: diagnostics,
         }
     }
 
     async fn shutdown(&mut self) {
-        // kill() also waits/reaps. Abort and join readers as inherited pipe
-        // handles in a descendant must not hold cancellation open.
+        // kill() also waits/reaps. Briefly drain final startup errors, but an
+        // inherited pipe handle must not hold cancellation open indefinitely.
         let _ = self.child.kill().await;
+        let _ = tokio::time::timeout(Duration::from_millis(200), async {
+            while self.readers.join_next().await.is_some() {}
+        }).await;
         self.readers.shutdown().await;
+    }
+
+    fn startup_error(&mut self, error: JobError) -> JobError {
+        match error {
+            JobError::Cancelled => JobError::Cancelled,
+            JobError::Failed(mut message) => {
+                if let Ok(Some(status)) = self.child.try_wait() {
+                    message.push_str(&format!("\n状态: {}", diagnostic_exit_status(status)));
+                }
+                let diagnostic = self.stderr.lock().diagnostic();
+                if !diagnostic.is_empty() {
+                    message.push_str(&format!("\nllama-server stderr:\n{diagnostic}"));
+                }
+                JobError::failed(message)
+            }
+        }
     }
 }
 
@@ -257,23 +504,27 @@ async fn start_llama_server(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    launch_llama_server(command, format!("http://127.0.0.1:{port}"), cancel).await
+    launch_llama_server(command, format!("http://127.0.0.1:{port}"), model_path, cancel).await
 }
 
 async fn launch_llama_server(
     mut command: tokio::process::Command,
     base_url: String,
+    model_path: &Path,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<LocalLlamaServer> {
     ensure_not_cancelled(&cancel)?;
     let child = command
         .spawn()
         .map_err(|error| JobError::failed(format!("启动 llama-server 失败: {error}")))?;
-    let mut server = LocalLlamaServer::new(child, base_url);
+    let mut server = LocalLlamaServer::new(child, base_url, model_path);
     if let Err(error) = wait_for_server(&server.base_url, &mut server.child, cancel).await {
         server.shutdown().await;
-        return Err(error);
+        return Err(server.startup_error(error));
     }
+    // Runtime output can include user text. Keep draining both pipes without
+    // retaining anything after startup, and never restart a partially run job.
+    server.stderr.lock().stop_capture();
     Ok(server)
 }
 
@@ -572,8 +823,12 @@ mod process_tests {
                 trigger.store(true, Ordering::SeqCst);
             });
             let start = tokio::time::Instant::now();
-            let result =
-                launch_llama_server(command, "http://127.0.0.1:1".to_string(), cancel).await;
+            let result = launch_llama_server(
+                command,
+                "http://127.0.0.1:1".to_string(),
+                Path::new("fixture.gguf"),
+                cancel,
+            ).await;
             assert!(matches!(result, Err(JobError::Cancelled)));
             assert!(start.elapsed() < Duration::from_secs(2));
             task.await.unwrap();
@@ -606,7 +861,7 @@ mod process_tests {
                 .kill_on_drop(true)
                 .spawn()
                 .unwrap();
-            let mut server = LocalLlamaServer::new(child, String::new());
+            let mut server = LocalLlamaServer::new(child, String::new(), Path::new("fixture.gguf"));
             let status = tokio::time::timeout(Duration::from_secs(3), server.child.wait())
                 .await
                 .unwrap()
@@ -626,7 +881,7 @@ mod process_tests {
                 .spawn()
                 .unwrap();
             let pid = child.id().unwrap().to_string();
-            drop(LocalLlamaServer::new(child, String::new()));
+            drop(LocalLlamaServer::new(child, String::new(), Path::new("fixture.gguf")));
             let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
             loop {
                 let alive = std::process::Command::new("kill")
@@ -688,6 +943,183 @@ mod process_tests {
             .await;
             assert!(matches!(result, Err(JobError::Cancelled)));
             task.await.unwrap();
+        });
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn startup_diagnostics_redact_paths_tokens_and_terminal_controls() {
+        let path = Path::new(r"C:\Users\private-user\Models\my model.gguf");
+        let mut stderr = StartupStderr::new(path);
+        let lines = [
+            format!("loading '{}' failed: out of memory\n", path.display()),
+            "Authorization: Bearer credential-value\n".to_string(),
+            "{\"api_key\": \"credential-value\"}\n".to_string(),
+            "HF_TOKEN=credential-value\n".to_string(),
+            "token: credential-value\n".to_string(),
+            "TOKEN = credential-value\n".to_string(),
+            "could not read /Users/private-user/cache/another.gguf\n".to_string(),
+            "\x1b[31mCUDA allocation failed\x1b[0m\x1b]8;;https://private.example\x07\n".to_string(),
+            "\u{202e}insufficient memory\u{2069}\n".to_string(),
+        ];
+        for line in lines {
+            // Redaction must work across arbitrary pipe read boundaries.
+            for chunk in line.as_bytes().chunks(3) {
+                stderr.append(chunk);
+            }
+        }
+        let diagnostic = stderr.diagnostic();
+        assert!(diagnostic.contains("loading '[model]' failed: out of memory"));
+        assert!(diagnostic.contains("CUDA allocation failed"));
+        assert!(diagnostic.contains("insufficient memory"));
+        for private in ["private-user", "my model.gguf", "credential-value", "private.example"] {
+            assert!(!diagnostic.contains(private), "leaked {private}: {diagnostic}");
+        }
+        assert!(!diagnostic.contains('\x1b'));
+        assert!(!diagnostic.contains('\u{202e}'));
+        assert!(!diagnostic.contains('\u{2069}'));
+    }
+
+    #[test]
+    fn startup_diagnostics_bound_lines_retention_and_unicode_output() {
+        let mut stderr = StartupStderr::new(Path::new("model.gguf"));
+        stderr.append(b"token=");
+        stderr.append(&vec![b'x'; 100_000]);
+        stderr.append(b"sensitive-tail\n");
+        assert!(!stderr.diagnostic().contains("sensitive-tail"));
+        for _ in 0..2_000 {
+            stderr.append("llama_model_load: error 加载模型失败\n".as_bytes());
+            assert!(stderr.retained_bytes <= STARTUP_STDERR_BYTES);
+            assert!(stderr.pending.len() <= STARTUP_STDERR_LINE_BYTES);
+        }
+        stderr.append(b"CUDA_ERROR_OUT_OF_MEMORY");
+        let diagnostic = stderr.diagnostic();
+        assert!(diagnostic.len() <= STARTUP_DIAGNOSTIC_BYTES);
+        assert!(diagnostic.ends_with("CUDA_ERROR_OUT_OF_MEMORY"));
+        stderr.stop_capture();
+        stderr.append(b"runtime subtitle text must not be retained\n");
+        assert!(stderr.diagnostic().is_empty());
+        assert!(stderr.pending.is_empty());
+        assert_eq!(stderr.retained_bytes, 0);
+    }
+
+    #[test]
+    fn startup_diagnostics_omit_model_inventory_templates_and_urls() {
+        let mut stderr = StartupStderr::new(Path::new("model.gguf"));
+        for line in [
+            "llama_model_loader: - kv 1: general.description str = private-model-description\n",
+            "llama_model_loader: - kv 2: tokenizer.chat_template str = private-template\n",
+            "private-template-continuation: describe an error\n",
+            "llama_model_load: failed https://example.invalid/model?signature=private-signature\n",
+            "llama_model_loader: 42 tensors\n",
+            "ggml_cuda_init: failed to initialize CUDA: driver mismatch\n",
+            "llama_model_load: error: unsupported model architecture\n",
+        ] {
+            stderr.append(line.as_bytes());
+        }
+        let diagnostic = stderr.diagnostic();
+        assert!(!diagnostic.contains("private-"));
+        assert!(!diagnostic.contains("42 tensors"));
+        assert!(diagnostic.contains("driver mismatch"));
+        assert!(diagnostic.contains("unsupported model architecture"));
+    }
+
+    fn fixture(mode: &str, marker: &Path, model: &Path) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        hide_tokio_command_window(&mut command);
+        command
+            .args(["--exact", "translation::local::diagnostic_tests::stderr_child_fixture", "--nocapture"])
+            .env("LUMA_LLAMA_DIAGNOSTIC_TEST", mode)
+            .env("LUMA_LLAMA_DIAGNOSTIC_MARKER", marker)
+            .env("LUMA_LLAMA_DIAGNOSTIC_MODEL", model)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        command
+    }
+
+    #[test]
+    fn stderr_child_fixture() {
+        let Ok(mode) = std::env::var("LUMA_LLAMA_DIAGNOSTIC_TEST") else { return };
+        if mode == "hold-pipe" {
+            std::thread::sleep(Duration::from_millis(1500));
+            return;
+        }
+        let marker = PathBuf::from(std::env::var_os("LUMA_LLAMA_DIAGNOSTIC_MARKER").unwrap());
+        let mut launches = std::fs::OpenOptions::new().create(true).append(true).open(marker).unwrap();
+        writeln!(launches, "launched").unwrap();
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(&vec![b'x'; 262_144]).unwrap();
+        stdout.flush().unwrap();
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(&vec![b'x'; 262_144]).unwrap();
+        writeln!(stderr).unwrap();
+        let model = std::env::var("LUMA_LLAMA_DIAGNOSTIC_MODEL").unwrap();
+        writeln!(stderr, "failed to load '{model}': CUDA allocation failed").unwrap();
+        writeln!(stderr, "Authorization: Bearer credential-value").unwrap();
+        writeln!(stderr, "\x1b[31mCUDA_ERROR_OUT_OF_MEMORY\x1b[0m").unwrap();
+        stderr.flush().unwrap();
+        if mode == "inherited-pipe" {
+            // A finite fixture retains inherited handles after its parent exits.
+            // The server's bounded drain must not wait for this helper's EOF.
+            let _child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "translation::local::diagnostic_tests::stderr_child_fixture", "--nocapture"])
+                .env("LUMA_LLAMA_DIAGNOSTIC_TEST", "hold-pipe")
+                .spawn().unwrap();
+        }
+        std::process::exit(17);
+    }
+
+    #[test]
+    fn failed_startup_reports_bounded_stderr_status_and_does_not_retry() {
+        tauri::async_runtime::block_on(async {
+            let marker = std::env::temp_dir().join(format!("luma-llama-diagnostic-{}", uuid::Uuid::new_v4()));
+            let model = Path::new("/private-user/Models/my model.gguf");
+            let command = fixture("fail", &marker, model);
+            let result = tokio::time::timeout(
+                Duration::from_secs(8),
+                launch_llama_server(
+                    command,
+                    "http://127.0.0.1:1".to_string(),
+                    model,
+                    Arc::new(AtomicBool::new(false)),
+                ),
+            ).await.expect("startup diagnostic pipe readers deadlocked");
+            let Err(JobError::Failed(message)) = result else {
+                panic!("fixture must fail at startup");
+            };
+            assert!(message.contains("exit code 17 (0x00000011)"), "{message}");
+            assert!(message.contains("CUDA_ERROR_OUT_OF_MEMORY"), "{message}");
+            assert!(!message.contains("private-user"));
+            assert!(!message.contains("credential-value"));
+            assert!(!message.contains('\x1b'));
+            assert!(message.len() < STARTUP_DIAGNOSTIC_BYTES + 1024);
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), "launched\n");
+            std::fs::remove_file(marker).unwrap();
+        });
+    }
+
+    #[test]
+    fn diagnostic_drain_does_not_wait_for_inherited_pipe_eof() {
+        tauri::async_runtime::block_on(async {
+            let marker = std::env::temp_dir().join(format!("luma-llama-pipes-{}", uuid::Uuid::new_v4()));
+            let model = Path::new("model.gguf");
+            let child = fixture("inherited-pipe", &marker, model).spawn().unwrap();
+            let mut server = LocalLlamaServer::new(child, String::new(), model);
+            let status = tokio::time::timeout(Duration::from_secs(8), server.child.wait())
+                .await.unwrap().unwrap();
+            assert_eq!(status.code(), Some(17));
+            let started = tokio::time::Instant::now();
+            server.shutdown().await;
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert!(server.readers.is_empty());
+            assert!(server.stderr.lock().diagnostic().contains("CUDA_ERROR_OUT_OF_MEMORY"));
+            std::fs::remove_file(marker).unwrap();
         });
     }
 }

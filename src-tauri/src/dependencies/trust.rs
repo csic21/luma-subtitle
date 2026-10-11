@@ -26,6 +26,9 @@ pub(super) struct Artifact {
     pub file_limit: usize,
 }
 pub(super) fn catalog() -> Result<Vec<Artifact>, String> {
+    #[cfg(feature = "native-install-regression")]
+    return super::native_regression::fixture_catalog();
+    #[cfg(not(feature = "native-install-regression"))]
     serde_json::from_str(include_str!("artifacts.json"))
         .map_err(|e| format!("Invalid embedded dependency catalog: {e}"))
 }
@@ -38,6 +41,10 @@ pub(super) fn artifact(id: &str) -> Result<Artifact, String> {
     Ok(item)
 }
 pub(super) fn validate_artifact(item: &Artifact) -> Result<(), String> {
+    #[cfg(feature = "native-install-regression")]
+    return super::native_regression::validate_fixture_artifact(item);
+    #[cfg(not(feature = "native-install-regression"))]
+    {
     let url = url::Url::parse(&item.url).map_err(|e| e.to_string())?;
     if !safe_https(&url)
         || url.query().is_some()
@@ -100,6 +107,7 @@ pub(super) fn validate_artifact(item: &Artifact) -> Result<(), String> {
     }
     Ok(())
 }
+}
 fn hex_revision(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -137,6 +145,10 @@ pub(super) fn allowed_redirect(url: &url::Url, source: Source, previous: usize) 
     }
 }
 pub(super) fn client(item: &Artifact) -> Result<reqwest::Client, String> {
+    #[cfg(feature = "native-install-regression")]
+    return super::native_regression::fixture_client(item);
+    #[cfg(not(feature = "native-install-regression"))]
+    {
     validate_artifact(item)?;
     let source = item.source;
     reqwest::Client::builder()
@@ -154,7 +166,10 @@ pub(super) fn client(item: &Artifact) -> Result<reqwest::Client, String> {
         .build()
         .map_err(|e| e.to_string())
 }
+}
 pub(super) async fn verify_file(path: &Path, item: &Artifact) -> Result<(), String> {
+    #[cfg(feature = "native-install-regression")]
+    super::native_regression::stage("verify-file");
     let metadata = crate::asr_components::legacy_regular_file(path)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() != item.bytes {
         return Err("Dependency does not match its pinned regular-file size".into());
@@ -164,6 +179,11 @@ pub(super) async fn verify_file(path: &Path, item: &Artifact) -> Result<(), Stri
         .map_err(|e| e.to_string())?;
     let mut digest = Sha256::new();
     let mut bytes = 0u64;
+    // This buffer lives across await. Keep it off the Tauri command future stack.
+    // The old representation is available only in the explicit native A/B harness.
+    #[cfg(not(feature = "native-install-regression-inline-buffer"))]
+    let mut buffer = vec![0u8; 64 * 1024];
+    #[cfg(feature = "native-install-regression-inline-buffer")]
     let mut buffer = [0u8; 64 * 1024];
     loop {
         let read = file.read(&mut buffer).await.map_err(|e| e.to_string())?;

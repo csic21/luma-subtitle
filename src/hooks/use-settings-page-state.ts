@@ -1,6 +1,6 @@
 import { hasScopedCredential } from "@/lib/credential-scope";
 import { normalizeAsrConfig, normalizeSettings } from "@/lib/asr-config";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { defaultSettings, translationLocalModelPresets, whisperModelPresets } from "@/config";
@@ -48,6 +48,8 @@ export function useSettingsPageState(t: TFunction) {
   const [translationPresetId, setTranslationPresetId] = useState(translationLocalModelPresets[0].id);
   const [modelDownload, setModelDownload] = useState<ModelDownloadEvent | null>(null);
   const [dependencyInstall, setDependencyInstall] = useState<DependencyInstallEvent | null>(null);
+  const [localTranslationInstalling, setLocalTranslationInstalling] = useState(false);
+  const [modelDownloadPending, setModelDownloadPending] = useState(false);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     status: hasTauriRuntime() ? "idle" : "unsupported",
     currentVersion: "",
@@ -56,6 +58,22 @@ export function useSettingsPageState(t: TFunction) {
   const availableUpdateRef = useRef<AvailableAppUpdate | null>(null);
   const autoCheckedUpdatesRef = useRef(false);
   const downloadStatusTimerRef = useRef<number | null>(null);
+  const downloadStatusRequestRef = useRef(0);
+  const modelDownloadRevisionRef = useRef(0);
+  const dependencyInstallRevisionRef = useRef(0);
+  const localTranslationInstallingRef = useRef(false);
+  const llamaCommandRef = useRef<"idle" | "running" | "settled">("idle");
+  const modelCommandRef = useRef<{ pending: boolean; presetId: string | null }>({ pending: false, presetId: null });
+
+  // Events and command results take precedence over polls that started earlier.
+  const updateModelDownload = useCallback((update: SetStateAction<ModelDownloadEvent | null>) => {
+    modelDownloadRevisionRef.current += 1;
+    setModelDownload(update);
+  }, []);
+  const updateDependencyInstall = useCallback((update: SetStateAction<DependencyInstallEvent | null>) => {
+    dependencyInstallRevisionRef.current += 1;
+    setDependencyInstall(update);
+  }, []);
 
   const selectedWhisperPreset = useMemo(
     () => whisperModelPresets.find((preset) => preset.id === whisperPresetId) ?? whisperModelPresets[0],
@@ -75,8 +93,8 @@ export function useSettingsPageState(t: TFunction) {
     () => new Set(env?.downloaded_translation_model_files ?? []),
     [env?.downloaded_translation_model_files],
   );
-  const modelDownloading = modelDownload?.status === "running";
-  const dependencyInstalling = dependencyInstall?.status === "running";
+  const modelDownloading = modelDownloadPending || modelDownload?.status === "running";
+  const dependencyInstalling = localTranslationInstalling || dependencyInstall?.status === "running";
   const hasApiCredential = hasScopedCredential(settings) || apiKey.trim().length > 0;
   const environmentReady = Boolean(env?.ffmpeg_path && (normalizeAsrConfig(settings.asr).engine !== "whisper-cpp" || env?.whisper_path));
   const llamaReady = Boolean(env?.llama_path);
@@ -135,20 +153,36 @@ export function useSettingsPageState(t: TFunction) {
   }, []);
 
   const refreshDownloadStatus = useCallback(async () => {
+    const request = ++downloadStatusRequestRef.current;
+    const modelRevision = modelDownloadRevisionRef.current;
+    const dependencyRevision = dependencyInstallRevisionRef.current;
     try {
       const status = await downloadStatus();
-      if (status.model) setModelDownload(status.model);
-      if (status.dependency) setDependencyInstall(status.dependency);
-      return status;
+      if (request !== downloadStatusRequestRef.current) return undefined;
+      const modelUnchanged = modelRevision === modelDownloadRevisionRef.current;
+      const dependencyUnchanged = dependencyRevision === dependencyInstallRevisionRef.current;
+      if (modelUnchanged && status.model) setModelDownload(status.model);
+      if (dependencyUnchanged && status.dependency) setDependencyInstall(status.dependency);
+      if (modelUnchanged && dependencyUnchanged) return status;
+      // An unaffected running channel can still start polling, but a stale
+      // snapshot must never stop polling a newer operation.
+      const unchangedStatus = {
+        model: modelUnchanged ? status.model : undefined,
+        dependency: dependencyUnchanged ? status.dependency : undefined,
+      };
+      return downloadStatusRunning(unchangedStatus) ? unchangedStatus : undefined;
     } catch {
       // Event updates still work if polling is unavailable in an older backend.
+      if (request !== downloadStatusRequestRef.current
+        || modelRevision !== modelDownloadRevisionRef.current
+        || dependencyRevision !== dependencyInstallRevisionRef.current) return undefined;
       return null;
     }
   }, []);
 
   const refreshDownloadStatusAndStopWhenIdle = useCallback(async () => {
     const status = await refreshDownloadStatus();
-    if (!downloadStatusRunning(status)) stopDownloadStatusPolling();
+    if (status !== undefined && !downloadStatusRunning(status)) stopDownloadStatusPolling();
   }, [refreshDownloadStatus, stopDownloadStatusPolling]);
 
   const startDownloadStatusPolling = useCallback(() => {
@@ -242,7 +276,10 @@ export function useSettingsPageState(t: TFunction) {
     let unlistenDependencyInstall: (() => void) | undefined;
 
     listen<ModelDownloadEvent>("model-download-event", (event) => {
-      setModelDownload(event.payload);
+      // The command result is authoritative after this page's request settles.
+      // Queued events from that request must not resurrect its busy state.
+      if (!modelCommandRef.current.pending && modelCommandRef.current.presetId === event.payload.preset_id) return;
+      updateModelDownload(event.payload);
       if (event.payload.status === "running") startDownloadStatusPolling();
       if (event.payload.status === "failed") setNotice(event.payload.error ?? event.payload.message);
     }).then((fn) => {
@@ -254,7 +291,8 @@ export function useSettingsPageState(t: TFunction) {
     });
 
     listen<DependencyInstallEvent>("dependency-install-event", (event) => {
-      setDependencyInstall(event.payload);
+      if (event.payload.item === "llama.cpp" && llamaCommandRef.current === "settled") return;
+      updateDependencyInstall(event.payload);
       if (event.payload.status === "running") startDownloadStatusPolling();
       if (event.payload.status === "failed") setNotice(event.payload.error ?? event.payload.message);
     }).then((fn) => {
@@ -267,6 +305,7 @@ export function useSettingsPageState(t: TFunction) {
 
     return () => {
       disposed = true;
+      downloadStatusRequestRef.current += 1;
       stopDownloadStatusPolling();
       unlistenModelDownload?.();
       unlistenDependencyInstall?.();
@@ -281,6 +320,8 @@ export function useSettingsPageState(t: TFunction) {
     stopDownloadStatusPolling,
     t,
     tauriReady,
+    updateModelDownload,
+    updateDependencyInstall,
   ]);
 
   const saveSettings = useCallback(
@@ -320,8 +361,11 @@ export function useSettingsPageState(t: TFunction) {
   }, [t]);
 
   const downloadWhisperPreset = useCallback(async () => {
+    if (modelCommandRef.current.pending || modelDownloading) return;
+    modelCommandRef.current = { pending: true, presetId: selectedWhisperPreset.id };
+    setModelDownloadPending(true);
     setNotice("");
-    setModelDownload({
+    updateModelDownload({
       preset_id: selectedWhisperPreset.id,
       file_name: selectedWhisperPreset.fileName,
       status: "running",
@@ -340,7 +384,7 @@ export function useSettingsPageState(t: TFunction) {
       });
       setSettings(normalizeSettings(saved));
       setApiKey("");
-      setModelDownload((current) => ({
+      updateModelDownload((current) => ({
         ...(current ?? {}),
         preset_id: selectedWhisperPreset.id,
         file_name: selectedWhisperPreset.fileName,
@@ -353,7 +397,7 @@ export function useSettingsPageState(t: TFunction) {
       await refreshEnvironment();
       setNotice(t("notice.downloadedAndSelected", { fileName: fileName(modelPath) }));
     } catch (error) {
-      setModelDownload((current) =>
+      updateModelDownload((current) =>
         current
           ? {
               ...current,
@@ -365,12 +409,18 @@ export function useSettingsPageState(t: TFunction) {
           : null,
       );
       setNotice(String(error));
+    } finally {
+      modelCommandRef.current.pending = false;
+      setModelDownloadPending(false);
     }
-  }, [apiKey, refreshEnvironment, selectedWhisperPreset, settings, startDownloadStatusPolling, t]);
+  }, [apiKey, modelDownloading, refreshEnvironment, selectedWhisperPreset, settings, startDownloadStatusPolling, t, updateModelDownload]);
 
   const downloadTranslationPreset = useCallback(async () => {
+    if (modelCommandRef.current.pending || modelDownloading) return;
+    modelCommandRef.current = { pending: true, presetId: selectedTranslationPreset.id };
+    setModelDownloadPending(true);
     setNotice("");
-    setModelDownload({
+    updateModelDownload({
       preset_id: selectedTranslationPreset.id,
       file_name: selectedTranslationPreset.fileName,
       status: "running",
@@ -394,7 +444,7 @@ export function useSettingsPageState(t: TFunction) {
       });
       setSettings(normalizeSettings(saved));
       setApiKey("");
-      setModelDownload((current) => ({
+      updateModelDownload((current) => ({
         ...(current ?? {}),
         preset_id: selectedTranslationPreset.id,
         file_name: selectedTranslationPreset.fileName,
@@ -407,7 +457,7 @@ export function useSettingsPageState(t: TFunction) {
       await refreshEnvironment();
       setNotice(t("notice.downloadedAndSelected", { fileName: fileName(modelPath) }));
     } catch (error) {
-      setModelDownload((current) =>
+      updateModelDownload((current) =>
         current
           ? {
               ...current,
@@ -419,12 +469,21 @@ export function useSettingsPageState(t: TFunction) {
           : null,
       );
       setNotice(String(error));
+    } finally {
+      modelCommandRef.current.pending = false;
+      setModelDownloadPending(false);
     }
-  }, [apiKey, refreshEnvironment, selectedTranslationPreset, settings, startDownloadStatusPolling, t]);
+  }, [apiKey, modelDownloading, refreshEnvironment, selectedTranslationPreset, settings, startDownloadStatusPolling, t, updateModelDownload]);
 
   const installLocalTranslation = useCallback(async () => {
+    if (localTranslationInstallingRef.current || dependencyInstalling || modelDownloading) return;
+    // Keep the entire engine/model/settings chain locked, even if an old terminal
+    // event arrives before the current command has settled.
+    localTranslationInstallingRef.current = true;
+    llamaCommandRef.current = "running";
+    setLocalTranslationInstalling(true);
     setNotice("");
-    setDependencyInstall({
+    updateDependencyInstall({
       item: "llama.cpp",
       status: "running",
       message: t("download.dependencyPreparing"),
@@ -433,8 +492,9 @@ export function useSettingsPageState(t: TFunction) {
     startDownloadStatusPolling();
     try {
       await installLlamaCppCommand();
+      llamaCommandRef.current = "settled";
       await refreshEnvironment();
-      setDependencyInstall((current) => ({
+      updateDependencyInstall((current) => ({
         item: current?.item ?? "llama.cpp",
         ...(current ?? {}),
         status: "completed",
@@ -459,7 +519,7 @@ export function useSettingsPageState(t: TFunction) {
         setNotice(t("notice.llamaInstalled"));
       }
     } catch (error) {
-      setDependencyInstall((current) =>
+      updateDependencyInstall((current) =>
         current
           ? {
               ...current,
@@ -471,12 +531,16 @@ export function useSettingsPageState(t: TFunction) {
           : null,
       );
       setNotice(String(error));
+    } finally {
+      llamaCommandRef.current = "settled";
+      localTranslationInstallingRef.current = false;
+      setLocalTranslationInstalling(false);
     }
-  }, [apiKey, downloadTranslationPreset, refreshEnvironment, settings, startDownloadStatusPolling, t]);
+  }, [apiKey, dependencyInstalling, downloadTranslationPreset, modelDownloading, refreshEnvironment, settings, startDownloadStatusPolling, t, updateDependencyInstall]);
 
   const installDependencies = useCallback(async () => {
     setNotice("");
-    setDependencyInstall({
+    updateDependencyInstall({
       item: t("download.dependencyItem"),
       status: "running",
       message: t("download.dependencyPreparing"),
@@ -487,7 +551,7 @@ export function useSettingsPageState(t: TFunction) {
     try {
       const installedPaths = await installDependenciesCommand();
       await refreshEnvironment();
-      setDependencyInstall((current) => ({
+      updateDependencyInstall((current) => ({
         item: current?.item ?? t("download.dependencyItem"),
         ...(current ?? {}),
         status: "completed",
@@ -498,7 +562,7 @@ export function useSettingsPageState(t: TFunction) {
       }));
       setNotice(t("notice.depsInstalled"));
     } catch (error) {
-      setDependencyInstall((current) =>
+      updateDependencyInstall((current) =>
         current
           ? {
               ...current,
@@ -511,7 +575,7 @@ export function useSettingsPageState(t: TFunction) {
       );
       setNotice(String(error));
     }
-  }, [refreshEnvironment, startDownloadStatusPolling, t]);
+  }, [refreshEnvironment, startDownloadStatusPolling, t, updateDependencyInstall]);
 
   const installUpdate = useCallback(async () => {
     if (!availableUpdateRef.current) {

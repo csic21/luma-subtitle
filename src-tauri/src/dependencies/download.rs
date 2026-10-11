@@ -130,6 +130,8 @@ where
         if existing_bytes > 0 {
             request = request.header(RANGE, format!("bytes={existing_bytes}-"));
         }
+        #[cfg(feature = "native-install-regression")]
+        super::native_regression::stage("request-send");
         let mut response = match request.send().await {
             Ok(response) => response,
             Err(_) => {

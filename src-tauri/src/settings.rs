@@ -285,6 +285,9 @@ fn read_settings(app: &AppHandle) -> Result<PersistedSettings, String> {
     serde_json::from_str(&body).map_err(|error| error.to_string())
 }
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(feature = "native-install-regression")]
+    let dir = { let _ = app; crate::dependencies::native_regression::app_config_root() };
+    #[cfg(not(feature = "native-install-regression"))]
     let dir = app
         .path()
         .app_config_dir()

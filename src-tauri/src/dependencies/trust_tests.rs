@@ -395,7 +395,7 @@ fn pinned_catalog_preserves_native_backend_selection() {
         .collect::<Vec<_>>();
     for (os, arch, nvidia, backend) in [
         ("windows", "x86_64", true, "CUDA"),
-        ("windows", "x86_64", false, "Vulkan"),
+        ("windows", "x86_64", false, "CPU"),
         ("macos", "aarch64", false, "Metal"),
     ] {
         let selected = super::llama::select_llama_cpp_assets(&names, os, arch, nvidia).unwrap();
@@ -438,4 +438,35 @@ fn real_b11552_metal_tar_extracts_under_reviewed_bounds() {
     assert!(count >= 42 && bytes > 30_000_000, "count={count} bytes={bytes}");
     let server = crate::paths::find_file_recursive(&temp.0, "llama-server").expect("llama-server present");
     assert!(server.exists());
+}
+
+#[test]
+fn async_hash_future_keeps_the_bulk_buffer_off_the_command_stack() {
+    let item = sample();
+    let path = Path::new("unused-future-size-fixture");
+    let future = trust::verify_file(path, &item);
+    let bytes = std::mem::size_of_val(&future);
+    println!("production verify_file future bytes: {bytes}");
+    assert!(bytes < 4096, "hash future grew to {bytes} bytes");
+}
+
+#[test]
+fn repair_activation_preserves_user_added_files_and_rolls_back_failure() {
+    let temp = Temp::new();
+    let target = temp.0.join("llama.cpp");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("model.gguf"), b"user model").unwrap();
+    fs::write(target.join("config.json"), b"user config").unwrap();
+    assert!(install::activate_directory_preserving_previous(&temp.0.join("missing"), &target).is_err());
+    assert_eq!(fs::read(target.join("model.gguf")).unwrap(), b"user model");
+    let stage = install::StagedDirectory::new(&target).unwrap();
+    fs::write(stage.0.join("llama-server.exe"), b"verified fixture").unwrap();
+    install::activate_directory_preserving_previous(&stage.0, &target).unwrap();
+    assert_eq!(fs::read(target.join("llama-server.exe")).unwrap(), b"verified fixture");
+    let backups: Vec<_> = fs::read_dir(&temp.0).unwrap().flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".previous"))
+        .collect();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(fs::read(backups[0].path().join("model.gguf")).unwrap(), b"user model");
+    assert_eq!(fs::read(backups[0].path().join("config.json")).unwrap(), b"user config");
 }

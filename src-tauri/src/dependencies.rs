@@ -4,8 +4,6 @@ use tauri::{AppHandle, State};
 
 #[cfg(not(target_os = "macos"))]
 use crate::paths::sidecars_dir;
-#[cfg(not(target_os = "macos"))]
-use crate::process_utils::hide_std_command_window;
 use crate::{
     paths::{is_existing_file, locate_binary, path_to_string, whisper_models_dir},
     state::AppState,
@@ -16,6 +14,11 @@ mod download;
 mod events;
 mod install;
 mod llama;
+#[cfg(feature = "native-install-regression")]
+pub(crate) mod native_regression;
+mod llama_receipt;
+mod repair_guard;
+use repair_guard::ensure_llama_repair_preserves_selected_paths;
 #[cfg(target_os = "macos")]
 mod source_build;
 mod trust;
@@ -111,6 +114,8 @@ pub(crate) fn download_status(state: State<'_, AppState>) -> DownloadStatus {
 }
 #[tauri::command]
 pub(crate) async fn install_llama_cpp(app: AppHandle) -> Result<String, String> {
+    #[cfg(feature = "native-install-regression")]
+    native_regression::stage("install-llama-command");
     let _guard = INSTALL_GATE.lock().await;
     llama::install_llama_cpp(app).await
 }
@@ -235,10 +240,11 @@ pub(crate) async fn download_whisper_model(
         None,
         None,
     );
-    let result = download_whisper_model_to_path(&app, preset, &partial_path).await;
+    let result = download_whisper_model_to_path(&app, preset, &partial_path)
+        .await
+        .and_then(|()| install::activate_model(&partial_path, &model_path));
     match result {
         Ok(()) => {
-            install::activate_model(&partial_path, &model_path)?;
             let path = path_to_string(model_path);
             emit_model_download(
                 &app,
@@ -281,6 +287,8 @@ pub(crate) async fn download_translation_model(
     app: AppHandle,
     request: DownloadTranslationModelRequest,
 ) -> Result<String, String> {
+    #[cfg(feature = "native-install-regression")]
+    native_regression::stage("download-translation-command");
     let _guard = MODEL_GATE.lock().await;
     let preset = find_translation_model_preset(&request.preset_id)
         .ok_or_else(|| "未知本地翻译模型预设".to_string())?;
@@ -324,10 +332,10 @@ pub(crate) async fn download_translation_model(
     );
     let result =
         download_named_model_to_path(&app, preset.id, preset.file_name, "翻译模型", &partial_path)
-            .await;
+            .await
+            .and_then(|()| install::activate_model(&partial_path, &model_path));
     match result {
         Ok(()) => {
-            install::activate_model(&partial_path, &model_path)?;
             let path = path_to_string(model_path);
             emit_model_download(
                 &app,
@@ -498,7 +506,7 @@ async fn install_whisper_cpp(app: &AppHandle) -> Result<String, String> {
             "whisper-blas-bin-x64.zip",
             "whisper-bin-x64.zip",
         ];
-        let name = select_whisper_cpp_asset_name(&available, has_nvidia_gpu())
+        let name = select_whisper_cpp_asset_name(&available, has_nvidia_gpu_hint().await)
             .ok_or("No reviewed whisper.cpp build for this platform")?;
         let id = match name {
             "whisper-cublas-12.4.0-bin-x64.zip" => "whisper-cuda",
@@ -554,32 +562,15 @@ fn select_whisper_cpp_asset_name(
         .find(|name| available_assets.iter().any(|asset| asset == name))
 }
 
-pub(super) fn has_nvidia_gpu_hint() -> bool {
+pub(super) async fn has_nvidia_gpu_hint() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
-        has_nvidia_gpu()
+        crate::process_utils::probe_nvidia_gpu().await.is_some()
     }
     #[cfg(target_os = "macos")]
     {
         false
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn has_nvidia_gpu() -> bool {
-    let mut command = std::process::Command::new("nvidia-smi");
-    hide_std_command_window(&mut command);
-    command
-        .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .any(|line| !line.trim().is_empty())
-        })
-        .unwrap_or(false)
 }
 
 fn find_whisper_model_preset(id: &str) -> Option<WhisperModelPreset> {

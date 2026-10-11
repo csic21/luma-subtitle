@@ -1,0 +1,14 @@
+{
+  "engine.tar.gz": {
+    "bytes": 213,
+    "sha256": "615c7c2936ebfed1d7532704e97c86d7c15b84440512674b75fcad0da8a9d262"
+  },
+  "engine.zip": {
+    "bytes": 360,
+    "sha256": "d64483094f4450dd7df0370706ac1a1b2d94dbf9538b80c513a8a49c83af892d"
+  },
+  "model.bin": {
+    "bytes": 106496,
+    "sha256": "589fa3910252f205f7ac70b15f00a9354d9cc24364b86573b3710dfa2f6c60c9"
+  }
+}
