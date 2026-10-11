@@ -4,6 +4,7 @@ import pathlib
 import struct
 import tempfile
 import unittest
+from unittest import mock
 
 MODULE = pathlib.Path(__file__).with_name('run.py')
 spec = importlib.util.spec_from_file_location('native_install_runner', MODULE)
@@ -62,6 +63,35 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('metrics', runner.AB_CASES)
         self.assertIn('model-cached', runner.AB_CASES)
         self.assertIn('engine-cold', runner.AB_CASES)
+
+    def run_fake_child(self, exit_code, report):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            def fake_popen(args, **kwargs):
+                if report is not None:
+                    pathlib.Path(args[-1]).write_text(json.dumps(report))
+                process = mock.Mock()
+                process.wait.return_value = exit_code
+                return process
+            with mock.patch.object(runner.subprocess, 'Popen', side_effect=fake_popen):
+                return runner.run_case(root / 'fake-executable', 'fixture', 'heap', root, 5)
+
+    def test_zero_os_exit_cannot_hide_failed_native_report(self):
+        result = self.run_fake_child(0, {'passed': False, 'error': 'assertion failed'})
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['exit_code'], 0)
+        self.assertEqual(result['assertion_error'], 'assertion failed')
+
+    def test_zero_os_exit_without_report_is_not_a_pass(self):
+        self.assertFalse(self.run_fake_child(0, None)['passed'])
+
+    def test_native_fault_cannot_be_hidden_by_a_success_report(self):
+        result = self.run_fake_child(-1073741571, {'passed': True})
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['exit_code_hex'], '0xC00000FD')
+
+    def test_both_successful_exit_and_native_report_are_required(self):
+        self.assertTrue(self.run_fake_child(0, {'passed': True})['passed'])
 
 
 if __name__ == '__main__':

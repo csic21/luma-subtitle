@@ -141,9 +141,10 @@ fn reader(
             let count = match pipe.read_ready(&mut chunk) {
                 Ok(count) => count,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if stopped.load(Ordering::SeqCst) {
-                        return Ok(output);
-                    }
+                    // On Windows, read_ready may observe an empty pipe, sleep,
+                    // then return WouldBlock after the child wrote its final
+                    // bytes and exited. Recheck readiness during the bounded
+                    // drain period instead of discarding that unread output.
                     continue;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -377,6 +378,73 @@ compile_error!("CLI process ownership must be implemented for this platform");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Deterministically reproduce a Windows PeekNamedPipe observation that
+    // becomes stale while the child exits. No OS timing or external shell is
+    // needed: the first readiness check sets stopped and returns WouldBlock.
+    struct PendingAtExitPipe {
+        stopped: Arc<AtomicBool>,
+        first_check: bool,
+        inherited_open_handle: bool,
+        bytes: std::io::Cursor<Vec<u8>>,
+    }
+
+    impl Read for PendingAtExitPipe {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.bytes.read(buffer)
+        }
+    }
+
+    impl ReadPipe for PendingAtExitPipe {
+        fn read_ready(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.first_check {
+                self.first_check = false;
+                self.stopped.store(true, Ordering::SeqCst);
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            if self.inherited_open_handle {
+                std::thread::sleep(Duration::from_millis(20));
+                return Err(std::io::ErrorKind::WouldBlock.into());
+            }
+            self.read(buffer)
+        }
+    }
+
+    #[test]
+    fn drains_final_bytes_when_child_stops_during_would_block() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let overflow = Arc::new(AtomicBool::new(false));
+        let expected = b"NVIDIA Fixture GPU, 551.86\r\n";
+        let pipe = PendingAtExitPipe {
+            stopped: stopped.clone(),
+            first_check: true,
+            inherited_open_handle: false,
+            bytes: std::io::Cursor::new(expected.to_vec()),
+        };
+        let output = reader(pipe, 1024, overflow.clone(), stopped.clone())
+            .join().unwrap().unwrap();
+        assert!(stopped.load(Ordering::SeqCst));
+        assert!(!overflow.load(Ordering::SeqCst));
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn pending_read_after_exit_stays_bounded_without_pipe_eof() {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let pipe = PendingAtExitPipe {
+            stopped: stopped.clone(),
+            first_check: true,
+            inherited_open_handle: true,
+            bytes: std::io::Cursor::new(Vec::new()),
+        };
+        let started = Instant::now();
+        let output = reader(pipe, 1024, Arc::new(AtomicBool::new(false)), stopped)
+            .join().unwrap().unwrap();
+        assert!(output.is_empty());
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
     fn fixture(mode: &str, marker: &std::path::Path) -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command

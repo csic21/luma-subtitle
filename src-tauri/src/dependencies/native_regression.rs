@@ -6,7 +6,7 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    sync::{atomic::{AtomicUsize, Ordering}, Mutex, OnceLock},
+    sync::{atomic::{AtomicI32, AtomicUsize, Ordering}, Mutex, OnceLock},
     time::Duration,
 };
 use serde_json::{json, Value};
@@ -42,6 +42,9 @@ struct Harness {
     _rename_lock: Option<File>,
 }
 static HARNESS: OnceLock<Harness> = OnceLock::new();
+// The first macOS run reported OS exit 0 even after app.exit(1). Preserve the
+// diagnostic result and apply it explicitly at the normal exit lifecycle event.
+static EXIT_CODE: AtomicI32 = AtomicI32::new(2);
 fn harness() -> &'static Harness { HARNESS.get().expect("Native fixture runner was not initialized") }
 pub(crate) fn app_data_root() -> PathBuf { harness().root.join("app-data") }
 pub(crate) fn app_config_root() -> PathBuf { harness().root.join("app-config") }
@@ -238,8 +241,14 @@ pub(crate) fn run() {
                 "thread":format!("{:?}", std::thread::current().id())}));
             generated_handler(invoke)
         })
-        .run(tauri::generate_context!("native-install-regression/tauri.conf.json"))
-        .expect("run native regression WebView");
+        .build(tauri::generate_context!("native-install-regression/tauri.conf.json"))
+        .expect("build native regression WebView")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.cleanup_before_exit();
+                std::process::exit(EXIT_CODE.load(Ordering::SeqCst));
+            }
+        });
 }
 
 #[tauri::command]
@@ -259,7 +268,8 @@ fn native_test_followup() -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
-fn native_test_measure(app: AppHandle) {
+fn native_test_measure(app: AppHandle) -> Result<(), String> {
+    check_json_comparison()?;
     // A separate child: constructing futures for measurement never changes the
     // command dispatch or stack layout in the pass/fail regression cases.
     let item = &harness().catalog[0];
@@ -273,6 +283,63 @@ fn native_test_measure(app: AppHandle) {
     observe_future("download_translation_model_command", &super::download_translation_model(app.clone(), request()));
     observe_future("llama_ResultFutureTag", &tauri::ipc::private::ResultFutureTag.future(super::install_llama_cpp(app.clone())));
     observe_future("model_ResultFutureTag", &tauri::ipc::private::ResultFutureTag.future(super::download_translation_model(app, request())));
+    Ok(())
+}
+
+/// Preserve the production IPC serializer, including its f32 representation.
+fn backend_snapshot(app: &AppHandle) -> Result<Value, String> {
+    let state = app.state::<crate::state::AppState>();
+    let status = super::DownloadStatus {
+        model: state.model_download.lock().clone(),
+        dependency: state.dependency_install.lock().clone(),
+    };
+    let wire = serde_json::to_string(&status).map_err(|e| e.to_string())?;
+    serde_json::from_str(&wire).map_err(|e| e.to_string())
+}
+
+/// JavaScript JSON.stringify turns 1.0/0.0 into 1/0. Require the same complete
+/// object shape and exact values while allowing that harmless numeric spelling
+/// difference. Do not coerce strings, omit nulls, ignore fields or use tolerance.
+fn same_ipc_json(expected: &Value, actual: &Value) -> bool {
+    match (expected, actual) {
+        (Value::Number(a), Value::Number(b)) => {
+            a == b || (a.is_f64() != b.is_f64() &&
+                matches!((a.as_f64(), b.as_f64()), (Some(a), Some(b))
+                    if a == b && a.abs() <= 9_007_199_254_740_991.0))
+        }
+        (Value::Array(a), Value::Array(b)) => a.len() == b.len() &&
+            a.iter().zip(b).all(|(a, b)| same_ipc_json(a, b)),
+        (Value::Object(a), Value::Object(b)) => a.len() == b.len() &&
+            a.iter().all(|(key, value)| b.get(key).is_some_and(|other| same_ipc_json(value, other))),
+        _ => expected == actual,
+    }
+}
+
+/// Execute comparison regression assertions in the native metrics child too.
+fn check_json_comparison() -> Result<(), String> {
+    let expected = json!({"status":"completed", "progress":1.0, "path":"fixture/server",
+        "error":null, "nested":[0.0, 0.5, 32]});
+    let roundtrip = json!({"status":"completed", "progress":1, "path":"fixture/server",
+        "error":null, "nested":[0, 0.5, 32.0]});
+    if !same_ipc_json(&expected, &roundtrip) { return Err("JSON comparator rejected equivalent integral floats".into()); }
+    for (field, value) in [("status", json!("failed")), ("path", json!("other/server")),
+        ("error", json!("unexpected")), ("progress", json!(0)), ("progress", json!("1")),
+        ("progress", json!(true)), ("nested", json!([0, 0.5]))] {
+        let mut changed = roundtrip.clone();
+        changed[field] = value;
+        if same_ipc_json(&expected, &changed) { return Err(format!("JSON comparator ignored changed {field}")); }
+    }
+    let mut missing = roundtrip.clone();
+    missing.as_object_mut().unwrap().remove("error");
+    let mut extra = roundtrip.clone();
+    extra["extra"] = Value::Null;
+    if same_ipc_json(&expected, &missing) || same_ipc_json(&expected, &extra) ||
+        same_ipc_json(&json!(9_007_199_254_740_992u64), &json!(9_007_199_254_740_993u64)) ||
+        same_ipc_json(&json!(9_007_199_254_740_993u64), &json!(9_007_199_254_740_992.0)) {
+        return Err("JSON comparator ignored shape or large-integer precision mismatch".into());
+    }
+    stage("json-comparison-regressions-passed");
+    Ok(())
 }
 fn validate_report(report: &Value, app: &AppHandle) -> Result<(), String> {
     if !report["fatal"].is_null() { return Err(format!("WebView fixture failed: {}", report["fatal"])); }
@@ -290,9 +357,8 @@ fn validate_report(report: &Value, app: &AppHandle) -> Result<(), String> {
     for status in report["snapshots"].as_array().ok_or("No snapshots")? {
         if status[key]["status"] != expected { return Err(format!("IPC snapshot has non-terminal/wrong status: {status}")); }
     }
-    let state = app.state::<crate::state::AppState>();
-    let backend = json!({"model": state.model_download.lock().clone(), "dependency": state.dependency_install.lock().clone()});
-    if report["finalSnapshot"] != backend || backend[key]["status"] != expected { return Err("WebView and backend terminal status differ".into()); }
+    let backend = backend_snapshot(app)?;
+    if !same_ipc_json(&backend, &report["finalSnapshot"]) || backend[key]["status"] != expected { return Err("WebView and backend terminal status differ".into()); }
     let events = report["events"].as_array().ok_or("No WebView events")?;
     let event = events.last().ok_or("No terminal event reached the WebView")?;
     if event["status"] != expected { return Err("Last queued WebView event disagrees with terminal state".into()); }
@@ -352,10 +418,15 @@ fn assert_no_staging(root: &Path, backups: &mut Vec<PathBuf>) -> Result<(), Stri
 #[tauri::command]
 fn native_test_finish(app: AppHandle, report: Value) {
     let validation = validate_report(&report, &app);
+    let exit_code = if validation.is_ok() { 0 } else { 1 };
+    let backend = backend_snapshot(&app);
     let output = json!({"case":harness().case, "passed":validation.is_ok(), "error":validation.err(),
         "fixture_requests":harness().requests.load(Ordering::SeqCst), "root":harness().root,
-        "scope":"feature-built release-mode Wry IPC, not the distributable binary", "webview":report});
+        "scope":"feature-built release-mode Wry IPC, not the distributable binary", "webview":report,
+        "backend_snapshot":backend.as_ref().ok(), "backend_snapshot_error":backend.as_ref().err(),
+        "requested_exit_code":exit_code});
     fs::write(&harness().report, serde_json::to_vec_pretty(&output).unwrap()).expect("write native regression report");
     record(json!({"event":"finished", "passed":output["passed"]}));
-    app.exit(if output["passed"] == true { 0 } else { 1 });
+    EXIT_CODE.store(exit_code, Ordering::SeqCst);
+    app.exit(exit_code);
 }
