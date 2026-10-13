@@ -1,6 +1,6 @@
 .app-shell {
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
+  grid-template-columns: 164px minmax(0, 1fr);
   width: 100%;
   max-width: none;
   height: 100vh;
@@ -13,14 +13,13 @@
 
 .app-content {
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
-  gap: 10px;
-  overflow: auto;
-  background:
-    linear-gradient(180deg, rgba(255, 240, 194, 0.018), transparent 180px),
-    var(--app-window);
-  padding: 12px;
+  gap: 0;
+  overflow: hidden;
+  background: var(--app-pane);
+  padding: 0;
 }
 
 .app-sidebar {
@@ -28,9 +27,8 @@
   flex-direction: column;
   min-width: 0;
   border-right: 1px solid var(--app-separator);
-  background: color-mix(in srgb, var(--app-toolbar) 94%, black);
-  padding: 10px;
-  box-shadow: 1px 0 0 rgba(255, 240, 194, 0.025);
+  background: var(--sidebar);
+  padding: 12px 9px;
 }
 
 .brand-link {
@@ -47,8 +45,8 @@
   align-items: center;
   flex: 0 0 auto;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
 }
 
 .brand-mark img {
@@ -66,7 +64,7 @@
 
 .brand-copy strong {
   color: var(--hotdog-cream);
-  font-size: 0.9rem;
+  font-size: 14px;
   font-weight: 720;
   line-height: 1.1;
   overflow: hidden;
@@ -104,14 +102,14 @@
 }
 
 .nav-item:hover {
-  background: rgba(255, 240, 194, 0.045);
+  background: var(--secondary);
   color: var(--foreground);
 }
 
 .nav-item.active {
-  background: color-mix(in srgb, var(--secondary) 62%, var(--app-toolbar));
+  background: var(--sidebar-accent);
   color: var(--secondary-foreground);
-  box-shadow: 0 0 0 1px rgba(114, 224, 188, 0.08) inset;
+  box-shadow: inset 2px 0 var(--selection-edge);
 }
 
 .nav-item svg,
@@ -148,16 +146,9 @@
   min-width: 0;
 }
 
-.notice-alert {
-  border-color: color-mix(in srgb, var(--hotdog-mustard) 42%, var(--app-separator));
-  background: color-mix(in srgb, var(--app-toolbar-elevated) 86%, var(--hotdog-red));
-  box-shadow: none;
-}
-
-.notice-alert [data-slot="alert-title"] {
-  color: var(--hotdog-mustard);
-}
-
+.notice-alert { border-color: #dfc48d; background: #fff8e9; box-shadow: none; }
+.notice-alert [data-slot="alert-title"] { color: #735018; }
+.notice-alert [data-slot="alert-description"] { color: #56431f; white-space: pre-wrap; overflow-wrap: anywhere; }
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -250,7 +241,7 @@
   min-height: 2rem;
   border: 1px solid var(--app-separator);
   border-radius: 6px;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--muted);
   padding: 0 9px;
   color: var(--hotdog-cream);
   overflow: hidden;
@@ -320,41 +311,11 @@
   color: var(--hotdog-mustard);
 }
 
-.status-badge {
-  border-color: color-mix(in srgb, var(--border) 70%, var(--hotdog-bun));
-  background: rgba(255, 199, 104, 0.08);
-  color: var(--hotdog-cream);
-}
-
-.status-running,
-.status-queued {
-  border-color: color-mix(in srgb, var(--hotdog-mustard) 62%, var(--border));
-  background: rgba(255, 212, 59, 0.12);
-  color: var(--hotdog-mustard);
-}
-
-.status-completed,
-.status-exported,
-.status-ready {
-  border-color: color-mix(in srgb, #72e0bc 58%, var(--border));
-  background: rgba(28, 87, 78, 0.28);
-  color: #b6ffe7;
-}
-
-.status-failed,
-.status-interrupted,
-.status-warn {
-  border-color: color-mix(in srgb, var(--hotdog-red) 64%, var(--border));
-  background: rgba(226, 57, 45, 0.13);
-  color: #ffb3a5;
-}
-
-.status-cancelled,
-.status-created {
-  background: rgba(255, 199, 104, 0.08);
-  color: var(--muted-foreground);
-}
-
+.status-badge { border-color: var(--border); background: var(--muted); color: var(--muted-foreground); font-size: 11px; white-space: nowrap; }
+.status-running, .status-queued { border-color: #dec17e; background: #fff5e0; color: #735018; }
+.status-completed, .status-exported, .status-ready { border-color: #c5dfcf; background: var(--success-surface); color: var(--success); }
+.status-failed, .status-interrupted, .status-warn { border-color: #e8bdbd; background: #fff0ef; color: #9a2428; }
+.status-cancelled, .status-created { background: var(--muted); color: var(--muted-foreground); }
 .table-card-content {
   padding: 0;
 }
@@ -442,7 +403,7 @@
 }
 
 .danger-action {
-  color: #ff8d7e;
+  color: var(--destructive);
 }
 
 .empty-state,
@@ -457,3 +418,9 @@
 .task-table-card .empty-state {
   min-height: 100%;
 }
+
+.brand-copy > span { display: none; }
+.brand-link { min-height: 40px; }
+.section-title > div { min-width: 0; }
+.section-icon { width: 24px; height: 24px; background: transparent; color: var(--muted-foreground); }
+.section-icon svg { width: 17px; height: 17px; }

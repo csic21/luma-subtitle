@@ -172,7 +172,10 @@ export function AsrSettingsFields({ value, onChange, disabled = false, t, childr
           {releasing ? <Loader2 data-icon="inline-start" className="spin" /> : <Trash2 data-icon="inline-start" />}
           {t("asr.release")}
         </Button>
-        <FieldDescription>{t("asr.warmMemory")}</FieldDescription>
+        <details className="asr-memory-details">
+          <summary>{t("asr.memoryDetails")}</summary>
+          <FieldDescription>{t("asr.warmMemory")}</FieldDescription>
+        </details>
       </div>
       <div aria-live="polite">
         {error && <Alert variant="destructive"><AlertCircle /><AlertTitle>{t("asr.checkFailed")}</AlertTitle><AlertDescription>{error} {t("asr.recovery")}</AlertDescription></Alert>}

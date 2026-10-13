@@ -1,75 +1,3 @@
-@media (max-width: 980px) {
-  .toolbar-content {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .toolbar-separator {
-    display: block;
-  }
-
-  .toolbar-actions {
-    justify-content: flex-start;
-  }
-
-  .workspace,
-  .settings-page-grid {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
-}
-
-@media (max-width: 760px) {
-  .app-content {
-    padding: 8px;
-  }
-
-  .toolbar-main > [data-slot="button"],
-  .action-row > [data-slot="button"] {
-    flex: 1 1 10rem;
-  }
-
-  .flow-strip {
-    grid-template-columns: 1fr;
-  }
-
-  .flow-step {
-    grid-template-columns: 30px minmax(0, 1fr);
-  }
-
-  .flow-arrow {
-    display: none;
-  }
-
-  .path-chip {
-    max-width: 100%;
-  }
-
-  .concurrency-field {
-    grid-template-columns: 1fr;
-  }
-
-  .auto-next-field {
-    justify-content: flex-start;
-  }
-
-  .outputs,
-  .detail-list,
-  .env-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 640px) {
-  .page-heading {
-    grid-template-columns: 1fr;
-  }
-
-  .metric-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 62px minmax(0, 1fr);
@@ -111,3 +39,5 @@
     padding-inline: 0;
   }
 }
+
+@media (max-width: 860px) { .brand-mark { width: 24px; height: 24px; } }

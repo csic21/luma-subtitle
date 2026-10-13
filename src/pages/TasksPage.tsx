@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import "@/styles/queue.css";
 import { useNavigate } from "react-router-dom";
 
 import { NoticeAlert } from "@/components/app/shared";
@@ -39,21 +40,15 @@ export function TasksPage() {
   } = useTasksPageState(t);
 
   return (
-    <>
+    <section className="task-queue">
       <NoticeAlert message={notice} />
-
-      <TaskMetricGrid
-        busyCount={busyCount}
-        doneCount={doneCount}
-        failedCount={failedCount}
-        taskCount={tasks.length}
-        t={t}
-      />
 
       <TaskToolbar
         canRunSelectedOperations={selectedRunnableOperations}
         outputDir={outputDir}
         queueSettings={queueSettings}
+        selectedCount={selectedIds.size}
+        summary={<TaskMetricGrid busyCount={busyCount} doneCount={doneCount} failedCount={failedCount} taskCount={tasks.length} t={t} />}
         t={t}
         onCancelSelected={cancelSelected}
         onCreateAudioTask={createAudioTask}
@@ -80,6 +75,6 @@ export function TasksPage() {
         onToggleAll={toggleAll}
         onToggleTask={toggleTask}
       />
-    </>
+    </section>
   );
 }

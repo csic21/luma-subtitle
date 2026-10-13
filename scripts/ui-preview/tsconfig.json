@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "moduleResolution": "Bundler",
+    "paths": {
+      "@/lib/tauri-api": ["scripts/ui-preview/tauri-api.ts"],
+      "@/lib/updater": ["scripts/ui-preview/updater.ts"],
+      "@tauri-apps/api/event": ["scripts/ui-preview/events.ts"],
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["./*.ts", "./*.tsx", "../../src/vite-env.d.ts"]
+}

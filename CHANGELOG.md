@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.5 — 2026-10-13
+
+### Subtitle workbench
+- Put readable, aligned source and translated cues at the center of task details. Keep task settings in a collapsible inspector and logs in a bounded drawer so controls remain reachable in compact windows.
+- Carry cue selection into editing and show missing, duplicate, or mismatched cue references explicitly. Preserve snapshot-checked saving and unsaved-draft navigation protection.
+- Unify the task queue, settings, keyboard focus, selection, and status styling. Keep advanced explanations behind disclosures and retain one-click local setup consent.
+- Use lowercase luma in the interface. Installed application, executable, data-directory, and updater identities stay compatible.
+
+### Validation boundary
+- Add component and browser-fixture regression coverage for compact layouts, cue pairing, edit continuity, queue actions, and settings drafts. Browser previews use sample data and are excluded from the shipping application.
+- Preserve the native Windows/macOS installation IPC and ASR compatibility gates. No new inference, hardware-performance, or credential-storage claims.
+
 ## 1.2.4 — 2026-10-11
 
 ### One-click local subtitle setup

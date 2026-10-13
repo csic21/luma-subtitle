@@ -15,12 +15,12 @@ export function AppLayout() {
   return (
     <main className="app-shell">
       <aside className="app-sidebar">
-        <Link to="/tasks" className="brand-link" title="Luma Subtitle">
+        <Link to="/tasks" className="brand-link" title="luma">
           <span className="brand-mark" aria-hidden="true">
             <img src={lumaLogoMark} alt="" />
           </span>
           <span className="brand-copy">
-            <strong>Luma Subtitle</strong>
+            <strong>luma</strong>
             <span>{t("app.tagline")}</span>
           </span>
         </Link>
@@ -29,7 +29,7 @@ export function AppLayout() {
           <NavLink
             to="/tasks"
             className={({ isActive }) => cn("nav-item", isActive && "active")}
-            title={t("task.queue")}
+            title={t("task.queue")} aria-label={t("task.queue")}
           >
             <ListTodo aria-hidden="true" />
             <span className="nav-label">{t("task.queue")}</span>
@@ -37,7 +37,7 @@ export function AppLayout() {
           <NavLink
             to="/settings"
             className={({ isActive }) => cn("nav-item", isActive && "active")}
-            title={t("app.settings")}
+            title={t("app.settings")} aria-label={t("app.settings")}
           >
             <Settings aria-hidden="true" />
             <span className="nav-label">{t("app.settings")}</span>

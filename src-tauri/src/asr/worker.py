@@ -192,7 +192,7 @@ def model_files(root, backend, aligner=False):
                 raise WorkerError("unsupported_model_layout", "The pinned mlx-whisper 0.4.3 runtime cannot load a "
                                   "model.safetensors-only directory. Choose a compatible MLX conversion containing "
                                   "weights.safetensors or weights.npz, such as the documented whisper-turbo model. "
-                                  "Luma has not renamed or changed your model files.")
+                                  "luma has not renamed or changed your model files.")
             raise WorkerError("incomplete_model", "MLX model needs weights.safetensors or weights.npz for mlx-whisper 0.4.3.")
         names.append(weights)
     else:
