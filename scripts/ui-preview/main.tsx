@@ -1,7 +1,6 @@
 /** Developer-only harness: actual React app and CSS, synthetic IPC boundary. */
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import App from "@/App";
 import "./preview.css";
 
 const params = new URLSearchParams(location.search);
@@ -32,4 +31,11 @@ function Harness() {
   </div>;
 }
 
-createRoot(document.getElementById("root")!).render(frame ? <App /> : <Harness />);
+const root = createRoot(document.getElementById("root")!);
+// The App module constructs createHashRouter. Initialize the fixture route first,
+// then load App so the router indexes that initial history entry correctly.
+if (frame) {
+  void import("@/App").then(({ default: App }) => root.render(<App />));
+} else {
+  root.render(<Harness />);
+}
