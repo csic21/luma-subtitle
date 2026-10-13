@@ -21,7 +21,7 @@ function Harness() {
   const query = (next: Record<string, string>) => `/?${new URLSearchParams({ width: String(size[0]), height: String(size[1]), scenario, locale, page, ...next })}`;
   return <div style={{ background: "#f4f5f7", color: "#606873", fontFamily: "sans-serif", minHeight: "100vh", width: "max-content", minWidth: "100%", padding: present ? 0 : 12 }}>
     <div style={{ width: size[0], marginInline: present ? "auto" : 0 }}>
-      {present ? <div style={{ height: 28, padding: "0 12px", display: "flex", alignItems: "center", fontSize: 11 }}>luma Subtitle · 示例数据 / Sample data</div> : <header style={{ marginBottom: 10, color: "#111" }}>
+      {present ? <div style={{ height: 28, padding: "0 12px", display: "flex", alignItems: "center", fontSize: 11 }}>luma · 示例数据 / Sample data</div> : <header style={{ marginBottom: 10, color: "#111" }}>
         Developer QA · Production React components · Synthetic data only<br />
         {[[1280, 720], [1100, 700], [1024, 600], [760, 620], [1440, 1080]].map(([width, height]) => <button style={{ marginRight: 12 }} key={width} onClick={() => setSize([width, height])}>{width}×{height}</button>)}
         <a href={query({ locale: locale === "en-US" ? "zh-CN" : "en-US" })}>Switch language</a><br />

@@ -162,8 +162,9 @@ export function SubtitleEditorDialog({
         else keepEditing();
       }}>
         <AlertDialogContent onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          if (!discardingRef.current && lastEditorFocusRef.current?.isConnected) {
+          if (discardingRef.current) event.preventDefault();
+          else if (lastEditorFocusRef.current?.isConnected) {
+            event.preventDefault();
             lastEditorFocusRef.current.focus({ preventScroll: true });
           }
         }}>
@@ -172,7 +173,10 @@ export function SubtitleEditorDialog({
             <AlertDialogDescription>{t("subtitle.discardDescription")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={keepEditing}>{t("subtitle.keepEditing")}</AlertDialogCancel>
+            <AlertDialogCancel onClick={(event) => {
+              event.preventDefault();
+              keepEditing();
+            }}>{t("subtitle.keepEditing")}</AlertDialogCancel>
             <AlertDialogAction onClick={(event) => {
               event.preventDefault();
               if (savingRef.current) return;

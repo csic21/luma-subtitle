@@ -46,7 +46,7 @@ describe("subtitle navigation", () => {
     jump(201);
     expect(renderer.root.findByProps({ type: "search" }).props.value).toBe("");
     expect(renderer.root.findByType("textarea").props.value).toBe("Saved draft");
-    expect(focused.at(-1)).toBe("Saved draft");
+    expect(focused[focused.length - 1]).toBe("Saved draft");
   });
 
   it("reports an unknown cue without changing the current page", () => {
@@ -140,7 +140,7 @@ describe("subtitle cue alignment", () => {
     expect(times).toEqual(["00:00:00,000", "00:00:01,000"]);
     const reference = cell(rows()[0], "subtitle-cue-reference");
     expect(reference.findByType("code").children.join("")).toBe("00:00:04,500 → 00:00:05,900");
-    expect(JSON.stringify(reference.props.children)).toContain("subtitle.timingMismatch");
+    expect(reference.findAllByType("span").some((node) => node.children.includes("subtitle.timingMismatch"))).toBe(true);
   });
 
   it("uses selectable plain paragraphs in read-only mode and updates the parent", () => {

@@ -53,7 +53,7 @@
 .subtitle-cue-head { flex: 0 0 30px; align-items: center; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--muted-foreground); }
 .subtitle-cue-list { flex: 1; min-height: 0; border: 0; border-radius: 0; }
 .subtitle-cue-list [data-radix-scroll-area-viewport] { height: 100%; }
-.subtitle-cue-row { position: relative; align-items: start; padding-block: 11px; min-height: 68px; border-bottom: 1px solid #edf0f2; gap: 18px; }
+.subtitle-cue-row { position: relative; align-items: start; padding-block: 9px; min-height: 68px; border-bottom: 1px solid #edf0f2; gap: 18px; }
 .subtitle-cue-row:hover { background: #f8f9fa; }
 .subtitle-cue-row[data-active="true"] { background: var(--selection); box-shadow: inset 2px 0 var(--selection-edge); }
 .subtitle-cue-row:focus-visible { outline-offset: -2px; }

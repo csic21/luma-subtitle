@@ -320,7 +320,7 @@ export function TaskLogsCard({ logs, t }: { logs: string[]; t: Translate }) {
         <SectionTitle icon={<Terminal />} title={t("tabs.logs")} />
       </CardHeader>
       <CardContent>
-        <ScrollArea className="log-list">
+        <ScrollArea className="log-list" viewportProps={{ tabIndex: 0, role: "region", "aria-label": t("tabs.logs") }}>
           {logs.length === 0 ? (
             <span className="muted">{t("task.logsEmpty")}</span>
           ) : (

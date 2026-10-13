@@ -52,7 +52,7 @@ export function TaskDetailPage() {
     <div className="workbench-logs" hidden={!logsOpen}><TaskLogsCard logs={state.logs} t={t} /></div>
     <footer className="workbench-footer">
       <Button variant="ghost" size="sm" aria-expanded={logsOpen} onClick={() => setLogsOpen(!logsOpen)}><Terminal data-icon="inline-start" />{t("tabs.logs")}<ChevronDown /></Button>
-      <details className="workbench-message"><summary>{task.message || t("common.progress")}</summary><p>{task.message}</p></details>
+      <details className="workbench-message" onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector("summary")?.focus(); } }}><summary>{task.message || t("common.progress")}</summary><p tabIndex={0}>{task.message}</p></details>
       {taskBusy(task) && <Progress value={progressValue(task.progress)} />}
       <span>{task.segment_count != null ? t("workbench.cueCount", { count: task.segment_count }) : ""}</span>
     </footer>

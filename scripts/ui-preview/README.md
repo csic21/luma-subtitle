@@ -22,7 +22,7 @@ specified by width/height. Harness resize buttons preserve iframe/React state.
 `locale=en-US` checks longer labels; `page=queue` and `page=settings` select routes.
 Scenarios: completed, running, failed, loading, empty and long.
 
-`present=1` replaces QA controls with a 28px `luma Subtitle · 示例数据 / Sample data`
+`present=1` replaces QA controls with a 28px `luma · 示例数据 / Sample data`
 label for clean captures. It does not change the iframe's production CSS or dimensions.
 
 Static preview:

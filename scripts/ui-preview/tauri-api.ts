@@ -59,7 +59,7 @@ const baseTask: TaskRecord = {
   id: "fixture", source_type: "video", video_path: "C:\\LumaFixture\\Designing for people.mp4",
   file_name: scenario === "long" ? "An exceptionally long interview filename with production notes and a complete multilingual subtitle review - 最终校对版本.mp4" : "Designing for people.mp4",
   status: scenario === "running" ? "running" : scenario === "failed" ? "failed" : "completed",
-  stage: scenario === "running" ? "translating" : "completed",
+  stage: scenario === "running" ? "translate-shard" : "completed",
   message: scenario === "running" ? "正在翻译字幕，已完成 56 / 125 条" : scenario === "long" ? "Long task progress message / Detailed processing information that must stay readable and reachable. ".repeat(10) : "字幕已生成，可以校对或导出",
   progress: scenario === "running" ? 0.45 : 1,
   settings: taskSettings(), source_srt_path: scenario === "empty" ? null : "C:\\LumaFixture\\source.srt",
@@ -74,8 +74,8 @@ const baseTask: TaskRecord = {
 const tasks: TaskRecord[] = [
   baseTask,
   { ...clone(baseTask), id: "fixture-running", file_name: "Studio interview.wav", source_type: "audio", video_path: null, audio_path: "C:\\LumaFixture\\Studio interview.wav", status: "running", stage: "transcribing", progress: 0.42, message: "正在转写音频…", translated_srt_path: null, error: null },
-  { ...clone(baseTask), id: "fixture-queued", file_name: "Workshop highlights.mp4", status: "queued", stage: "queued", progress: 0, message: "等待处理", source_srt_path: null, translated_srt_path: null, error: null },
-  { ...clone(baseTask), id: "fixture-failed", file_name: "Product walkthrough.mp4", status: "failed", stage: "translating", progress: 0.68, message: "翻译未完成，可以重试", error: "Synthetic translation failure; no external request was sent." },
+  { ...clone(baseTask), id: "fixture-queued", file_name: "Workshop highlights.mp4", status: "queued", stage: "created", progress: 0, message: "等待处理", source_srt_path: null, translated_srt_path: null, error: null },
+  { ...clone(baseTask), id: "fixture-failed", file_name: "Product walkthrough.mp4", status: "failed", stage: "translate-shard", progress: 0.68, message: "翻译未完成，可以重试", error: "Synthetic translation failure; no external request was sent." },
   { ...clone(baseTask), id: "fixture-cancelled", file_name: "Field notes.srt", source_type: "srt", video_path: null, srt_path: "C:\\LumaFixture\\Field notes.srt", status: "cancelled", stage: "cancelled", progress: 0.3, message: "已取消", error: null },
 ];
 const findTask = (id: string) => {

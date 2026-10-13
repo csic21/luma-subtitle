@@ -177,6 +177,14 @@
   line-height: 1.5;
 }
 
+.settings-workspace .field-description {
+  color: var(--muted-foreground);
+}
+
+.settings-workspace .form-field[data-invalid="true"] .field-description {
+  color: var(--destructive);
+}
+
 .settings-workspace [data-slot="alert-title"] {
   font-size: 13px;
   line-height: 1.5;
