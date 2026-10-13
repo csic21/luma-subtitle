@@ -11,7 +11,7 @@ The published Windows CPU wheel was source-built; app setup downloads that pinne
 wheel and does not compile or resolve dependencies over the network. You do not
 install Python, enter pip commands, or change the system environment. luma does
 not read Hugging Face credentials or
-silently switch engines. Whole Python/runtime bundles are not republished by Luma.
+silently switch engines. Whole Python/runtime bundles are not republished by luma.
 
 **Availability (2026-10-10):** this catalog enables four optional, experimental
 managed recipes: Windows Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen
@@ -29,7 +29,7 @@ see [the build and publication boundaries](ASR_COMPONENTS_BUILD.md).
    whisper.cpp engine and its Turbo preset remain available without this setup.
 2. Select an available compatible component, review download sizes, labelled
    installed-size bounds, exact sources and applicable third-party terms, then
-   choose Install. The private runtime is kept in Luma's own data directory; you
+   choose Install. The private runtime is kept in luma's own data directory; you
    do not need to install Python or enter terminal commands.
 3. Download a compatible model separately. Qwen needs both its ASR model and the
    distinct ForcedAligner model. Choose the installed components for this task and
@@ -46,7 +46,7 @@ manifest. Verified inputs are unpacked and assembled privately in staging,
 checked and self-tested, then activated atomically. Failed installation keeps
 the previous working component.
 Repair verifies/reinstalls the selected owned component; removal affects only
-Luma-managed copies, not existing external models. Cancel or finish transcription
+luma-managed copies, not existing external models. Cancel or finish transcription
 before replacing/removing components in use. Old component versions are retained
 rather than silently deleted while saved tasks may still reference their paths.
 
@@ -93,7 +93,7 @@ component or change Windows security settings.
 Advanced external-runtime paths remain available for existing configurations.
 The manual commands below are optional advanced examples, not the standard setup.
 luma does not install, update or repair those external Python/model paths. Managed
-Repair applies only to Luma-owned components and keeps its normal verification
+Repair applies only to luma-owned components and keeps its normal verification
 and user-assent requirements.
 
 ## Choose an engine
@@ -124,7 +124,7 @@ claims. RAM/VRAM remains occupied while that worker stays warm.
 
 ## Advanced external-runtime setup examples
 
-The commands below are **user-run setup**, outside Luma. They install software or
+The commands below are **user-run setup**, outside luma. They install software or
 download weights only when you choose to run them. Dependency-free unit tests use
 fixtures; separate native tests execute the pinned private setup recipe. Use
 separate environments to avoid dependency conflicts. Python 3.12 is a practical
@@ -148,7 +148,7 @@ python3.12 -m venv "$HOME/.venvs/luma-mlx"
 "$HOME/.venvs/luma-mlx/bin/hf" download mlx-community/whisper-turbo --local-dir "$HOME/Models/luma/whisper-turbo-mlx"
 ```
 
-In Luma's ASR settings, choose Whisper accelerated, select that environment's
+In luma's ASR settings, choose Whisper accelerated, select that environment's
 absolute `bin/python` path and the downloaded model directory, and choose `auto`
 or `metal`. Keep the conversion's `config.json` and `weights.safetensors` or
 `weights.npz` together. The pinned `mlx-whisper==0.4.3` release does **not** load
@@ -167,7 +167,7 @@ python3.12 -m venv "$HOME/.venvs/luma-faster-whisper"
 "$HOME/.venvs/luma-faster-whisper/bin/hf" download dropbox-dash/faster-whisper-large-v3-turbo --local-dir "$HOME/Models/luma/faster-whisper-turbo"
 ```
 
-For Windows CPU, Luma's managed component is an opt-in experimental choice. Its
+For Windows CPU, luma's managed component is an opt-in experimental choice. Its
 CPU-only CTranslate2 build excludes CUDA/cuDNN and Intel OpenMP/MKL.
 The reviewed Windows `4.8.2/1lumacpu` recipe uses `cpu_threads=1` for reliable
 model cleanup. CPU transcription may be slower; this is not an acceleration or
@@ -232,11 +232,11 @@ tokenizer dependency may need platform-specific build support if no wheel exists
 If a compatible external environment cannot be installed, use an available
 managed component or native whisper.cpp instead. luma does not install or repair
 this user-created environment. This does not limit Install/Repair for enabled
-Luma-managed components.
+luma-managed components.
 
 Select Qwen3-ASR, the absolute Python executable, the ASR directory, and the
 **separate forced-aligner directory**. Download full snapshots with tokenizer,
-preprocessor, chat template, safetensors weights and every indexed shard. Luma
+preprocessor, chat template, safetensors weights and every indexed shard. luma
 requires safetensors for Qwen and disables remote model code. The original model
 names above are intentional: native Transformers `-hf` exports use a different API.
 
@@ -274,7 +274,7 @@ figures, not guarantees. **Do not treat Qwen CPU as safe on a typical 8 GB devic
 The CPU probe estimates weight-only FP32 bytes from both local safetensors headers
 when available and always warns that it has not established actual memory fit.
 
-Luma's readiness check reports **measured bytes of required files currently
+luma's readiness check reports **measured bytes of required files currently
 present** in the selected model/aligner directories. It does not measure free
 disk space or predict peak memory. It validates paths, expected metadata/files,
 all indexed shards, runtime imports, and device availability without loading model

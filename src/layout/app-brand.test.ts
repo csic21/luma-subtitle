@@ -7,6 +7,7 @@ describe("display-only luma branding", () => {
     expect(native.app.windows[0].title).toBe("luma");
     expect(native.productName).toBe("Luma Subtitle");
     expect(native.identifier).toBe("com.luma.subtitle");
+    expect(read("docs/OPTIONAL_ASR.md")).not.toMatch(/\bLuma\b/);
     expect(read("index.html")).toContain("<title>luma</title>");
     expect(read("src/layout/AppLayout.tsx")).toContain("<strong>luma</strong>");
     expect(JSON.parse(read("package.json")).name).toBe("luma-subtitle");
