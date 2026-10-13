@@ -63,7 +63,7 @@ export function useTaskDetailState(taskId: string, t: TFunction) {
   const [env, setEnv] = useState<EnvironmentState | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null);
-  const [subtitleView, setSubtitleView] = useState<SubtitleView>("source");
+  const [subtitleView, setSubtitleView] = useState<SubtitleView>("parallel");
   const [notice, setNotice] = useState("");
   const [commandPending, setCommandPending] = useState(false);
   const commandPendingRef = useRef(false);

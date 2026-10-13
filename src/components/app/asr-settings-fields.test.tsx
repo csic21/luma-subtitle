@@ -72,4 +72,18 @@ describe("shared transcription settings", () => {
     expect(renderer!.root.findAllByType("input")).toHaveLength(0);
     expect(renderer!.root.findAllByProps({ "aria-label": "legacy-model" })).toHaveLength(0);
   });
+
+  it("keeps release immediately available while memory details are an accessible disclosure", () => {
+    mount();
+    const details = renderer!.root.findAllByType("details").find((node) =>
+      node.findAllByType("summary").some((summary) => summary.children.includes(t("asr.memoryDetails"))))!;
+    expect(details.props.open).toBeUndefined();
+    expect(JSON.stringify(details.findAllByType("p").map((node) => node.children))).toContain(t("asr.warmMemory"));
+    expect(details.findAllByType("button")).toHaveLength(0);
+    const release = renderer!.root.findAllByType("button").find((node) => node.children.includes(t("asr.release")))!;
+    expect(release.props.disabled).toBe(false);
+    act(() => release.props.onClick());
+    expect(mocks.release).toHaveBeenCalledTimes(1);
+  });
+
 });

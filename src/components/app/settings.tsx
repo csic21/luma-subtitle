@@ -11,7 +11,6 @@ import {
   Loader2,
   RefreshCw,
   Save,
-  Settings,
   Terminal,
 } from "lucide-react";
 
@@ -24,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { FieldGroup } from "@/components/ui/field";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -51,6 +51,7 @@ import type { AppUpdateState, DependencyInstallEvent, EnvironmentState, ModelDow
 type Translate = ReturnType<typeof useI18n>["t"];
 
 export function ModelApiSettingsCard({
+  showSaveAction = true,
   apiKey,
   downloadedTranslationModelFiles,
   downloadedWhisperModelFiles,
@@ -77,6 +78,7 @@ export function ModelApiSettingsCard({
   setTranslationPresetId,
   setWhisperPresetId,
 }: {
+  showSaveAction?: boolean;
   apiKey: string;
   downloadedTranslationModelFiles: Set<string>;
   downloadedWhisperModelFiles: Set<string>;
@@ -193,11 +195,8 @@ export function ModelApiSettingsCard({
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <SectionTitle icon={<Settings />} title={t("settings.modelApi")} description={t("settings.modelApiDescription")} />
-      </CardHeader>
-      <CardContent className="settings-form">
+    <div className="model-settings-card">
+      <div className="settings-form">
         {missingRequiredLabels.length > 0 && (
           <Alert className="required-alert">
             <AlertCircle />
@@ -210,492 +209,529 @@ export function ModelApiSettingsCard({
           </Alert>
         )}
 
-        <AsrSettingsFields
-          value={settings.asr}
-          onChange={(asr) => setSettings((current) => ({ ...current, asr }))}
-          t={t}
-        >
-          <FieldBlock
-            label={t("common.whisperModel")}
-            invalid={missingWhisperModel}
-            description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
-          >
-            <div className="input-action">
-              <Input
-                value={settings.whisper_model_path ? fileName(settings.whisper_model_path) : ""}
-                readOnly
-                placeholder={selectedWhisperPreset.fileName}
-                onClick={onPickWhisperModel}
-                title={settings.whisper_model_path || t("settings.selectWhisper")}
-                aria-invalid={missingWhisperModel}
-              />
-              <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel}>
-                <FolderOpen />
-              </IconAction>
-            </div>
-          </FieldBlock>
-
-          <FieldBlock label={t("model.preset")}>
-            <div className="preset-control">
-              <div className="input-action">
-                <Select value={whisperPresetId} onValueChange={setWhisperPresetId}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {whisperModelPresets.map((preset) => {
-                        const downloaded = downloadedWhisperModelFiles.has(preset.fileName);
-                        return (
-                          <SelectItem key={preset.id} value={preset.id}>
-                            <span className="preset-option">
-                              <span>{t(preset.labelKey)}</span>
-                              {downloaded && (
-                                <Badge variant="secondary" className="downloaded-badge">
-                                  <CheckCircle2 />
-                                  {t("model.downloaded")}
-                                </Badge>
-                              )}
-                            </span>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <IconAction
-                  label={t("download.pickPreset", { fileName: selectedWhisperPreset.fileName })}
-                  onClick={onDownloadWhisperPreset}
-                  disabled={modelDownloading}
-                >
-                  {modelDownloading ? <Loader2 className="spin" /> : <Download />}
-                </IconAction>
-              </div>
-              {selectedPresetDownloaded && (
-                <div className="preset-status">
-                  <CheckCircle2 />
-                  <span>{t("model.downloaded")}</span>
-                </div>
-              )}
-            </div>
-          </FieldBlock>
-
-        </AsrSettingsFields>
-
         {modelDownload && <DownloadProgress event={modelDownload} />}
 
-        <div className="grid-two">
-          <FieldBlock label={t("settings.sourceLanguage")}>
-            <Select
-              value={settings.whisper_language}
-              onValueChange={(value) => setSettings((current) => ({ ...current, whisper_language: value }))}
+        <section className="settings-section" aria-labelledby="speech-settings-title">
+          <h2 id="speech-settings-title">{t("settings.speechSection")}</h2>
+          <FieldGroup className="settings-section-fields">
+            <AsrSettingsFields
+              value={settings.asr}
+              onChange={(asr) => setSettings((current) => ({ ...current, asr }))}
+              t={t}
             >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {whisperLanguageOptions.map((language) => (
-                    <SelectItem key={language.value} value={language.value}>
-                      {t(language.labelKey)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </FieldBlock>
-          <FieldBlock label={t("common.targetLanguage")}>
-            <Select
-              value={settings.target_language}
-              onValueChange={(value) => setSettings((current) => ({ ...current, target_language: value }))}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {languageOptions.map((language) => (
-                    <SelectItem key={language.value} value={language.value}>
-                      {t(language.labelKey)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </FieldBlock>
-        </div>
-
-        <FieldBlock
-          label={t("settings.translationProvider")}
-          description={t("settings.translationProviderDescription")}
-        >
-          <Select
-            value={isCliProvider ? "cli" : isLocalProvider ? "local" : "api"}
-            onValueChange={(value) =>
-              setSettings((current) => ({
-                ...current,
-                translation_provider: value,
-                translation_shard_size:
-                  value === "local" && current.translation_shard_size > 16
-                    ? 12
-                    : current.translation_shard_size,
-              }))
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="api">{t("settings.translationProviderApi")}</SelectItem>
-                <SelectItem value="local">{t("settings.translationProviderLocal")}</SelectItem>
-                <SelectItem value="cli">{t("settings.translationProviderCli")}</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </FieldBlock>
-
-        {isLocalProvider && (
-          <>
-            <FieldBlock
-              label={t("settings.localTranslationModel")}
-              invalid={missingLocalModel}
-              description={missingLocalModel ? t("settings.requiredForTranslate") : undefined}
-            >
-              <div className="input-action">
-                <Input
-                  value={settings.translation_local_model_path ? fileName(settings.translation_local_model_path) : ""}
-                  readOnly
-                  placeholder={selectedTranslationPreset.fileName}
-                  onClick={onPickTranslationModel}
-                  title={settings.translation_local_model_path || t("settings.selectTranslationModel")}
-                  aria-invalid={missingLocalModel}
-                />
-                <IconAction label={t("settings.selectTranslationModel")} onClick={onPickTranslationModel}>
-                  <FolderOpen />
-                </IconAction>
-              </div>
-            </FieldBlock>
-
-            <FieldBlock label={t("model.translationPreset")}>
-              <div className="preset-control">
+              <FieldBlock
+                label={t("common.whisperModel")}
+                invalid={missingWhisperModel}
+                description={missingWhisperModel ? t("settings.requiredForTranscribe") : undefined}
+              >
                 <div className="input-action">
-                  <Select value={translationPresetId} onValueChange={setTranslationPresetId}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {translationLocalModelPresets.map((preset) => {
-                          const downloaded = downloadedTranslationModelFiles.has(preset.fileName);
-                          return (
-                            <SelectItem key={preset.id} value={preset.id}>
-                              <span className="preset-option">
-                                <span>{t(preset.labelKey)}</span>
-                                {downloaded && (
-                                  <Badge variant="secondary" className="downloaded-badge">
-                                    <CheckCircle2 />
-                                    {t("model.downloaded")}
-                                  </Badge>
-                                )}
-                              </span>
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <IconAction
-                    label={t("download.pickPreset", { fileName: selectedTranslationPreset.fileName })}
-                    onClick={onDownloadTranslationPreset}
-                    disabled={modelDownloading}
-                  >
-                    {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+                  <Input
+                    aria-label={t("common.whisperModel")}
+                    value={settings.whisper_model_path ? fileName(settings.whisper_model_path) : ""}
+                    readOnly
+                    placeholder={selectedWhisperPreset.fileName}
+                    onClick={onPickWhisperModel}
+                    title={settings.whisper_model_path || t("settings.selectWhisper")}
+                    aria-invalid={missingWhisperModel}
+                  />
+                  <IconAction label={t("settings.selectWhisper")} onClick={onPickWhisperModel}>
+                    <FolderOpen />
                   </IconAction>
                 </div>
-                {selectedTranslationDownloaded && (
-                  <div className="preset-status">
-                    <CheckCircle2 />
-                    <span>{t("model.downloaded")}</span>
+              </FieldBlock>
+
+              <FieldBlock label={t("model.preset")}>
+                <div className="preset-control">
+                  <div className="input-action">
+                    <Select value={whisperPresetId} onValueChange={setWhisperPresetId}>
+                      <SelectTrigger aria-label={t("model.preset")} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {whisperModelPresets.map((preset) => {
+                            const downloaded = downloadedWhisperModelFiles.has(preset.fileName);
+                            return (
+                              <SelectItem key={preset.id} value={preset.id}>
+                                <span className="preset-option">
+                                  <span>{t(preset.labelKey)}</span>
+                                  {downloaded && (
+                                    <Badge variant="secondary" className="downloaded-badge">
+                                      <CheckCircle2 />
+                                      {t("model.downloaded")}
+                                    </Badge>
+                                  )}
+                                </span>
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <IconAction
+                      label={t("download.pickPreset", { fileName: selectedWhisperPreset.fileName })}
+                      onClick={onDownloadWhisperPreset}
+                      disabled={modelDownloading}
+                    >
+                      {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+                    </IconAction>
                   </div>
-                )}
-              </div>
+                  {selectedPresetDownloaded && (
+                    <div className="preset-status">
+                      <CheckCircle2 />
+                      <span>{t("model.downloaded")}</span>
+                    </div>
+                  )}
+                </div>
+              </FieldBlock>
+
+            </AsrSettingsFields>
+          </FieldGroup>
+        </section>
+
+        <section className="settings-section" aria-labelledby="translation-settings-title">
+          <h2 id="translation-settings-title">{t("settings.translationSection")}</h2>
+          <FieldGroup className="settings-section-fields">
+            <FieldBlock
+              label={t("settings.translationProvider")}
+              description={t("settings.translationProviderDescription")}
+            >
+              <Select
+                value={isCliProvider ? "cli" : isLocalProvider ? "local" : "api"}
+                onValueChange={(value) =>
+                  setSettings((current) => ({
+                    ...current,
+                    translation_provider: value,
+                    translation_shard_size:
+                      value === "local" && current.translation_shard_size > 16
+                        ? 12
+                        : current.translation_shard_size,
+                  }))
+                }
+              >
+                <SelectTrigger aria-label={t("settings.translationProvider")} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="api">{t("settings.translationProviderApi")}</SelectItem>
+                    <SelectItem value="local">{t("settings.translationProviderLocal")}</SelectItem>
+                    <SelectItem value="cli">{t("settings.translationProviderCli")}</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
             </FieldBlock>
 
-            <div className="action-row">
-              <Button variant="secondary" onClick={onInstallLocalTranslation} disabled={llamaInstalling || modelDownloading}>
-                {llamaInstalling || modelDownloading ? (
-                  <Loader2 data-icon="inline-start" className="spin" />
-                ) : (
-                  <Download data-icon="inline-start" />
-                )}
-                {t("settings.installLocalTranslation")}
-              </Button>
-            </div>
-            <p className="field-hint">
-              {llamaReady
-                ? `${t("settings.llamaReady")}${llamaBackend ? ` · ${t("settings.llamaBackend", { backend: llamaBackend })}` : ""}`
-                : t("settings.llamaMissing")}
-            </p>
-            <Alert className="credential-alert warn">
-              <AlertCircle />
-              <AlertTitle>{t("settings.translationProviderLocal")}</AlertTitle>
-              <AlertDescription>{t("settings.localNote")}</AlertDescription>
-            </Alert>
-          </>
-        )}
-
-        {!isCliProvider && !isLocalProvider && (
-          <>
-            <div className="grid-two">
-              <FieldBlock
-                label="Base URL"
-                invalid={missingBaseUrl}
-                description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
-              >
-                <Input
-                  value={settings.base_url}
-                  onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value, bind_legacy_api_key: false }))}
-                  aria-invalid={missingBaseUrl}
-                />
-                <label className="checkbox-row">
-                  <Checkbox
-                    checked={settings.base_url_is_complete}
-                    onCheckedChange={(checked) =>
-                      setSettings((current) => ({ ...current, base_url_is_complete: checked === true }))
-                    }
-                  />
-                  <span>{t("settings.baseUrlComplete")}</span>
-                </label>
-                <p className="field-hint">
-                  {settings.base_url_is_complete
-                    ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
-                    : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
-                </p>
-              </FieldBlock>
-              <FieldBlock
-                label={t("settings.translationModel")}
-                invalid={missingTranslationModel}
-                description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
-              >
-                <Input
-                  value={settings.model}
-                  onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
-                  aria-invalid={missingTranslationModel}
-                />
-              </FieldBlock>
-            </div>
-
-            <div className="grid-two">
-              <FieldBlock
-                label="API Key"
-                invalid={missingApiKey}
-                description={missingApiKey ? t("settings.requiredForTranslate") : undefined}
-              >
-                <div className="key-field">
-                  <KeyRound />
-                  <Input
-                    type="password"
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                    placeholder={hasScopedCredential(settings) ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
-                    aria-invalid={missingApiKey}
-                  />
-                </div>
-                <p className="field-hint">{t("settings.apiKeyScope", { origin: credentialScope(translationProvider, settings.base_url)?.slice(4) ?? t("settings.invalidApiOrigin") })}</p>
-                {settings.legacy_api_key_available && (
-                  <label className="checkbox-row">
-                    <Checkbox checked={settings.bind_legacy_api_key === true}
-                      onCheckedChange={(checked) => setSettings((current) => ({ ...current, bind_legacy_api_key: checked === true }))} />
-                    <span>{t("settings.bindLegacyApiKey", { origin: credentialScope(translationProvider, settings.base_url)?.slice(4) ?? t("settings.invalidApiOrigin") })}</span>
-                  </label>
-                )}
-              </FieldBlock>
-              <FieldBlock label="Temperature">
-                <Input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={settings.temperature}
-                  onChange={(event) =>
-                    setSettings((current) => ({ ...current, temperature: Number.parseFloat(event.target.value) || 0 }))
-                  }
-                />
-              </FieldBlock>
-            </div>
-          </>
-        )}
-
-        {isCliProvider && (
-          <>
-            <div className="grid-two">
-              <FieldBlock label={t("settings.cliTool")}>
-                <Select
-                  value={cliTool}
-                  onValueChange={(value) =>
-                    setSettings((current) => ({ ...current, translation_cli_tool: value }))
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="opencode">{t("settings.cliToolOpencode")}</SelectItem>
-                      <SelectItem value="custom">{t("settings.cliToolCustom")}</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </FieldBlock>
-              <FieldBlock
-                label={t("settings.cliCommand")}
-                invalid={missingCliCommand}
-                description={missingCliCommand ? t("settings.requiredForTranslate") : undefined}
-              >
-                <div className="input-action">
-                  <Input
-                    value={settings.translation_cli_command}
-                    placeholder={t("settings.cliCommandPlaceholder")}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, translation_cli_command: event.target.value }))
-                    }
-                    aria-invalid={missingCliCommand}
-                  />
-                  <IconAction label={t("settings.cliCheck")} onClick={handleCheckCli} disabled={cliChecking}>
-                    {cliChecking ? <Loader2 className="spin" /> : <Terminal />}
-                  </IconAction>
-                </div>
-                {cliStatus && (
-                  <p className="field-hint">
-                    {cliStatus.available
-                      ? `${t("settings.cliAvailable")}${cliStatus.version ? ` · ${cliStatus.version}` : ""}${cliStatus.path ? ` · ${cliStatus.path}` : ""}`
-                      : `${t("settings.cliUnavailable")}${cliStatus.error ? ` · ${cliStatus.error}` : ""}`}
-                  </p>
-                )}
-                {cliNotice && !cliStatus?.available && <p className="field-hint">{cliNotice}</p>}
-              </FieldBlock>
-            </div>
-
-            {!isCustomCli && (
-              <FieldBlock
-                label={t("settings.cliModel")}
-                invalid={missingCliModel}
-                description={missingCliModel ? t("settings.requiredForTranslate") : undefined}
-              >
-                <div className="input-action">
-                  <Input
-                    value={settings.translation_cli_model}
-                    placeholder={t("settings.cliModelPlaceholder")}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, translation_cli_model: event.target.value }))
-                    }
-                    aria-invalid={missingCliModel}
-                  />
-                  <IconAction
-                    label={t("settings.cliLoadModels")}
-                    onClick={handleLoadCliModels}
-                    disabled={cliModelsLoading}
-                  >
-                    {cliModelsLoading ? <Loader2 className="spin" /> : <RefreshCw />}
-                  </IconAction>
-                </div>
-                {cliModels.length > 0 && (
-                  <Select
-                    value={settings.translation_cli_model}
-                    onValueChange={(value) =>
-                      setSettings((current) => ({ ...current, translation_cli_model: value }))
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder={t("settings.cliModelPlaceholder")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {cliModels.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                )}
-              </FieldBlock>
-            )}
-
-            {isCustomCli && (
+            {isLocalProvider && (
               <>
-                <FieldBlock label={t("settings.cliModel")}>
-                  <Input
-                    value={settings.translation_cli_model}
-                    placeholder={t("settings.cliModelPlaceholder")}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, translation_cli_model: event.target.value }))
-                    }
-                  />
-                </FieldBlock>
                 <FieldBlock
-                  label={t("settings.cliArgs")}
-                  description={t("settings.cliArgsHint")}
+                  label={t("settings.localTranslationModel")}
+                  invalid={missingLocalModel}
+                  description={missingLocalModel ? t("settings.requiredForTranslate") : undefined}
                 >
-                  <Input
-                    value={settings.translation_cli_args}
-                    placeholder={t("settings.cliArgsPlaceholder")}
-                    onChange={(event) =>
-                      setSettings((current) => ({ ...current, translation_cli_args: event.target.value }))
-                    }
-                  />
+                  <div className="input-action">
+                    <Input
+                      aria-label={t("settings.localTranslationModel")}
+                      value={settings.translation_local_model_path ? fileName(settings.translation_local_model_path) : ""}
+                      readOnly
+                      placeholder={selectedTranslationPreset.fileName}
+                      onClick={onPickTranslationModel}
+                      title={settings.translation_local_model_path || t("settings.selectTranslationModel")}
+                      aria-invalid={missingLocalModel}
+                    />
+                    <IconAction label={t("settings.selectTranslationModel")} onClick={onPickTranslationModel}>
+                      <FolderOpen />
+                    </IconAction>
+                  </div>
                 </FieldBlock>
+
+                <FieldBlock label={t("model.translationPreset")}>
+                  <div className="preset-control">
+                    <div className="input-action">
+                      <Select value={translationPresetId} onValueChange={setTranslationPresetId}>
+                        <SelectTrigger aria-label={t("model.translationPreset")} className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {translationLocalModelPresets.map((preset) => {
+                              const downloaded = downloadedTranslationModelFiles.has(preset.fileName);
+                              return (
+                                <SelectItem key={preset.id} value={preset.id}>
+                                  <span className="preset-option">
+                                    <span>{t(preset.labelKey)}</span>
+                                    {downloaded && (
+                                      <Badge variant="secondary" className="downloaded-badge">
+                                        <CheckCircle2 />
+                                        {t("model.downloaded")}
+                                      </Badge>
+                                    )}
+                                  </span>
+                                </SelectItem>
+                              );
+                            })}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <IconAction
+                        label={t("download.pickPreset", { fileName: selectedTranslationPreset.fileName })}
+                        onClick={onDownloadTranslationPreset}
+                        disabled={modelDownloading}
+                      >
+                        {modelDownloading ? <Loader2 className="spin" /> : <Download />}
+                      </IconAction>
+                    </div>
+                    {selectedTranslationDownloaded && (
+                      <div className="preset-status">
+                        <CheckCircle2 />
+                        <span>{t("model.downloaded")}</span>
+                      </div>
+                    )}
+                  </div>
+                </FieldBlock>
+
+                <div className="action-row">
+                  <Button variant="secondary" onClick={onInstallLocalTranslation} disabled={llamaInstalling || modelDownloading}>
+                    {llamaInstalling || modelDownloading ? (
+                      <Loader2 data-icon="inline-start" className="spin" />
+                    ) : (
+                      <Download data-icon="inline-start" />
+                    )}
+                    {t("settings.installLocalTranslation")}
+                  </Button>
+                </div>
+                <p className="field-hint">
+                  {llamaReady
+                    ? `${t("settings.llamaReady")}${llamaBackend ? ` · ${t("settings.llamaBackend", { backend: llamaBackend })}` : ""}`
+                    : t("settings.llamaMissing")}
+                </p>
+                <Alert className="credential-alert warn">
+                  <AlertCircle />
+                  <AlertTitle>{t("settings.translationProviderLocal")}</AlertTitle>
+                  <AlertDescription>{t("settings.localNote")}</AlertDescription>
+                </Alert>
               </>
             )}
 
-            <Alert className="credential-alert warn">
-              <AlertCircle />
-              <AlertTitle>{t("settings.translationProviderCli")}</AlertTitle>
-              <AlertDescription>{t("settings.cliNote")}</AlertDescription>
-            </Alert>
-          </>
+            {!isCliProvider && !isLocalProvider && (
+              <>
+                <div className="grid-two">
+                  <FieldBlock
+                    label="Base URL"
+                    invalid={missingBaseUrl}
+                    description={missingBaseUrl ? t("settings.requiredForTranslate") : undefined}
+                  >
+                    <Input
+                      aria-label="Base URL"
+                      value={settings.base_url}
+                      onChange={(event) => setSettings((current) => ({ ...current, base_url: event.target.value, bind_legacy_api_key: false }))}
+                      aria-invalid={missingBaseUrl}
+                    />
+                    <label className="checkbox-row">
+                      <Checkbox
+                        checked={settings.base_url_is_complete}
+                        onCheckedChange={(checked) =>
+                          setSettings((current) => ({ ...current, base_url_is_complete: checked === true }))
+                        }
+                      />
+                      <span>{t("settings.baseUrlComplete")}</span>
+                    </label>
+                    <p className="field-hint">
+                      {settings.base_url_is_complete
+                        ? t("settings.baseUrlCompleteDescription", { endpoint: baseUrlEndpoint })
+                        : t("settings.baseUrlAppendDescription", { endpoint: baseUrlEndpoint })}
+                    </p>
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t("settings.translationModel")}
+                    invalid={missingTranslationModel}
+                    description={missingTranslationModel ? t("settings.requiredForTranslate") : undefined}
+                  >
+                    <Input
+                      aria-label={t("settings.translationModel")}
+                      value={settings.model}
+                      onChange={(event) => setSettings((current) => ({ ...current, model: event.target.value }))}
+                      aria-invalid={missingTranslationModel}
+                    />
+                  </FieldBlock>
+                </div>
+
+                <div className="api-credential-field">
+                  <FieldBlock
+                    label="API Key"
+                    invalid={missingApiKey}
+                    description={missingApiKey ? t("settings.requiredForTranslate") : undefined}
+                  >
+                    <div className="key-field">
+                      <KeyRound />
+                      <Input
+                        aria-label="API Key"
+                        type="password"
+                        value={apiKey}
+                        onChange={(event) => setApiKey(event.target.value)}
+                        placeholder={hasScopedCredential(settings) ? t("settings.apiKeySaved") : t("settings.apiKeyUnset")}
+                        aria-invalid={missingApiKey}
+                      />
+                    </div>
+                    <p className="field-hint">{t("settings.apiKeyScope", { origin: credentialScope(translationProvider, settings.base_url)?.slice(4) ?? t("settings.invalidApiOrigin") })}</p>
+                    {settings.legacy_api_key_available && (
+                      <label className="checkbox-row">
+                        <Checkbox checked={settings.bind_legacy_api_key === true}
+                          onCheckedChange={(checked) => setSettings((current) => ({ ...current, bind_legacy_api_key: checked === true }))} />
+                        <span>{t("settings.bindLegacyApiKey", { origin: credentialScope(translationProvider, settings.base_url)?.slice(4) ?? t("settings.invalidApiOrigin") })}</span>
+                      </label>
+                    )}
+                  </FieldBlock>
+
+                </div>
+              </>
+            )}
+
+            {isCliProvider && (
+              <>
+                <div className="grid-two">
+                  <FieldBlock label={t("settings.cliTool")}>
+                    <Select
+                      value={cliTool}
+                      onValueChange={(value) =>
+                        setSettings((current) => ({ ...current, translation_cli_tool: value }))
+                      }
+                    >
+                      <SelectTrigger aria-label={t("settings.cliTool")} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="opencode">{t("settings.cliToolOpencode")}</SelectItem>
+                          <SelectItem value="custom">{t("settings.cliToolCustom")}</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </FieldBlock>
+                  <FieldBlock
+                    label={t("settings.cliCommand")}
+                    invalid={missingCliCommand}
+                    description={missingCliCommand ? t("settings.requiredForTranslate") : undefined}
+                  >
+                    <div className="input-action">
+                      <Input
+                        aria-label={t("settings.cliCommand")}
+                        value={settings.translation_cli_command}
+                        placeholder={t("settings.cliCommandPlaceholder")}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, translation_cli_command: event.target.value }))
+                        }
+                        aria-invalid={missingCliCommand}
+                      />
+                      <IconAction label={t("settings.cliCheck")} onClick={handleCheckCli} disabled={cliChecking}>
+                        {cliChecking ? <Loader2 className="spin" /> : <Terminal />}
+                      </IconAction>
+                    </div>
+                    {cliStatus && (
+                      <p className="field-hint">
+                        {cliStatus.available
+                          ? `${t("settings.cliAvailable")}${cliStatus.version ? ` · ${cliStatus.version}` : ""}${cliStatus.path ? ` · ${cliStatus.path}` : ""}`
+                          : `${t("settings.cliUnavailable")}${cliStatus.error ? ` · ${cliStatus.error}` : ""}`}
+                      </p>
+                    )}
+                    {cliNotice && !cliStatus?.available && <p className="field-hint">{cliNotice}</p>}
+                  </FieldBlock>
+                </div>
+
+                {!isCustomCli && (
+                  <FieldBlock
+                    label={t("settings.cliModel")}
+                    invalid={missingCliModel}
+                    description={missingCliModel ? t("settings.requiredForTranslate") : undefined}
+                  >
+                    <div className="input-action">
+                      <Input
+                        aria-label={t("settings.cliModel")}
+                        value={settings.translation_cli_model}
+                        placeholder={t("settings.cliModelPlaceholder")}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, translation_cli_model: event.target.value }))
+                        }
+                        aria-invalid={missingCliModel}
+                      />
+                      <IconAction
+                        label={t("settings.cliLoadModels")}
+                        onClick={handleLoadCliModels}
+                        disabled={cliModelsLoading}
+                      >
+                        {cliModelsLoading ? <Loader2 className="spin" /> : <RefreshCw />}
+                      </IconAction>
+                    </div>
+                    {cliModels.length > 0 && (
+                      <Select
+                        value={settings.translation_cli_model}
+                        onValueChange={(value) =>
+                          setSettings((current) => ({ ...current, translation_cli_model: value }))
+                        }
+                      >
+                        <SelectTrigger aria-label={t("settings.cliModel")} className="w-full">
+                          <SelectValue placeholder={t("settings.cliModelPlaceholder")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {cliModels.map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {model}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </FieldBlock>
+                )}
+
+                {isCustomCli && (
+                  <>
+                    <FieldBlock label={t("settings.cliModel")}>
+                      <Input
+                        aria-label={t("settings.cliModel")}
+                        value={settings.translation_cli_model}
+                        placeholder={t("settings.cliModelPlaceholder")}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, translation_cli_model: event.target.value }))
+                        }
+                      />
+                    </FieldBlock>
+                    <FieldBlock
+                      label={t("settings.cliArgs")}
+                      description={t("settings.cliArgsHint")}
+                    >
+                      <Input
+                        aria-label={t("settings.cliArgs")}
+                        value={settings.translation_cli_args}
+                        placeholder={t("settings.cliArgsPlaceholder")}
+                        onChange={(event) =>
+                          setSettings((current) => ({ ...current, translation_cli_args: event.target.value }))
+                        }
+                      />
+                    </FieldBlock>
+                  </>
+                )}
+
+                <Alert className="credential-alert warn">
+                  <AlertCircle />
+                  <AlertTitle>{t("settings.translationProviderCli")}</AlertTitle>
+                  <AlertDescription>{t("settings.cliNote")}</AlertDescription>
+                </Alert>
+              </>
+            )}
+
+            {!isCliProvider && !isLocalProvider && (
+              <Alert className={cn("credential-alert", hasApiCredential ? "ready" : "warn")}>
+                {hasApiCredential ? <CheckCircle2 /> : <AlertCircle />}
+                <AlertTitle>{hasApiCredential ? t("settings.apiReady") : t("settings.apiWarn")}</AlertTitle>
+                <AlertDescription>
+                  {hasApiCredential ? t("settings.apiReadyDescription") : t("settings.apiWarnDescription")}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <details className="settings-disclosure">
+              <summary>{t("settings.advanced")}</summary>
+              <FieldGroup className="grid-two settings-advanced-fields">
+                {!isCliProvider && !isLocalProvider && (
+                  <FieldBlock label="Temperature">
+                    <Input
+                      aria-label="Temperature"
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={settings.temperature}
+                      onChange={(event) =>
+                        setSettings((current) => ({ ...current, temperature: Number.parseFloat(event.target.value) || 0 }))
+                      }
+                    />
+                  </FieldBlock>
+                )}
+                <FieldBlock
+                  label={t("settings.shardSize")}
+                  description={isLocalProvider ? t("settings.localShardHint") : undefined}
+                >
+                  <Input
+                    aria-label={t("settings.shardSize")}
+                    type="number"
+                    min="1"
+                    max={isLocalProvider ? 16 : 1000}
+                    step="1"
+                    value={settings.translation_shard_size}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        translation_shard_size:
+                          Number.parseInt(event.target.value, 10) || defaultSettings.translation_shard_size,
+                      }))
+                    }
+                  />
+                </FieldBlock>
+              </FieldGroup>
+            </details>
+          </FieldGroup>
+        </section>
+
+        <section className="settings-section" aria-labelledby="defaults-settings-title">
+          <h2 id="defaults-settings-title">{t("settings.defaultsSection")}</h2>
+          <FieldGroup className="settings-section-fields">
+            <div className="grid-two">
+              <FieldBlock label={t("settings.sourceLanguage")}>
+                <Select
+                  value={settings.whisper_language}
+                  onValueChange={(value) => setSettings((current) => ({ ...current, whisper_language: value }))}
+                >
+                  <SelectTrigger aria-label={t("settings.sourceLanguage")} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {whisperLanguageOptions.map((language) => (
+                        <SelectItem key={language.value} value={language.value}>
+                          {t(language.labelKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </FieldBlock>
+              <FieldBlock label={t("common.targetLanguage")}>
+                <Select
+                  value={settings.target_language}
+                  onValueChange={(value) => setSettings((current) => ({ ...current, target_language: value }))}
+                >
+                  <SelectTrigger aria-label={t("common.targetLanguage")} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {languageOptions.map((language) => (
+                        <SelectItem key={language.value} value={language.value}>
+                          {t(language.labelKey)}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </FieldBlock>
+            </div>
+
+          </FieldGroup>
+        </section>
+
+        {showSaveAction && (
+          <div className="action-row end settings-save-row">
+            <Button onClick={onSaveSettings} title={t("common.save")}>
+              <Save data-icon="inline-start" />
+              {t("common.save")}
+            </Button>
+          </div>
         )}
-
-        <FieldBlock
-          label={t("settings.shardSize")}
-          description={isLocalProvider ? t("settings.localShardHint") : undefined}
-        >
-          <Input
-            type="number"
-            min="1"
-            max={isLocalProvider ? 16 : 1000}
-            step="1"
-            value={settings.translation_shard_size}
-            onChange={(event) =>
-              setSettings((current) => ({
-                ...current,
-                translation_shard_size:
-                  Number.parseInt(event.target.value, 10) || defaultSettings.translation_shard_size,
-              }))
-            }
-          />
-        </FieldBlock>
-
-        {!isCliProvider && !isLocalProvider && (
-          <Alert className={cn("credential-alert", hasApiCredential ? "ready" : "warn")}>
-            {hasApiCredential ? <CheckCircle2 /> : <AlertCircle />}
-            <AlertTitle>{hasApiCredential ? t("settings.apiReady") : t("settings.apiWarn")}</AlertTitle>
-            <AlertDescription>
-              {hasApiCredential ? t("settings.apiReadyDescription") : t("settings.apiWarnDescription")}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        <div className="action-row end">
-          <Button variant="secondary" onClick={onSaveSettings} title={t("common.save")}>
-            <Save data-icon="inline-start" />
-            {t("common.save")}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -721,9 +757,9 @@ export function EnvironmentSettingsCard({
   onRefreshEnvironment: () => void | Promise<void>;
 }) {
   return (
-    <Card>
+    <Card className="settings-support-card environment-settings-card">
       <CardHeader>
-        <SectionTitle icon={<Terminal />} title={t("env.section")} description={t("env.description")} />
+        <SectionTitle icon={<Terminal />} title={t("env.section")} />
         <CardAction>
           <StatusBadge status={environmentReady ? "ready" : "warn"} label={environmentReady ? t("env.ready") : t("env.warn")} />
         </CardAction>
@@ -736,15 +772,18 @@ export function EnvironmentSettingsCard({
             <AlertDescription>{t("env.requiredMissingDescription")}</AlertDescription>
           </Alert>
         )}
-        <div className="env-table">
-          {envRows.map(([name, value]) => (
-            <div className="env-row" key={name}>
-              <span>{name}</span>
-              <code>{value}</code>
-            </div>
-          ))}
-        </div>
-        <div className="action-row end">
+        <details className="settings-disclosure">
+          <summary>{t("env.details")}</summary>
+          <div className="env-table">
+            {envRows.map(([name, value]) => (
+              <div className="env-row" key={name}>
+                <span>{name}</span>
+                <code>{value}</code>
+              </div>
+            ))}
+          </div>
+        </details>
+        <div className="action-row">
           <Button variant="secondary" onClick={onRefreshEnvironment}>
             <RefreshCw data-icon="inline-start" />
             {t("common.refresh")}
@@ -785,11 +824,9 @@ export function QuickStartGuideCard({ t }: { t: Translate }) {
   ];
 
   return (
-    <Card className="guide-card">
-      <CardHeader>
-        <SectionTitle icon={<BookOpenCheck />} title={t("guide.section")} description={t("guide.description")} />
-      </CardHeader>
-      <CardContent>
+    <details className="settings-disclosure guide-card">
+      <summary><BookOpenCheck aria-hidden="true" />{t("guide.section")}</summary>
+      <div className="guide-content">
         <ol className="guide-steps">
           {steps.map((step, index) => (
             <li key={step.title}>
@@ -801,8 +838,8 @@ export function QuickStartGuideCard({ t }: { t: Translate }) {
             </li>
           ))}
         </ol>
-      </CardContent>
-    </Card>
+      </div>
+    </details>
   );
 }
 
@@ -824,14 +861,15 @@ export function UpdateSettingsCard({
   const progressMeta = updateProgressMeta(appUpdate);
 
   return (
-    <Card>
+    <Card className="settings-support-card update-settings-card">
       <CardHeader>
-        <SectionTitle icon={<RefreshCw />} title={t("update.section")} description={t("update.description")} />
+        <SectionTitle icon={<RefreshCw />} title={t("update.section")} />
         <CardAction>
           <StatusBadge status={updateBadgeStatus(appUpdate.status)} label={statusLabel} />
         </CardAction>
       </CardHeader>
       <CardContent className="stack-panel">
+        <p className="field-hint">{t("update.description")}</p>
         <div className="update-version-grid">
           <span>{t("update.currentVersion")}</span>
           <code>{appUpdate.currentVersion || t("settings.notSet")}</code>

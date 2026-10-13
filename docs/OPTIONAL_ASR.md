@@ -1,22 +1,22 @@
 # Optional local transcription engines
 
 The default `whisper.cpp` engine and existing GGML models continue to work without
-Python. These additional engines are opt-in. Luma downloads verified private
+Python. These additional engines are opt-in. luma downloads verified private
 engine components and models only after an explicit install/download action.
 The managed setup design downloads pinned Python and wheels directly from their
-original upstream publishers, plus a separately reviewed Luma CPU-only
+original upstream publishers, plus a separately reviewed luma CPU-only
 CTranslate2 wheel for Windows Whisper. It runs its private, version-pinned pip
 entirely offline inside staging during Install or Repair, never transcription.
 The published Windows CPU wheel was source-built; app setup downloads that pinned
 wheel and does not compile or resolve dependencies over the network. You do not
-install Python, enter pip commands, or change the system environment. Luma does
+install Python, enter pip commands, or change the system environment. luma does
 not read Hugging Face credentials or
 silently switch engines. Whole Python/runtime bundles are not republished by Luma.
 
 **Availability (2026-10-10):** this catalog enables four optional, experimental
 managed recipes: Windows Whisper CPU, Apple Silicon MLX Whisper/Metal, and Qwen
 CPU on Windows and Apple Silicon. The Windows Whisper recipe pins the published
-[Luma CPU-only CTranslate2 component](https://github.com/csic21/luma-subtitle/releases/tag/asr-ct2-cpu-4.8.2-1)
+[luma CPU-only CTranslate2 component](https://github.com/csic21/luma-subtitle/releases/tag/asr-ct2-cpu-4.8.2-1)
 by exact bytes and SHA-256. Its wheel is 25,058,630 bytes; the complete engine
 input download is 138,488,258 bytes including private Python and Microsoft CRT,
 excluding models and temporary/installed copies. These are not memory estimates.
@@ -51,7 +51,7 @@ before replacing/removing components in use. Old component versions are retained
 rather than silently deleted while saved tasks may still reference their paths.
 
 No installer requires admin access or changes Gatekeeper/SmartScreen policies.
-If the operating system blocks a component, Luma reports the original error;
+If the operating system blocks a component, luma reports the original error;
 it does not remove quarantine attributes or bypass a warning. Updater integrity
 signatures are distinct from Apple Developer ID signing/notarization.
 
@@ -71,7 +71,7 @@ native `.pyd`, `.dll` and `.exe` member paths must fit **127 relative units** an
 bounds leave room for native-loader probing; even a 251-unit native module path
 failed in the relocation test, so a launch path below 260 alone is insufficient.
 Network shares, device paths, ambiguous names and deeper app-data locations are
-unsupported and fail explicitly. Luma does not move user files, create short-name
+unsupported and fail explicitly. luma does not move user files, create short-name
 aliases or change Windows settings to bypass these limits.
 
 Runtime setup tests and revalidates the receipt at the final version path before
@@ -92,7 +92,7 @@ component or change Windows security settings.
 
 Advanced external-runtime paths remain available for existing configurations.
 The manual commands below are optional advanced examples, not the standard setup.
-Luma does not install, update or repair those external Python/model paths. Managed
+luma does not install, update or repair those external Python/model paths. Managed
 Repair applies only to Luma-owned components and keeps its normal verification
 and user-assent requirements.
 
@@ -154,7 +154,7 @@ or `metal`. Keep the conversion's `config.json` and `weights.safetensors` or
 `weights.npz` together. The pinned `mlx-whisper==0.4.3` release does **not** load
 `model.safetensors`-only directories, even though newer upstream source supports
 that filename. For that readiness error, select a compatible conversion such as
-the documented `mlx-community/whisper-turbo` snapshot (`weights.npz`). Luma does
+the documented `mlx-community/whisper-turbo` snapshot (`weights.npz`). luma does
 not rename, convert, or otherwise modify your model files.
 
 ### Windows/Linux: faster-whisper
@@ -174,7 +174,7 @@ model cleanup. CPU transcription may be slower; this is not an acceleration or
 throughput promise. The policy is selected only for its active verified managed
 interpreter and exact recipe. External/manual Python runtimes, native Whisper,
 MLX and Qwen keep their existing behavior.
-The recipe downloads the published, pinned Luma CPU wheel during managed setup;
+The recipe downloads the published, pinned luma CPU wheel during managed setup;
 users do not build it or install it with manual pip commands. Exact-final-source
 checks and independent review remain required before the 1.2.0 app release. The
 general upstream Windows CTranslate2 wheel can include GPU libraries and
@@ -230,7 +230,7 @@ On Windows create the venv with `py -3.12 -m venv`, then run its
 Windows CPU/CUDA command from the PyTorch selector. Upstream qwen-asr's Japanese
 tokenizer dependency may need platform-specific build support if no wheel exists.
 If a compatible external environment cannot be installed, use an available
-managed component or native whisper.cpp instead. Luma does not install or repair
+managed component or native whisper.cpp instead. luma does not install or repair
 this user-created environment. This does not limit Install/Repair for enabled
 Luma-managed components.
 

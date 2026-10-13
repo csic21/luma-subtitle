@@ -17,7 +17,7 @@ import { saveSourceSubtitles, saveTranslatedSubtitles } from "@/lib/tauri-api";
 import type { SubtitlePreview, TaskRecord, TFunction } from "@/types";
 
 export function SubtitleEditorDialog({
-  taskId, preview, kind = "source", busy, t, onClose, onSaved, onReturnFocus,
+  taskId, preview, kind = "source", busy, t, onClose, onSaved, onReturnFocus, initialCueId,
 }: {
   taskId: string;
   preview: SubtitlePreview;
@@ -27,22 +27,29 @@ export function SubtitleEditorDialog({
   onClose: () => void;
   onSaved: (task: TaskRecord, kind: "source" | "translated") => Promise<void>;
   onReturnFocus: () => void;
+  initialCueId?: number | null;
 }) {
   // The preview is captured when editing starts. Incoming task updates must not
   // overwrite a draft; the backend checks this snapshot before saving it.
+  const [snapshot] = useState(preview);
   const [edits, setEdits] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [discardOpen, setDiscardOpen] = useState(false);
   const savingRef = useRef(false);
-  const segments = kind === "source" ? preview.source_segments : preview.translated_segments ?? [];
-  const referenceSegments = kind === "source" ? preview.translated_segments : preview.source_segments;
+  const lastEditorFocusRef = useRef<HTMLTextAreaElement | null>(null);
+  const discardingRef = useRef(false);
+  const segments = kind === "source" ? snapshot.source_segments : snapshot.translated_segments ?? [];
+  const referenceSegments = kind === "source" ? snapshot.translated_segments : snapshot.source_segments;
   const originals = useMemo(
     () => new Map(segments.map((segment) => [segment.id, segment.text])),
     [segments],
   );
   const editedCount = Object.keys(edits).length;
-  const invalid = Object.values(edits).some((text) => !text.trim());
+  const duplicateIds = originals.size !== segments.length;
+  const invalid = duplicateIds || Object.values(edits).some((text) => !text.trim());
+  const hasInitialCue = initialCueId != null && segments.filter(({ id }) => id === initialCueId).length === 1
+    && (referenceSegments?.filter(({ id }) => id === initialCueId).length ?? 0) <= 1;
   const blocker = useBlocker(editedCount > 0 || saving);
 
   useEffect(() => {
@@ -52,6 +59,8 @@ export function SubtitleEditorDialog({
   }, [blocker]);
 
   const changeText = useCallback((id: number, text: string) => {
+    if (segments.filter((segment) => segment.id === id).length !== 1
+      || (referenceSegments?.filter((segment) => segment.id === id).length ?? 0) > 1) return;
     setEdits((current) => {
       const next = { ...current };
       if (text === originals.get(id)) delete next[id];
@@ -59,7 +68,7 @@ export function SubtitleEditorDialog({
       return next;
     });
     setError("");
-  }, [originals]);
+  }, [originals, segments, referenceSegments]);
 
   useEffect(() => {
     if (!editedCount) return;
@@ -77,6 +86,11 @@ export function SubtitleEditorDialog({
     else onClose();
   }
 
+  function keepEditing() {
+    setDiscardOpen(false);
+    if (blocker.state === "blocked") blocker.reset();
+  }
+
   async function save() {
     if (savingRef.current || busy || invalid || !editedCount) return;
     savingRef.current = true;
@@ -85,8 +99,8 @@ export function SubtitleEditorDialog({
     try {
       const payload = segments.map(({ id, text }) => ({ id, text: edits[id] ?? text }));
       const updated = kind === "source"
-        ? await saveSourceSubtitles(taskId, preview.source_srt, payload)
-        : await saveTranslatedSubtitles(taskId, preview.source_srt, preview.translated_srt ?? "", payload);
+        ? await saveSourceSubtitles(taskId, snapshot.source_srt, payload)
+        : await saveTranslatedSubtitles(taskId, snapshot.source_srt, snapshot.translated_srt ?? "", payload);
       await onSaved(updated, kind);
       onClose();
     } catch (cause) {
@@ -101,8 +115,13 @@ export function SubtitleEditorDialog({
     <>
       <Dialog open onOpenChange={(open) => { if (!open) requestClose(); }}>
         <DialogContent
-          className="max-h-[94dvh] overflow-y-auto sm:max-w-3xl"
+          className="subtitle-editor-dialog"
           showCloseButton={false}
+          onOpenAutoFocus={(event) => { if (hasInitialCue) event.preventDefault(); }}
+          onFocusCapture={(event) => {
+            const target = event.target as HTMLElement;
+            if (target.tagName === "TEXTAREA") lastEditorFocusRef.current = target as HTMLTextAreaElement;
+          }}
           onCloseAutoFocus={(event) => { event.preventDefault(); onReturnFocus(); }}
         >
           <DialogHeader>
@@ -119,14 +138,16 @@ export function SubtitleEditorDialog({
             segments={segments}
             referenceSegments={referenceSegments ?? undefined}
             referenceLabel={t(kind === "source" ? "common.translated" : "common.source")}
+            contentLabel={t(kind === "source" ? "common.source" : "common.translated")}
+            initialCueId={initialCueId}
             edits={edits}
             onTextChange={changeText}
             disabled={saving || busy}
             t={t}
           />
-          <DialogFooter>
+          <DialogFooter className="subtitle-dialog-footer">
             <span className="mr-auto self-center text-sm text-muted-foreground" role="status">
-              {invalid ? t("subtitle.emptyText") : t("subtitle.editedCount", { count: editedCount })}
+              {duplicateIds ? t("subtitle.duplicateIds") : invalid ? t("subtitle.emptyText") : t("subtitle.editedCount", { count: editedCount })}
             </span>
             <Button variant="outline" onClick={requestClose} disabled={saving}>{t("common.cancel")}</Button>
             <Button onClick={() => void save()} disabled={saving || busy || invalid || !editedCount}>
@@ -137,18 +158,25 @@ export function SubtitleEditorDialog({
         </DialogContent>
       </Dialog>
       <AlertDialog open={discardOpen} onOpenChange={(open) => {
-        setDiscardOpen(open);
-        if (!open && blocker.state === "blocked") blocker.reset();
+        if (open) setDiscardOpen(true);
+        else keepEditing();
       }}>
-        <AlertDialogContent>
+        <AlertDialogContent onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (!discardingRef.current && lastEditorFocusRef.current?.isConnected) {
+            lastEditorFocusRef.current.focus({ preventScroll: true });
+          }
+        }}>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("subtitle.discardTitle")}</AlertDialogTitle>
             <AlertDialogDescription>{t("subtitle.discardDescription")}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t("subtitle.keepEditing")}</AlertDialogCancel>
+            <AlertDialogCancel onClick={keepEditing}>{t("subtitle.keepEditing")}</AlertDialogCancel>
             <AlertDialogAction onClick={(event) => {
               event.preventDefault();
+              if (savingRef.current) return;
+              discardingRef.current = true;
               if (blocker.state === "blocked") blocker.proceed();
               onClose();
             }}>{t("subtitle.discard")}</AlertDialogAction>

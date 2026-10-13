@@ -76,7 +76,7 @@ impl AsrConfig {
         }
         if self.engine == "qwen3-asr" {
             if self.device == "metal" {
-                return Err("Qwen3-ASR currently supports CPU/CUDA only in Luma. Select CPU on macOS; Qwen Metal is not validated.".into());
+                return Err("Qwen3-ASR currently supports CPU/CUDA only in luma. Select CPU on macOS; Qwen Metal is not validated.".into());
             }
             if !Path::new(&self.aligner_path).is_absolute()
                 || !Path::new(&self.aligner_path).is_dir()

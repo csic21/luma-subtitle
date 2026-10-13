@@ -2,35 +2,39 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("SettingsPage layout", () => {
-  it("keeps update settings in the left column stack to avoid grid row gaps", () => {
+  it("prioritizes models with named persistent environment and update panels", () => {
     const source = readFileSync(new URL("./SettingsPage.tsx", import.meta.url), "utf8");
-
-    expect(source).toContain('className="settings-main-stack"');
-    expect(source).toMatch(/<div className="settings-main-stack">[\s\S]*<ModelApiSettingsCard[\s\S]*<UpdateSettingsCard/);
+    expect(source).toContain('useState("models")');
+    expect(source).toContain('<TabsList variant="line" aria-label={t("app.settings")}>');
+    for (const name of ["models", "environment", "updates"]) {
+      expect(source).toContain(`<TabsTrigger value="${name}">`);
+      expect(source).toContain(`<TabsContent value="${name}" forceMount hidden={section !== "${name}"}`);
+    }
+    expect(source).toMatch(/value="models" forceMount[\s\S]*<ModelApiSettingsCard/);
+    expect(source).toMatch(/value="environment" forceMount[\s\S]*<EnvironmentSettingsCard[\s\S]*<QuickStartGuideCard/);
+    expect(source).toMatch(/value="updates" forceMount[\s\S]*<UpdateSettingsCard/);
   });
 
-  it("keeps app navigation available when the sidebar collapses", () => {
-    const layoutSource = readFileSync(new URL("../layout/AppLayout.tsx", import.meta.url), "utf8");
-    const shellStyles = readFileSync(new URL("../styles/shell.css", import.meta.url), "utf8");
-    const responsiveStyles = readFileSync(new URL("../styles/responsive.css", import.meta.url), "utf8");
-
-    expect(layoutSource).toContain('className="app-sidebar"');
-    expect(layoutSource).toContain('to="/settings"');
-    expect(shellStyles).toMatch(/\.app-shell\s*{[\s\S]*grid-template-columns:\s*196px minmax\(0, 1fr\);/);
-    expect(responsiveStyles).toMatch(
-      /@media \(max-width:\s*860px\)\s*{[\s\S]*\.app-shell\s*{[\s\S]*grid-template-columns:\s*62px minmax\(0, 1fr\);/
-    );
+  it("keeps named app navigation available when the sidebar collapses", () => {
+    const layout = readFileSync(new URL("../layout/AppLayout.tsx", import.meta.url), "utf8");
+    const shell = readFileSync(new URL("../styles/shell.css", import.meta.url), "utf8");
+    const responsive = readFileSync(new URL("../styles/responsive.css", import.meta.url), "utf8");
+    expect(layout).toContain('className="app-sidebar"');
+    expect(layout).toContain('to="/settings"');
+    expect(layout).toContain('aria-label={t("app.settings")}');
+    expect(layout).toContain('aria-label={t("task.queue")}');
+    expect(shell).toMatch(/\.app-shell\s*{[^}]*grid-template-columns:\s*164px minmax\(0, 1fr\);/);
+    expect(responsive).toMatch(/@media \(max-width:\s*860px\)\s*{[\s\S]*\.app-shell\s*{[^}]*grid-template-columns:\s*62px minmax\(0, 1fr\);/);
   });
 
-  it("lets the quick start card fill the remaining side-column height on wide settings layouts", () => {
-    const settingsStyles = readFileSync(new URL("../styles/settings.css", import.meta.url), "utf8");
-    const responsiveStyles = readFileSync(new URL("../styles/responsive.css", import.meta.url), "utf8");
-
-    expect(settingsStyles).toMatch(
-      /@media \(min-width:\s*981px\)\s*{[\s\S]*\.settings-page-grid\s*{[\s\S]*align-items:\s*stretch;/
-    );
-    expect(settingsStyles).toMatch(/\.guide-card\s*{[\s\S]*flex:\s*1 1 auto;/);
-    expect(settingsStyles).toMatch(/\.guide-card \[data-slot="card-content"\]\s*{[\s\S]*flex:\s*1;/);
-    expect(responsiveStyles).toMatch(/\.settings-page-grid\s*{[\s\S]*align-items:\s*start;/);
+  it("keeps Save and tabs outside the bounded settings scroller", () => {
+    const source = readFileSync(new URL("./SettingsPage.tsx", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../styles/settings.css", import.meta.url), "utf8");
+    expect(styles).toMatch(/\.settings-workspace\s*{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/);
+    expect(styles).toMatch(/\.settings-scroll-area\s*{[^}]*min-height:\s*0;[^}]*overflow:\s*auto;/);
+    expect(styles).toMatch(/\.settings-panel\[hidden\]\s*{\s*display:\s*none;/);
+    expect(source).toMatch(/<header className="settings-page-heading">[\s\S]*saveSettings\(\)[\s\S]*<\/header>[\s\S]*className="settings-scroll-area"/);
+    expect(source).toContain('t("settings.description")');
+    expect(styles).toMatch(/@media \(max-width:\s*680px\)[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 });
