@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.6 — 2026-10-24
+
+### Export reliability
+- Export subtitles to SMB/NFS network shares again. macOS implements `File::sync_all` as `fcntl(F_FULLFSYNC)`, which these clients reject with `ENOTSUP` (`os error 45`) after the copy has already succeeded. That refusal is now treated as a best-effort flush instead of failing the whole export; local disks keep the existing durable write, and genuine write errors such as `ENOSPC` or `EIO` still fail and roll back the new files.
+- Add regression coverage for publishing through a share that refuses the flush, and for rolling back when the copy itself fails.
+
 ## 1.2.5 — 2026-10-13
 
 ### Subtitle workbench

@@ -437,6 +437,18 @@ fn publish_export_file(
     task_id: &str,
     staged: &Path,
 ) -> JobResult<PathBuf> {
+    publish_export_file_with(output_dir, file_name, task_id, staged, sync_export_file)
+}
+
+// The flush step is injected so tests can reproduce a share that refuses
+// F_FULLFSYNC (and one that fails for a real reason) without such a volume.
+fn publish_export_file_with(
+    output_dir: &Path,
+    file_name: &str,
+    task_id: &str,
+    staged: &Path,
+    flush: impl Fn(&std::fs::File) -> std::io::Result<()>,
+) -> JobResult<PathBuf> {
     for _ in 0..10_000 {
         // Never overwrite any existing export, including an earlier revision
         // belonging to this task. create_new also closes external filename races.
@@ -453,7 +465,7 @@ fn publish_export_file(
         let result = (|| -> std::io::Result<()> {
             let mut source = std::fs::File::open(staged)?;
             std::io::copy(&mut source, &mut file)?;
-            file.sync_all()
+            flush(&file)
         })();
         drop(file);
         if let Err(error) = result {
@@ -463,6 +475,45 @@ fn publish_export_file(
         return Ok(target);
     }
     Err(JobError::failed("导出文件名持续冲突，请选择其他导出目录"))
+}
+
+// macOS maps File::sync_all to fcntl(F_FULLFSYNC), which SMB/NFS clients reject
+// with ENOTSUP (45). Flushing is best effort there: the bytes are already written,
+// so refusing the whole export would only lose a completed subtitle.
+fn sync_export_file(file: &std::fs::File) -> std::io::Result<()> {
+    tolerate_unsupported_flush(file.sync_all())
+}
+
+fn tolerate_unsupported_flush(result: std::io::Result<()>) -> std::io::Result<()> {
+    match result {
+        Err(error) if sync_is_unsupported(&error) => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn sync_is_unsupported(error: &std::io::Error) -> bool {
+    // std maps only EOPNOTSUPP (102) to ErrorKind::Unsupported, while
+    // F_FULLFSYNC on SMB/NFS reports ENOTSUP (45) and stays Uncategorized.
+    error.kind() == std::io::ErrorKind::Unsupported || error.raw_os_error() == Some(45)
+}
+
+#[cfg(not(target_vendor = "apple"))]
+fn sync_is_unsupported(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Unsupported
+}
+
+#[cfg(all(target_vendor = "apple", test))]
+const SHARE_UNSUPPORTED_ERRNO: i32 = 45; // ENOTSUP on Darwin
+
+#[cfg(all(target_vendor = "apple", test))]
+fn share_refuses_flush() -> std::io::Error {
+    std::io::Error::from_raw_os_error(SHARE_UNSUPPORTED_ERRNO)
+}
+
+#[cfg(all(not(target_vendor = "apple"), test))]
+fn share_refuses_flush() -> std::io::Error {
+    std::io::Error::from(std::io::ErrorKind::Unsupported)
 }
 
 fn resolve_export_path(
@@ -522,13 +573,58 @@ fn file_name_with_task_suffix(file_name: &str, task_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_export_path;
+    use super::{
+        publish_export_file_with, resolve_export_path, share_refuses_flush, sync_is_unsupported,
+        tolerate_unsupported_flush,
+    };
     use std::{
         fs,
         path::PathBuf,
         process,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn a_share_that_refuses_fsync_does_not_fail_the_export() {
+        // macOS reports the F_FULLFSYNC refusal as ENOTSUP (45), which std keeps as
+        // Uncategorized; other platforms surface ErrorKind::Unsupported.
+        assert!(sync_is_unsupported(&share_refuses_flush()));
+        assert!(!sync_is_unsupported(&std::io::Error::from_raw_os_error(28))); // ENOSPC
+        assert!(!sync_is_unsupported(&std::io::Error::from_raw_os_error(5))); // EIO
+
+        // The refusal is downgraded to success; genuine failures still propagate.
+        assert!(tolerate_unsupported_flush(Err(share_refuses_flush())).is_ok());
+        assert!(tolerate_unsupported_flush(Ok(())).is_ok());
+        let fatal = tolerate_unsupported_flush(Err(std::io::Error::from_raw_os_error(28)));
+        assert_eq!(fatal.unwrap_err().raw_os_error(), Some(28));
+
+        let dir = temp_test_dir("sync-unsupported");
+        let staged = dir.join("stage.tmp");
+        fs::write(&staged, "subtitle").unwrap();
+        let published = publish_export_file_with(&dir, "clip.srt", "task-id", &staged, |_| {
+            tolerate_unsupported_flush(Err(share_refuses_flush()))
+        })
+        .expect("a refused flush must not discard a completed export");
+        assert_eq!(fs::read_to_string(&published).unwrap(), "subtitle");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_rolls_back_when_the_copy_really_fails() {
+        let dir = temp_test_dir("sync-fatal");
+        let staged = dir.join("stage.tmp");
+        fs::write(&staged, "subtitle").unwrap();
+        let result = publish_export_file_with(&dir, "clip.srt", "task-id", &staged, |_| {
+            Err(std::io::Error::from_raw_os_error(28)) // ENOSPC
+        });
+        assert!(result.is_err(), "a real write failure must fail the export");
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "only the staged file may remain; the failed target is removed"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn source_and_translation_with_identical_preferred_names_never_overwrite() {
