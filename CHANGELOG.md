@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.7 — 2026-11-01
+
+### Local translation reliability
+- Force local llama-server health checks and translation requests to connect directly, bypassing system and environment proxies. This prevents Windows proxy settings from routing loopback requests through a proxy even when its system bypass list includes localhost.
+- Include the last health-check HTTP status or connection error when engine readiness times out. Preserve timestamped llama.cpp startup failures while continuing to redact model paths, credentials, URLs and model metadata.
+- Add isolated proxy-environment and timestamped-diagnostic regression coverage. These changes address identified code defects; the earlier Windows timeout has not been reproduced in the application.
+
 ## 1.2.6 — 2026-10-24
 
 ### Export reliability

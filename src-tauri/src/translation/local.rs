@@ -183,7 +183,8 @@ fn strip_diagnostic_controls(text: &str) -> String {
 }
 
 fn sanitize_startup_line(line: &str, model_strings: &[String]) -> String {
-    let mut line = strip_diagnostic_controls(line);
+    let clean = strip_diagnostic_controls(line);
+    let mut line = strip_llama_log_prefix(&clean).to_string();
     let lower = line.to_ascii_lowercase();
     // Model metadata and templates are arbitrary user-controlled text, and
     // URLs can carry signed query parameters. They are not startup diagnostics.
@@ -233,6 +234,22 @@ fn sanitize_startup_line(line: &str, model_strings: &[String]) -> String {
         } else {
             String::new()
         }
+    }
+}
+
+// Strip only llama.cpp's known elapsed-time/severity prefix so the existing
+// allowlist and redaction still apply to the actual diagnostic message.
+fn strip_llama_log_prefix(line: &str) -> &str {
+    let Some((timestamp, rest)) = line.trim_start().split_once(char::is_whitespace) else {
+        return line;
+    };
+    let parts = timestamp.split('.').collect::<Vec<_>>();
+    if parts.len() != 4 || parts.iter().any(|part| {
+        part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit())
+    }) { return line; }
+    match rest.trim_start().split_once(char::is_whitespace) {
+        Some(("D" | "I" | "W" | "E", message)) => message.trim_start(),
+        _ => line,
     }
 }
 
@@ -345,10 +362,7 @@ pub(super) async fn translate_shards_via_local(
 
     let mut server = start_llama_server(&llama_server, &model_path, cancel.clone()).await?;
     let result = async {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(SHARD_TIMEOUT_SECS))
-            .build()
-            .map_err(|error| JobError::failed(format!("创建本地翻译客户端失败: {error}")))?;
+        let client = local_http_client(Duration::from_secs(SHARD_TIMEOUT_SECS))?;
 
         let shards = remaining
             .chunks(shard_size)
@@ -528,16 +542,39 @@ async fn launch_llama_server(
     Ok(server)
 }
 
+fn local_http_client(timeout: Duration) -> JobResult<reqwest::Client> {
+    reqwest::Client::builder()
+        // Loopback requests must bypass system/environment proxies. In
+        // particular, reqwest 0.12.9 ignores Windows ProxyOverride rules.
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+        .map_err(|error| JobError::failed(format!("创建本地翻译客户端失败: {error}")))
+}
+
+fn health_check_failure(error: reqwest::Error) -> String {
+    use std::error::Error;
+    let error = error.without_url();
+    let mut messages = vec![error.to_string()];
+    // reqwest's Display omits the underlying connection/OS error. Diagnose
+    // only this direct loopback connection, without reading response bodies.
+    let mut source = error.source();
+    for _ in 0..8 {
+        let Some(cause) = source else { break };
+        messages.push(cause.to_string().chars().take(256).collect());
+        source = cause.source();
+    }
+    messages.join(": ")
+}
+
 async fn wait_for_server(
     base_url: &str,
     child: &mut Child,
     cancel: Arc<AtomicBool>,
 ) -> JobResult<()> {
     let health = format!("{base_url}/health");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|error| JobError::failed(format!("创建健康检查客户端失败: {error}")))?;
+    let client = local_http_client(Duration::from_secs(3))?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(SERVER_START_TIMEOUT_SECS);
     loop {
         ensure_not_cancelled(&cancel)?;
@@ -550,14 +587,16 @@ async fn wait_for_server(
             )));
         }
         let response = cancellable(&cancel, async { Ok(client.get(&health).send().await) }).await?;
-        if response.is_ok_and(|response| response.status().is_success()) {
-            return Ok(());
-        }
+        let last_check = match response {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => format!("HTTP {}", response.status()),
+            Err(error) => health_check_failure(error),
+        };
         if tokio::time::Instant::now() >= deadline {
             let _ = child.start_kill();
-            return Err(JobError::failed(
-                "llama-server 启动超时。请确认模型文件完整，并检查本机内存是否足够",
-            ));
+            return Err(JobError::failed(format!(
+                "llama-server 在 {SERVER_START_TIMEOUT_SECS} 秒内未就绪。最后一次本地健康检查: {last_check}。请结合引擎启动诊断检查模型加载或本地连接问题",
+            )));
         }
         cancellable(&cancel, async {
             sleep(Duration::from_millis(400)).await;
@@ -951,6 +990,76 @@ mod process_tests {
 mod diagnostic_tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn local_http_proxy_child_fixture() {
+        let Ok(url) = std::env::var("LUMA_LOCAL_HTTP_PROXY_FIXTURE") else { return };
+        use crate::translation::client::tests::config;
+        tauri::async_runtime::block_on(async {
+            let health_client = local_http_client(Duration::from_secs(2)).unwrap();
+            let health = health_client.get(format!("{url}/health")).send().await.unwrap();
+            assert!(health.status().is_success());
+            let segments = [SubtitleSegment {
+                id: 8, start_ms: 0, end_ms: 1000, text: "hello".into(),
+            }];
+            let translated = translate_shard_via_local(
+                &local_http_client(Duration::from_secs(SHARD_TIMEOUT_SECS)).unwrap(),
+                &url, &config(&url), &segments, 1, 1,
+                Arc::new(AtomicBool::new(false)),
+            ).await.unwrap();
+            assert_eq!(translated[0].text, "你好");
+        });
+    }
+
+    #[test]
+    fn local_health_and_translation_bypass_environment_proxies() {
+        use crate::translation::client::tests::MockServer;
+        tauri::async_runtime::block_on(async {
+            let body = json!({"choices": [{"message": {"content": "你好"}}]}).to_string();
+            let server = MockServer::new(vec![
+                (200, "", json!({"status": "ok"}).to_string()), (200, "", body),
+            ], Duration::ZERO);
+            // A fresh process avoids mutating variables underneath other tests
+            // and also exercises reqwest's one-time proxy initialization.
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(crate::process_utils::WINDOWS_CREATE_NO_WINDOW_FLAG);
+            }
+            command.args(["--exact", "translation::local::diagnostic_tests::local_http_proxy_child_fixture", "--nocapture"])
+                .env("LUMA_LOCAL_HTTP_PROXY_FIXTURE", &server.url);
+            for name in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"] {
+                command.env(name, "http://127.0.0.1:1");
+            }
+            for name in ["NO_PROXY", "no_proxy"] { command.env(name, ""); }
+            let output = crate::owned_process::output(
+                command, Arc::new(AtomicBool::new(false)), Duration::from_secs(10), 64 * 1024,
+            ).await.unwrap();
+            assert!(output.status.success(), "{}\n{}",
+                String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        });
+    }
+
+    #[test]
+    fn timestamped_startup_failures_keep_diagnostics_and_redaction() {
+        let mut stderr = StartupStderr::new(Path::new("model.gguf"));
+        for line in [
+            "0.00.103.569 E srv  load_model: failed to load model.gguf: out of memory\n",
+            "0.00.103.570 E ggml_cuda_init: CUDA allocation failed\n",
+            "0.00.103.571 E srv error: Authorization: Bearer private-value\n",
+            "0.00.103.572 I srv llama_server: model loaded\n",
+            "0.00.103.573 E llama_model_loader: tokenizer.chat_template str = private-template\n",
+            "0.00.103.574 E llama_model_load: failed https://private.example/?secret=value\n",
+            "unrecognized-prefix E srv error: private-continuation\n",
+        ] { stderr.append(line.as_bytes()); }
+        let diagnostic = stderr.diagnostic();
+        assert!(diagnostic.contains("failed to load [model]: out of memory"));
+        assert!(diagnostic.contains("CUDA allocation failed"));
+        for omitted in ["model.gguf", "private-", "private.example", "model loaded"] {
+            assert!(!diagnostic.contains(omitted), "{diagnostic}");
+        }
+    }
 
     #[test]
     fn startup_diagnostics_redact_paths_tokens_and_terminal_controls() {
